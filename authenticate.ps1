@@ -181,6 +181,17 @@ if ([string]::IsNullOrWhiteSpace($userEmail)) {
 Write-Step "3/5" "Claude Code Login" "Yellow"
 Write-Info "Starting Claude Code authentication..."
 
+# Ensure Claude Code is in PATH (native installer puts it in .local\bin)
+$claudeLocalBin = Join-Path $env:USERPROFILE ".local\bin"
+if ((Test-Path (Join-Path $claudeLocalBin "claude.exe")) -and ($env:Path -notlike "*$claudeLocalBin*")) {
+    $env:Path += ";$claudeLocalBin"
+    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    if ($userPath -notlike "*$claudeLocalBin*") {
+        [System.Environment]::SetEnvironmentVariable("Path", "$userPath;$claudeLocalBin", "User")
+        Write-Info "Added Claude Code to PATH"
+    }
+}
+
 $claudeLoginSuccess = $false
 try {
     claude /login 2>&1
