@@ -260,50 +260,56 @@ try {
 # =========================================================================
 # Step 5: Auto-start Worker
 # =========================================================================
-Write-Step "5/5" "Starting Shraga Worker" "Yellow"
+Write-Step "5/5" "Starting Shraga Worker and PM" "Yellow"
 
-if (Test-Path $WORKER_SCRIPT) {
-    Write-Info "Worker script found at: $WORKER_SCRIPT"
+$PM_SCRIPT = Join-Path $WORKING_DIR "task-manager\task_manager.py"
 
-    try {
-        # Check if worker is already running via scheduled task
-        $existingTask = Get-ScheduledTask -TaskName "ShragaWorker" -ErrorAction SilentlyContinue
-        if ($existingTask -and $existingTask.State -eq "Running") {
-            Write-Info "Restarting existing scheduled task..."
-            Stop-ScheduledTask -TaskName "ShragaWorker" -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
-        }
+foreach ($taskInfo in @(
+    @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker" },
+    @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM" }
+)) {
+    $taskName = $taskInfo.Name
+    $script = $taskInfo.Script
+    $label = $taskInfo.Label
 
-        # Start worker via scheduled task if it exists
-        if ($existingTask) {
-            Start-ScheduledTask -TaskName "ShragaWorker"
-            Write-Success "Shraga worker started via scheduled task."
-        } else {
-            # Fall back to starting directly
-            Write-Info "No scheduled task found. Starting worker directly..."
-            $pyCandidates = @(
-                "C:\Python312\python.exe",
-                "C:\ProgramData\chocolatey\lib\python312\tools\python.exe",
-                "C:\ProgramData\chocolatey\bin\python3.exe",
-                "C:\ProgramData\chocolatey\bin\python.exe"
-            )
-            $pythonExe = "python"
-            foreach ($c in $pyCandidates) {
-                if (Test-Path $c) { $pythonExe = $c; break }
+    if (Test-Path $script) {
+        try {
+            $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($existingTask -and $existingTask.State -eq "Running") {
+                Write-Info "Restarting $label scheduled task..."
+                Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 2
             }
-            Start-Process -FilePath $pythonExe `
-                -ArgumentList $WORKER_SCRIPT `
-                -WorkingDirectory $WORKING_DIR `
-                -WindowStyle Hidden
-            Write-Success "Shraga worker started directly."
+            if ($existingTask) {
+                Start-ScheduledTask -TaskName $taskName
+                Write-Success "$label started via scheduled task."
+            } else {
+                Write-Info "No scheduled task for $label. Starting directly..."
+                $pyCandidates = @(
+                    "C:\Python312\python.exe",
+                    "C:\ProgramData\chocolatey\lib\python312\tools\python.exe",
+                    "C:\ProgramData\chocolatey\bin\python3.exe",
+                    "C:\ProgramData\chocolatey\bin\python.exe"
+                )
+                $pythonExe = "python"
+                foreach ($c in $pyCandidates) {
+                    if (Test-Path $c) { $pythonExe = $c; break }
+                }
+                Start-Process -FilePath $pythonExe `
+                    -ArgumentList $script `
+                    -WorkingDirectory $WORKING_DIR `
+                    -WindowStyle Hidden
+                Write-Success "$label started directly."
+            }
+        } catch {
+            Write-Warn "Could not auto-start ${label}: $_"
         }
-    } catch {
-        Write-Warn "Could not auto-start worker: $_"
-        Write-Info "You can start it manually: python $WORKER_SCRIPT"
+    } else {
+        Write-Warn "$label script not found at: $script"
     }
-} else {
-    Write-Warn "Worker script not found at: $WORKER_SCRIPT"
-    Write-Info "The worker may need to be deployed first."
+}
+
+if (-not (Test-Path $WORKER_SCRIPT) -and -not (Test-Path $PM_SCRIPT)) {
     Write-Info "Try running: git clone https://github.com/ShragaBot/ShragaBot.git $WORKING_DIR"
 }
 

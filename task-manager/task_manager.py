@@ -57,6 +57,25 @@ class TaskManager:
         try: self._sessions_path.write_text(json.dumps(self._sessions, indent=2), encoding="utf-8")
         except Exception as e: print(f"[WARN] Failed to save sessions: {e}")
 
+    def _set_onboarding_completed(self):
+        """Set onboardingstep=completed for this user in DV on startup."""
+        try:
+            script = Path(__file__).parent.parent / "scripts" / "update_user_state.py"
+            if not script.exists():
+                print(f"[WARN] update_user_state.py not found at {script}")
+                return
+            result = subprocess.run(
+                [sys.executable, str(script), "--email", self.user_email,
+                 "--field", "crb3b_onboardingstep=completed"],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                print(f"[ONBOARD] Set onboardingstep=completed for {self.user_email}")
+            else:
+                print(f"[WARN] Failed to set onboarding: {result.stderr[:200]}")
+        except Exception as e:
+            print(f"[WARN] Could not set onboarding state: {e}")
+
     def _forget_session(self, mcs_id: str):
         if mcs_id in self._sessions:
             print(f"[SESSIONS] Forgot stale session {self._sessions.pop(mcs_id)[:8]}... for {mcs_id[:20]}...")
@@ -235,6 +254,7 @@ class TaskManager:
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
         print(f"[START] PM for {self.user_email} | instance={INSTANCE_ID} | pid={os.getpid()}")
         print(f"[CONFIG] DV: {DV_URL} | Poll: {POLL_SEC}s")
+        self._set_onboarding_completed()
         self.cleanup_stale_outbound()
         last_cleanup = time.time()
         last_sweep = 0  # Sweep on first iteration, then every 5 minutes

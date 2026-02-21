@@ -24,6 +24,7 @@ Step 2 details (give only after step 1 is done):
 Step 3 details (give only after step 2 is done):
 - On the dev box desktop, double-click "Shraga-Authenticate".
 - After this, they're done. They can come back to this chat and start sending coding tasks.
+- Do NOT set onboardingstep=completed yourself. The PM process sets it automatically when it starts.
 
 TROUBLESHOOTING (known user, assistant offline):
 - Run: python scripts/check_devbox_status.py --name <box> --user <azure-id>
