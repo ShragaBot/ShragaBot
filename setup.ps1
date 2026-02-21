@@ -88,10 +88,11 @@ try {
     exit 1
 }
 
-Write-Host "  This takes ~25 minutes. Go grab a coffee!" -ForegroundColor Gray
+Write-Host "  This typically takes ~25 minutes. Go grab a coffee!" -ForegroundColor Gray
 Write-Host ""
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-$expectedMinutes = 25
+$spinner = @('|', '/', '-', '\')
+$spinIdx = 0
 while ($true) {
     Start-Sleep -Seconds 30
     $headers = Get-DevCenterToken
@@ -99,11 +100,9 @@ while ($true) {
     $state = $status.provisioningState
     $elapsedMin = [math]::Floor($sw.Elapsed.TotalMinutes)
     $elapsedSec = $sw.Elapsed.Seconds
-    $pct = [math]::Min(99, [math]::Floor(($sw.Elapsed.TotalMinutes / $expectedMinutes) * 100))
-    $barLen = [math]::Floor($pct / 2)
-    $bar = ("=" * $barLen) + ("." * (50 - $barLen))
-    Write-Host "`r  [$bar] ${pct}%  (${elapsedMin}m ${elapsedSec}s)" -NoNewline -ForegroundColor Cyan
-    if ($state -eq "Succeeded") { Write-Host "`n  Done!" -ForegroundColor Green; break }
+    $s = $spinner[$spinIdx % 4]; $spinIdx++
+    Write-Host "`r  $s Provisioning... ${elapsedMin}m ${elapsedSec}s elapsed" -NoNewline -ForegroundColor Cyan
+    if ($state -eq "Succeeded") { Write-Host "`n  Done! (took ${elapsedMin}m ${elapsedSec}s)" -ForegroundColor Green; break }
     if ($state -eq "Failed") { Write-Host "`n  Provisioning failed." -ForegroundColor Red; exit 1 }
 }
 
