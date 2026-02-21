@@ -202,7 +202,7 @@ class TaskManager:
         cmd.extend(["-p", user_text])
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         cwd = self.working_dir if self.working_dir and os.path.isdir(self.working_dir) else None
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
                              env=env, cwd=cwd, encoding="utf-8", errors="replace")
         if res.returncode != 0:
             print(f"[WARN] Claude CLI failed (rc={res.returncode}): {res.stderr[:300]}"); return None, ""
