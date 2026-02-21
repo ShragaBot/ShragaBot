@@ -192,25 +192,34 @@ if ((Test-Path (Join-Path $claudeLocalBin "claude.exe")) -and ($env:Path -notlik
     }
 }
 
+# Check if already authenticated by running a quick test command
 $claudeLoginSuccess = $false
 try {
-    $proc = Start-Process -FilePath "claude" -ArgumentList "/login" -Wait -PassThru
-    $claudeExitCode = $proc.ExitCode
-
-    if ($claudeExitCode -eq 0) {
+    $testResult = & claude --print --dangerously-skip-permissions "say ok" 2>&1
+    if ($LASTEXITCODE -eq 0) {
         $claudeLoginSuccess = $true
-        Write-Success "Claude Code login completed."
-    } else {
-        Write-Failure "Claude Code login returned exit code: $claudeExitCode"
+        Write-Success "Claude Code already authenticated. Skipping login."
     }
-} catch {
-    Write-Failure "Claude Code login encountered an error: $_"
-}
+} catch { }
 
 if (-not $claudeLoginSuccess) {
-    Write-Warn "Claude Code login may not have succeeded."
-    Write-Info "You can retry later by running: claude /login"
-    Write-Info "Continuing with remaining setup steps..."
+    try {
+        $proc = Start-Process -FilePath "claude" -ArgumentList "/login" -Wait -PassThru
+        $claudeExitCode = $proc.ExitCode
+        if ($claudeExitCode -eq 0) {
+            $claudeLoginSuccess = $true
+            Write-Success "Claude Code login completed."
+        } else {
+            Write-Failure "Claude Code login returned exit code: $claudeExitCode"
+        }
+    } catch {
+        Write-Failure "Claude Code login encountered an error: $_"
+    }
+    if (-not $claudeLoginSuccess) {
+        Write-Warn "Claude Code login may not have succeeded."
+        Write-Info "You can retry later by running: claude /login"
+        Write-Info "Continuing with remaining setup steps..."
+    }
 }
 
 # =========================================================================
