@@ -33,11 +33,16 @@ function Get-DevCenterToken {
 
 # Step 1: Authenticate
 Write-Host "[1/6] Authenticating..." -ForegroundColor Yellow
-Write-Host "  A browser window will open. Sign in with your Microsoft account." -ForegroundColor Gray
-az login --tenant $TenantId --output none 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  Authentication failed. Please try again." -ForegroundColor Red
-    exit 1
+$existingUser = az account show --query "user.name" -o tsv 2>$null
+if ($LASTEXITCODE -eq 0 -and $existingUser) {
+    Write-Host "  Already signed in as: $existingUser" -ForegroundColor Green
+} else {
+    Write-Host "  A browser window will open. Sign in with your Microsoft account." -ForegroundColor Gray
+    az login --tenant $TenantId --output none 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  Authentication failed. Please try again." -ForegroundColor Red
+        exit 1
+    }
 }
 az account set --subscription $SubscriptionId
 Write-Host "  Subscription set to: PJ-PVA ($SubscriptionId)" -ForegroundColor Gray
