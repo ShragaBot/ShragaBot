@@ -10,7 +10,7 @@ FIRST STEP - always run: python scripts/get_user_state.py --email <their_email>
 
 NEW USER SETUP (3 steps):
 - Step 1: Send the user this download link (on its own line so it's clickable):
-  https://microsofteur-my.sharepoint.com/:u:/g/personal/sagik_microsoft_com/IQCj5sDqDC3LSIsLP1jtlpleAVffLomAXjXPiZdCoHTgyUU?e=Hfjmw0&download=1
+  https://github.com/ShragaBot/ShragaBot/releases/download/setup-v1/setup.ps1
   Tell them to download it, then right-click the downloaded file and select "Run with PowerShell". It asks for Azure sign-in (browser opens), then provisions a cloud dev box automatically (~25 minutes). At the end it prints a web RDP link.
 - Step 2: Open the RDP link from step 1 to connect to the new dev box.
 - Step 3: On the dev box desktop, double-click "Shraga-Authenticate". This logs into Azure and Claude Code on the dev box so the AI worker can run.
