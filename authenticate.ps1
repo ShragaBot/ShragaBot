@@ -63,7 +63,7 @@ Write-Host ""
 # =========================================================================
 # Step 1: Azure Login with retry logic
 # =========================================================================
-Write-Step "1/5" "Azure Login" "Yellow"
+Write-Step "1/6" "Azure Login" "Yellow"
 
 # Check if already authenticated
 $azLoginSuccess = $false
@@ -131,7 +131,7 @@ if (-not $azLoginSuccess) {
 # =========================================================================
 # Step 2: Verify Azure authentication
 # =========================================================================
-Write-Step "2/5" "Verifying Azure Authentication" "Yellow"
+Write-Step "2/6" "Verifying Azure Authentication" "Yellow"
 
 $userEmail = $null
 try {
@@ -178,7 +178,7 @@ if ([string]::IsNullOrWhiteSpace($userEmail)) {
 # =========================================================================
 # Step 3: Claude Code Login with error handling
 # =========================================================================
-Write-Step "3/5" "Claude Code Login" "Yellow"
+Write-Step "3/6" "Claude Code Login" "Yellow"
 Write-Info "Starting Claude Code authentication..."
 
 # Ensure Claude Code is in PATH (native installer puts it in .local\bin)
@@ -225,7 +225,7 @@ if (-not $claudeLoginSuccess) {
 # =========================================================================
 # Step 4: Set Environment Variables
 # =========================================================================
-Write-Step "4/5" "Setting Environment Variables" "Yellow"
+Write-Step "4/6" "Setting Environment Variables" "Yellow"
 
 # Set USER_EMAIL (machine-level so it persists across sessions)
 try {
@@ -278,9 +278,21 @@ try {
 }
 
 # =========================================================================
-# Step 5: Auto-start Worker
+# Step 5: Install Python dependencies
 # =========================================================================
-Write-Step "5/5" "Starting Shraga Worker and PM" "Yellow"
+Write-Step "5/6" "Installing Python Dependencies" "Yellow"
+try {
+    $pipOutput = & python -m pip install --quiet requests azure-identity azure-core watchdog 2>&1
+    Write-Success "Python dependencies installed."
+} catch {
+    Write-Warn "Could not install dependencies: $_"
+    Write-Info "Try manually: pip install requests azure-identity azure-core watchdog"
+}
+
+# =========================================================================
+# Step 6: Auto-start Worker and PM
+# =========================================================================
+Write-Step "6/6" "Starting Shraga Worker and PM" "Yellow"
 
 $PM_SCRIPT = Join-Path $WORKING_DIR "task-manager\task_manager.py"
 
