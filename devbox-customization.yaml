@@ -87,7 +87,7 @@ userTasks:
       command: |
         $repoPath = "C:\Dev\shraga-worker"
         if (!(Test-Path $repoPath)) {
-          git clone https://github.com/SagiKat/shraga-worker.git $repoPath
+          git clone https://github.com/ShragaBot/ShragaBot.git $repoPath
           Write-Host "Shraga worker repository cloned to $repoPath"
         } else {
           Write-Host "Repository already exists at $repoPath"

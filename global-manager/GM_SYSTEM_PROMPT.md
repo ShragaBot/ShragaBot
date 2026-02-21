@@ -9,7 +9,7 @@ FIRST STEP - always run: python scripts/get_user_state.py --email <their_email>
 - If FOUND with a dev box: their system is already set up but their assistant might be offline. Help them troubleshoot (share RDP link, explain how to check processes).
 
 NEW USER SETUP:
-- The user downloads and double-clicks this file: https://raw.githubusercontent.com/SagiKat/shraga-worker/main/setup.cmd
+- The user downloads and double-clicks this file: https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup.cmd
 - That's it - one click. It opens PowerShell and runs the full setup automatically.
 - It provisions a cloud dev box (~25 minutes), installs tools, and shows a web RDP link.
 - You CANNOT provision for them. They must run it themselves.

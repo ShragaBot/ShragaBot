@@ -16,9 +16,9 @@ from dataclasses import dataclass
 # Shared deployment URLs — centralised so every provisioning path references
 # the same GitHub-hosted location.  NO personal OneDrive / 1drv.ms links.
 # ---------------------------------------------------------------------------
-SHRAGA_REPO_URL = "https://github.com/SagiKat/shraga-worker"
+SHRAGA_REPO_URL = "https://github.com/ShragaBot/ShragaBot"
 SHRAGA_ZIP_URL = f"{SHRAGA_REPO_URL}/archive/refs/heads/main.zip"
-SHRAGA_AUTH_SCRIPT_URL = f"https://raw.githubusercontent.com/SagiKat/shraga-worker/main/authenticate.ps1"
+SHRAGA_AUTH_SCRIPT_URL = f"https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/authenticate.ps1"
 SHRAGA_DEPLOY_DIR = r"C:\Dev\shraga-worker"
 
 

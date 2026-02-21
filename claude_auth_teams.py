@@ -36,7 +36,7 @@ DEVBOX_SETUP_SCRIPT = textwrap.dedent(r"""
     # 2. Clone the shraga-worker repo
     Write-Host "`n[2/3] Cloning shraga-worker repo..." -ForegroundColor Yellow
     if (-not (Test-Path "C:\Dev\shraga-worker")) {
-        git clone https://github.com/SagiKat/shraga-worker.git C:\Dev\shraga-worker
+        git clone https://github.com/ShragaBot/ShragaBot.git C:\Dev\shraga-worker
     } else {
         Write-Host "  Repo already exists at C:\Dev\shraga-worker -- pulling latest..."
         Push-Location C:\Dev\shraga-worker

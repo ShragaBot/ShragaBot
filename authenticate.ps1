@@ -304,7 +304,7 @@ if (Test-Path $WORKER_SCRIPT) {
 } else {
     Write-Warn "Worker script not found at: $WORKER_SCRIPT"
     Write-Info "The worker may need to be deployed first."
-    Write-Info "Try running: git clone https://github.com/SagiKat/shraga-worker.git $WORKING_DIR"
+    Write-Info "Try running: git clone https://github.com/ShragaBot/ShragaBot.git $WORKING_DIR"
 }
 
 # =========================================================================

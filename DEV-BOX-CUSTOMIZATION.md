@@ -30,7 +30,7 @@ This directory contains Dev Box customization files for pre-installing Claude Co
 5. Select **Choose a customization file from a repository**
 6. Enter the repository URL for your YAML file:
    ```
-   https://github.com/SagiKat/shraga-worker/blob/main/devbox-customization.yaml
+   https://github.com/ShragaBot/ShragaBot/blob/main/devbox-customization.yaml
    ```
 7. Click **Validate** and then **Create**
 
@@ -74,7 +74,7 @@ Connect to your Dev Box and run the verification script:
 
 ```powershell
 # Download and run verification script
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagiKat/shraga-worker/main/verify-devbox-setup.ps1" -OutFile verify-devbox-setup.ps1
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/verify-devbox-setup.ps1" -OutFile verify-devbox-setup.ps1
 .\verify-devbox-setup.ps1
 ```
 

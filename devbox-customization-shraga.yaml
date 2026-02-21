@@ -132,7 +132,7 @@ User: $env:USERNAME
         $repoPath = "C:\Dev\shraga-worker"
         if (!(Test-Path $repoPath)) {
           Write-Host "Cloning repository..." -ForegroundColor Yellow
-          git clone https://github.com/SagiKat/shraga-worker.git $repoPath 2>&1
+          git clone https://github.com/ShragaBot/ShragaBot.git $repoPath 2>&1
 
           if ($LASTEXITCODE -eq 0) {
             Write-Host "✅ Repository cloned to: $repoPath" -ForegroundColor Green

@@ -23,7 +23,7 @@ class TestDeploymentConstants:
 
     def test_repo_url_is_github(self):
         assert SHRAGA_REPO_URL.startswith("https://github.com/")
-        assert "SagiKat/shraga-worker" in SHRAGA_REPO_URL
+        assert "ShragaBot/ShragaBot" in SHRAGA_REPO_URL
 
     def test_zip_url_is_github_archive(self):
         assert SHRAGA_ZIP_URL.startswith("https://github.com/")
