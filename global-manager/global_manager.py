@@ -401,7 +401,8 @@ class GlobalManager:
 
         Returns (response_text, session_id) or (None, "") on failure.
         """
-        cmd = ["claude", "--print", "--output-format", "json", "--dangerously-skip-permissions"]
+        cmd = ["claude", "--print", "--output-format", "json", "--dangerously-skip-permissions",
+               "--model", "haiku", "--effort", "low"]
         if self._system_prompt_file:
             cmd.extend(["--system-prompt-file", self._system_prompt_file])
         if session_id:

@@ -195,9 +195,9 @@ class TaskManager:
             "SWEEP")
 
     def _call_claude(self, user_text: str, session_id: str | None = None) -> tuple[str | None, str]:
-        cmd = ["claude", "--print", "--output-format", "json", "--dangerously-skip-permissions"]
+        cmd = ["claude", "--print", "--output-format", "json", "--dangerously-skip-permissions",
+               "--model", CHAT_MODEL or "haiku", "--effort", "low"]
         if self._system_prompt_file: cmd.extend(["--system-prompt-file", self._system_prompt_file])
-        if CHAT_MODEL: cmd.extend(["--model", CHAT_MODEL])
         if session_id: cmd.extend(["--resume", session_id])
         cmd.extend(["-p", user_text])
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
