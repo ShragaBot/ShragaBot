@@ -194,7 +194,7 @@ if ((Test-Path (Join-Path $claudeLocalBin "claude.exe")) -and ($env:Path -notlik
 
 $claudeLoginSuccess = $false
 try {
-    $proc = Start-Process -FilePath "claude" -ArgumentList "/login" -Wait -PassThru -NoNewWindow
+    $proc = Start-Process -FilePath "claude" -ArgumentList "/login" -Wait -PassThru
     $claudeExitCode = $proc.ExitCode
 
     if ($claudeExitCode -eq 0) {
