@@ -88,17 +88,23 @@ try {
     exit 1
 }
 
-Write-Host "  This takes ~25 minutes. Progress:" -ForegroundColor Gray
+Write-Host "  This takes ~25 minutes. Go grab a coffee!" -ForegroundColor Gray
+Write-Host ""
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
+$expectedMinutes = 25
 while ($true) {
     Start-Sleep -Seconds 30
     $headers = Get-DevCenterToken
     $status = Invoke-RestMethod -Uri "$DevCenterEndpoint/projects/$Project/users/me/devboxes/$DevBoxName`?api-version=$ApiVersion" -Headers $headers
     $state = $status.provisioningState
-    $elapsed = $sw.Elapsed.ToString("mm\:ss")
-    Write-Host "  [$elapsed] $state" -ForegroundColor Gray
-    if ($state -eq "Succeeded") { Write-Host "  Done!" -ForegroundColor Green; break }
-    if ($state -eq "Failed") { Write-Host "  Provisioning failed." -ForegroundColor Red; exit 1 }
+    $elapsedMin = [math]::Floor($sw.Elapsed.TotalMinutes)
+    $elapsedSec = $sw.Elapsed.Seconds
+    $pct = [math]::Min(99, [math]::Floor(($sw.Elapsed.TotalMinutes / $expectedMinutes) * 100))
+    $barLen = [math]::Floor($pct / 2)
+    $bar = ("=" * $barLen) + ("." * (50 - $barLen))
+    Write-Host "`r  [$bar] ${pct}%  (${elapsedMin}m ${elapsedSec}s)" -NoNewline -ForegroundColor Cyan
+    if ($state -eq "Succeeded") { Write-Host "`n  Done!" -ForegroundColor Green; break }
+    if ($state -eq "Failed") { Write-Host "`n  Provisioning failed." -ForegroundColor Red; exit 1 }
 }
 
 # Step 4: Install tools (customization group 1)
