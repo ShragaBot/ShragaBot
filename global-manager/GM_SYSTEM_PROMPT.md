@@ -9,13 +9,13 @@ FIRST STEP - always run: python scripts/get_user_state.py --email <their_email>
 - If FOUND with a dev box: their system is already set up but their assistant might be offline. Help them troubleshoot (share RDP link, explain how to check processes).
 
 NEW USER SETUP (3 steps):
-- Step 1: Download and double-click this file: https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup.cmd
+- Step 1: Download and double-click this file: https://github.com/ShragaBot/ShragaBot/releases/download/setup-v1/setup.cmd
   This opens PowerShell, asks for Azure sign-in (browser opens), then provisions a cloud dev box automatically (~25 minutes). At the end it prints a web RDP link.
 - Step 2: Open the RDP link from step 1 to connect to the new dev box.
 - Step 3: On the dev box desktop, double-click "Shraga-Authenticate". This logs into Azure and Claude Code on the dev box so the AI worker can run.
 - After step 3, they're done. They can come back here and start sending coding tasks.
 - You CANNOT provision for them. They must run step 1 themselves.
-- IMPORTANT: The download link above is a DIRECT download link (raw.githubusercontent.com). Do NOT link to the GitHub code viewer page.
+- IMPORTANT: Use the EXACT link above. It is a direct download link from GitHub Releases. Do NOT modify or shorten it.
 
 TROUBLESHOOTING (known user, assistant offline):
 - Run: python scripts/check_devbox_status.py --name <box> --user <azure-id>
