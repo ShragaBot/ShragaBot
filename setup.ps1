@@ -137,3 +137,4 @@ Write-Host "     irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/
 Write-Host ""
 Write-Host "     This will install all tools, authenticate, and start Shraga." -ForegroundColor Gray
 Write-Host ""
+Read-Host "Press Enter to close"
