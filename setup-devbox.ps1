@@ -379,11 +379,11 @@ if (-not (Test-Path $localScript)) {
     if (-not (Test-Path $desktopPath)) {
         New-Item -ItemType Directory -Force -Path $desktopPath | Out-Null
     }
-    # Point shortcut to run-setup.cmd which does git pull + run script
-    $launcherPath = Join-Path $WORKING_DIR "run-setup.cmd"
+    # Shortcut runs irm | iex -- always fetches latest from GitHub
     $ws = New-Object -ComObject WScript.Shell
     $sc = $ws.CreateShortcut((Join-Path $desktopPath "Shraga Setup.lnk"))
-    $sc.TargetPath = $launcherPath
+    $sc.TargetPath = "powershell.exe"
+    $sc.Arguments = "-ExecutionPolicy Bypass -Command `"irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex`""
     $sc.WorkingDirectory = $WORKING_DIR
     $sc.Save()
     Write-OK "Desktop shortcut created: Shraga Setup"
