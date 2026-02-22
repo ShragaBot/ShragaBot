@@ -1,13 +1,13 @@
 # Shraga Dev Box Setup Script (runs ON the dev box)
 # Installs tools, clones code, authenticates, configures, starts services.
-# Idempotent — safe to re-run at any time.
+# Idempotent -- safe to re-run at any time.
 #
 # First box:      irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex
 # Additional box: powershell -ExecutionPolicy Bypass -File setup-devbox.ps1 -WorkerOnly
 # Re-run:         Double-click "Shraga Setup" shortcut on desktop
 
 param(
-    [switch]$WorkerOnly  # Skip PM — used by setup-workerbox.ps1
+    [switch]$WorkerOnly  # Skip PM -- used by setup-workerbox.ps1
 )
 
 $ErrorActionPreference = "Continue"
@@ -113,7 +113,7 @@ Write-Host ""
 Write-Step "1/7" "Installing Tools"
 
 $hasWinget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
-if (-not $hasWinget) { Write-Warning2 "winget not found — tool installs may fail. Install App Installer from Microsoft Store." }
+if (-not $hasWinget) { Write-Warning2 "winget not found -- tool installs may fail. Install App Installer from Microsoft Store." }
 
 # -- Az CLI --
 if (Get-Command az -ErrorAction SilentlyContinue) {
@@ -216,7 +216,7 @@ if (Test-Path (Join-Path $WORKING_DIR ".git")) {
     Write-Info "Repo exists, pulling latest..."
     git -C $WORKING_DIR pull 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-OK "Code updated" }
-    else { Write-Warning2 "git pull failed — may have local changes. Run: git -C $WORKING_DIR pull" }
+    else { Write-Warning2 "git pull failed -- may have local changes. Run: git -C $WORKING_DIR pull" }
 } else {
     Write-Info "Cloning repository..."
     New-Item -ItemType Directory -Force -Path "C:\Dev" -ErrorAction SilentlyContinue | Out-Null
@@ -248,9 +248,9 @@ if ($pyExe -and (Test-Path $WORKING_DIR)) {
     if ($LASTEXITCODE -eq 0) { Write-OK "Dependencies installed" }
     else { Write-Warning2 "Some dependencies may have failed. Run: $pyExe -m pip install requests azure-identity azure-core watchdog" }
 } elseif (-not $pyExe) {
-    Write-Warning2 "Python not found — skipping"
+    Write-Warning2 "Python not found -- skipping"
 } else {
-    Write-Warning2 "Code not cloned — skipping"
+    Write-Warning2 "Code not cloned -- skipping"
 }
 
 # =========================================================================
@@ -298,7 +298,7 @@ try {
 } catch { }
 
 if (-not $azLoginSuccess) {
-    Write-Info "A browser window will open. Sign in, then come back here — the script will wait."
+    Write-Info "A browser window will open. Sign in, then come back here -- the script will wait."
     for ($attempt = 1; $attempt -le $MAX_AZ_LOGIN_RETRIES; $attempt++) {
         az login 2>&1 | Out-Host
         if ($LASTEXITCODE -eq 0) {
@@ -340,7 +340,7 @@ if (-not $claudePath) {
         $claudeLoginSuccess = $true
         Write-OK "Already authenticated. Skipping login."
     } else {
-        Write-Info "A browser will open for sign-in. Complete it there — the script will wait."
+        Write-Info "A browser will open for sign-in. Complete it there -- the script will wait."
         & $claudePath auth login 2>&1 | Out-Host
         # Re-verify
         $authStatus = & $claudePath auth status 2>&1
@@ -370,7 +370,7 @@ else { Write-Warning2 "Some environment variables may not have been set" }
 # -- Create desktop shortcut for re-running this script --
 $localScript = Join-Path $WORKING_DIR "setup-devbox.ps1"
 if (-not (Test-Path $localScript)) {
-    Write-Warning2 "Script not found at $localScript — skipping desktop shortcut"
+    Write-Warning2 "Script not found at $localScript -- skipping desktop shortcut"
 } else { try {
     $desktopPath = [System.Environment]::GetFolderPath("Desktop")
     if (-not $desktopPath -or -not (Test-Path $desktopPath)) {
@@ -407,12 +407,12 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
     if (-not $WorkerOnly) {
         $services += @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM"; EnvVars = @{ USER_EMAIL = $userEmail; WORKING_DIR = $WORKING_DIR } }
     } else {
-        Write-Info "WorkerOnly mode — skipping PM (runs on your first dev box)"
+        Write-Info "WorkerOnly mode -- skipping PM (runs on your first dev box)"
     }
     foreach ($svc in $services) {
         # Check if this service's script exists
         if (-not (Test-Path $svc.Script)) {
-            Write-Warning2 "$($svc.Label) script not found at: $($svc.Script) — skipping"
+            Write-Warning2 "$($svc.Label) script not found at: $($svc.Script) -- skipping"
             continue
         }
 
@@ -446,12 +446,12 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
             Write-Warning2 "Scheduled task failed for $($svc.Label): $_"
             Write-Info "Starting $($svc.Label) directly instead..."
             Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$wrapperPath`"" -WorkingDirectory $WORKING_DIR -WindowStyle Hidden
-            Write-Info "$($svc.Label) started (won't survive reboot — re-run this script as admin)"
+            Write-Info "$($svc.Label) started (won't survive reboot -- re-run this script as admin)"
         }
     }
 } else {
-    if (-not $pyExe) { Write-Fail "Python not found — cannot start services" }
-    elseif (-not (Test-Path $WORKER_SCRIPT)) { Write-Fail "Code not deployed at $WORKING_DIR — clone failed earlier" }
+    if (-not $pyExe) { Write-Fail "Python not found -- cannot start services" }
+    elseif (-not (Test-Path $WORKER_SCRIPT)) { Write-Fail "Code not deployed at $WORKING_DIR -- clone failed earlier" }
 }
 
 # =========================================================================
