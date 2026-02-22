@@ -320,20 +320,20 @@ if (Test-Path $claudeExe) { $claudePath = $claudeExe }
 elseif (Get-Command claude -ErrorAction SilentlyContinue) { $claudePath = (Get-Command claude).Source }
 
 if (-not $claudePath) {
-    Write-Warning2 "Claude Code not found. Install it, then run: claude /login"
+    Write-Warning2 "Claude Code not found. Install it, then run: claude auth login"
 } else {
-    # Check if already authenticated
-    & $claudePath --print --dangerously-skip-permissions "say ok" 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
+    # Check if already authenticated via claude auth status
+    $authStatus = & $claudePath auth status 2>&1
+    if ($authStatus -match '"loggedIn":\s*true') {
         $claudeLoginSuccess = $true
         Write-OK "Already authenticated. Skipping login."
     } else {
-        Write-Info "Claude Code login will open in a new window. Complete it there — the script will wait."
-        $proc = Start-Process -FilePath $claudePath -ArgumentList "/login" -Wait -PassThru
-        # Re-verify auth actually worked (don't trust exit code alone)
-        & $claudePath --print --dangerously-skip-permissions "say ok" 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { $claudeLoginSuccess = $true; Write-OK "Claude Code login verified." }
-        else { Write-Warning2 "Login may not have succeeded. You can retry: claude /login" }
+        Write-Info "A browser will open for sign-in. Complete it there — the script will wait."
+        & $claudePath auth login 2>&1 | Out-Host
+        # Re-verify
+        $authStatus = & $claudePath auth status 2>&1
+        if ($authStatus -match '"loggedIn":\s*true') { $claudeLoginSuccess = $true; Write-OK "Claude Code login verified." }
+        else { Write-Warning2 "Login may not have succeeded. You can retry: claude auth login" }
     }
 }
 
@@ -454,7 +454,7 @@ Write-Host "  $bannerText" -ForegroundColor $bannerColor
 Write-Host "================================================" -ForegroundColor $bannerColor
 Write-Host ""
 Write-Host "  Azure:       $userEmail" -ForegroundColor $(if ($azLoginSuccess) { "Green" } else { "Yellow" })
-Write-Host "  Claude Code: $(if ($claudeLoginSuccess) { 'Authenticated' } else { 'Needs: claude /login' })" -ForegroundColor $(if ($claudeLoginSuccess) { "Green" } else { "Yellow" })
+Write-Host "  Claude Code: $(if ($claudeLoginSuccess) { 'Authenticated' } else { 'Needs: claude auth login' })" -ForegroundColor $(if ($claudeLoginSuccess) { "Green" } else { "Yellow" })
 Write-Host "  Worker:      $(if ($workerRunning) { 'Running' } else { 'Not running' })" -ForegroundColor $(if ($workerRunning) { "Green" } else { "Yellow" })
 Write-Host "  PM:          $(if ($pmRunning) { 'Running' } else { 'Not running' })" -ForegroundColor $(if ($pmRunning) { "Green" } else { "Yellow" })
 Write-Host ""
