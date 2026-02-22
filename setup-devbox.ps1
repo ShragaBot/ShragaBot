@@ -37,14 +37,16 @@ function Write-Info { param([string]$M); Write-Host "  $M" -ForegroundColor Gray
 function Write-Warning2 { param([string]$M); Write-Host "  [WARN] $M" -ForegroundColor Yellow }
 
 function Find-Python {
-    foreach ($c in @(
-        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
-        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"),
+        (Join-Path $env:USERPROFILE "AppData\Local\Programs\Python\Python312\python.exe"),
         "C:\Program Files\Python312\python.exe",
         "C:\Program Files\Python311\python.exe",
         "C:\Python312\python.exe",
         "C:\Python311\python.exe"
-    )) { if (Test-Path $c) { return $c } }
+    )
+    foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
     # Fallback to Get-Command but skip the Windows Store stub
     $found = (Get-Command python -ErrorAction SilentlyContinue).Source
     if ($found -and $found -notlike "*WindowsApps*") { return $found }
