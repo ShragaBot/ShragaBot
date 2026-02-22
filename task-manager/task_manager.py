@@ -56,12 +56,18 @@ class TaskManager:
             if self._sessions_path.exists():
                 d = json.loads(self._sessions_path.read_text(encoding="utf-8"))
                 if isinstance(d, dict):
-                    # Mark previous sessions for chaining (don't resume, but reference)
+                    # Mark previous sessions for chaining (don't resume, but preserve full chain)
                     prev = {}
                     for mcs_id, val in d.items():
-                        sid = val if isinstance(val, str) else val.get("session_id", "")
-                        if sid:
-                            prev[mcs_id] = {"prev_session_id": sid, "session_id": None}
+                        if isinstance(val, str):
+                            # Legacy format: plain session ID string
+                            prev[mcs_id] = {"prev_session_id": val, "chain": [val], "session_id": None}
+                        elif isinstance(val, dict):
+                            sid = val.get("session_id", "")
+                            chain = val.get("chain", [])
+                            if sid and sid not in chain:
+                                chain = chain + [sid]
+                            prev[mcs_id] = {"prev_session_id": sid, "chain": chain, "session_id": None}
                     print(f"[SESSIONS] Loaded {len(prev)} previous session(s) for chaining")
                     return prev
         except Exception as e: print(f"[WARN] Failed to load sessions: {e}")
@@ -302,12 +308,14 @@ class TaskManager:
 
             if resp is None: resp = FALLBACK_MESSAGE
             if new_sid and mcs:
+                chain = session_entry.get("chain", [])
                 self._sessions[mcs] = {
                     "session_id": new_sid,
-                    "prev_session_id": prev_sid or session_entry.get("prev_session_id")
+                    "prev_session_id": prev_sid or session_entry.get("prev_session_id"),
+                    "chain": chain
                 }
                 self._save_sessions()
-                if not sid: print(f"[SESSIONS] New session {new_sid[:8]}... for {mcs[:20]}...")
+                if not sid: print(f"[SESSIONS] New session {new_sid[:8]}... (chain depth: {len(chain)}) for {mcs[:20]}...")
 
         except subprocess.TimeoutExpired: print("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE
         except FileNotFoundError: print("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE
