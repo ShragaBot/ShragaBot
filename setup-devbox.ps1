@@ -38,14 +38,12 @@ function Write-Warning2 { param([string]$M); Write-Host "  [WARN] $M" -Foregroun
 
 function Find-Python {
     foreach ($c in @(
-        "C:\Python312\python.exe",
-        "C:\Python311\python.exe",
-        "C:\Python310\python.exe",
-        "C:\ProgramData\chocolatey\lib\python312\tools\python.exe",
-        "C:\ProgramData\chocolatey\bin\python3.exe",
-        "C:\ProgramData\chocolatey\bin\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
         "C:\Program Files\Python312\python.exe",
-        "C:\Program Files\Python311\python.exe"
+        "C:\Program Files\Python311\python.exe",
+        "C:\Python312\python.exe",
+        "C:\Python311\python.exe"
     )) { if (Test-Path $c) { return $c } }
     # Fallback to Get-Command but skip the Windows Store stub
     $found = (Get-Command python -ErrorAction SilentlyContinue).Source
@@ -147,22 +145,16 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 $pyExe = Find-Python
 if ($pyExe) {
     Write-OK "Python already installed: $pyExe"
-} else {
-    if ($hasWinget) {
-        Write-Info "Installing Python 3.12 via winget... (this may take a minute)"
-        winget install --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Null
-    }
-    if (-not $hasWinget -or $LASTEXITCODE -ne 0) {
-        Write-Info "Winget failed, trying chocolatey..."
-        if (Get-Command choco -ErrorAction SilentlyContinue) {
-            choco install python312 -y 2>&1 | Out-Null
-        }
-    }
+} elseif ($hasWinget) {
+    Write-Info "Installing Python 3.12 via winget... (this may take a minute)"
+    winget install --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Null
     Start-Sleep -Seconds 3
     Refresh-Path
     $pyExe = Find-Python
     if ($pyExe) { Write-OK "Python installed: $pyExe" }
     else { Write-Fail "Python install failed. Install from: https://python.org/downloads" }
+} else {
+    Write-Fail "Python not found and winget not available. Install from: https://python.org/downloads"
 }
 
 # -- Claude Code --
