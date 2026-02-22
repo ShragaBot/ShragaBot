@@ -410,14 +410,20 @@ class GlobalManager:
         cmd.extend(["-p", user_message])
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=120, env=env,
-                encoding="utf-8", errors="replace",
-            )
-            if result.returncode != 0:
-                print(f"[WARN] Claude Code failed (rc={result.returncode}): {result.stderr[:300]}")
+            # Use Popen so we can kill the process tree on timeout (subprocess.run leaves orphans on Windows)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    env=env, encoding="utf-8", errors="replace")
+            try:
+                stdout, stderr = proc.communicate(timeout=120)
+            except subprocess.TimeoutExpired:
+                print("[WARN] Claude Code timed out -- killing process")
+                proc.kill()
+                proc.communicate()  # reap
                 return None, ""
-            raw = result.stdout.strip()
+            if proc.returncode != 0:
+                print(f"[WARN] Claude Code failed (rc={proc.returncode}): {stderr[:300]}")
+                return None, ""
+            raw = stdout.strip()
             if not raw:
                 return None, ""
             try:
@@ -434,9 +440,6 @@ class GlobalManager:
                 print("[WARN] Claude returned raw tool_calls JSON - discarding")
                 return None, new_sid
             return resp, new_sid
-        except subprocess.TimeoutExpired:
-            print("[WARN] Claude Code timed out")
-            return None, ""
         except FileNotFoundError:
             print("[WARN] Claude Code CLI not found")
             return None, ""
