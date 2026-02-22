@@ -244,6 +244,8 @@ Write-Step "3/7" "Installing Python Dependencies"
 
 $pyExe = Find-Python
 if ($pyExe -and (Test-Path $WORKING_DIR)) {
+    # Ensure pip is available (some installs like choco don't include it)
+    & $pyExe -m ensurepip --upgrade 2>&1 | Out-Null
     & $pyExe -m pip install --quiet --upgrade requests azure-identity azure-core watchdog 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-OK "Dependencies installed" }
     else { Write-Warning2 "Some dependencies may have failed. Run: $pyExe -m pip install requests azure-identity azure-core watchdog" }
