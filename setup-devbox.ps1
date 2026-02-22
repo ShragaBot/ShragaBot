@@ -34,12 +34,19 @@ function Write-Warning2 { param([string]$M); Write-Host "  [WARN] $M" -Foregroun
 function Find-Python {
     foreach ($c in @(
         "C:\Python312\python.exe",
+        "C:\Python311\python.exe",
+        "C:\Python310\python.exe",
         "C:\ProgramData\chocolatey\lib\python312\tools\python.exe",
         "C:\ProgramData\chocolatey\bin\python3.exe",
-        "C:\ProgramData\chocolatey\bin\python.exe"
+        "C:\ProgramData\chocolatey\bin\python.exe",
+        "C:\Program Files\Python312\python.exe",
+        "C:\Program Files\Python311\python.exe"
     )) { if (Test-Path $c) { return $c } }
+    # Fallback to Get-Command but skip the Windows Store stub
     $found = (Get-Command python -ErrorAction SilentlyContinue).Source
-    if ($found) { return $found }
+    if ($found -and $found -notlike "*WindowsApps*") { return $found }
+    $found = (Get-Command python3 -ErrorAction SilentlyContinue).Source
+    if ($found -and $found -notlike "*WindowsApps*") { return $found }
     return $null
 }
 
