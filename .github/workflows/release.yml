@@ -1,0 +1,28 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine next version
+        id: version
+        run: |
+          # Find the highest existing release/vN branch number
+          LATEST=$(git branch -r --list 'origin/release/v*' | sed 's|.*release/v||' | sort -n | tail -1)
+          NEXT=$((${LATEST:-0} + 1))
+          echo "version=v${NEXT}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release branch
+        run: |
+          git checkout -b release/${{ steps.version.outputs.version }}
+          git push origin release/${{ steps.version.outputs.version }}
+
+      - name: Summary
+        run: echo "Created **release/${{ steps.version.outputs.version }}** from main" >> "$GITHUB_STEP_SUMMARY"
