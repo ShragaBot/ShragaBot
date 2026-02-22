@@ -281,7 +281,7 @@ $updaterWrapperPath = Join-Path $updaterWrapperDir "ShragaUpdater.cmd"
 $updaterWrapperContent = "@echo off`r`nset /p VERSION=<`"$VERSION_FILE`"`r`nif `"%VERSION%`"==`"`" (exit /b 1)`r`nset `"RELEASE_DIR=$RELEASES_DIR\%VERSION%`"`r`nif not exist `"%RELEASE_DIR%`" (exit /b 1)`r`n`"$pyExe`" `"%RELEASE_DIR%\updater.py`"`r`nexit /b %ERRORLEVEL%"
 [System.IO.File]::WriteAllText($updaterWrapperPath, $updaterWrapperContent, [System.Text.Encoding]::ASCII)
 
-if (-not (Test-Path (Join-Path $WORKING_DIR ".git"))) {
+if (-not (Test-Path $sentinel)) {
     Write-Fail "Code not available. Cannot continue."
     Write-Host "  Log saved to: $LOG_FILE" -ForegroundColor Gray
     Read-Host "Press Enter to close"

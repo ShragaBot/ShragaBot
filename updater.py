@@ -1,7 +1,7 @@
 r"""Shraga Release Updater -- standalone script, runs as a scheduled task.
 
 Checks for the latest release/v* branch on GitHub. If a newer release
-exists, clones it into an immutable release folder, installs deps,
+exists, downloads it as a zip into an immutable release folder, installs deps,
 and writes current_version.txt. Running services detect the version
 change and exit gracefully; the watchdog restarts them from the new release.
 
@@ -10,7 +10,7 @@ Directory structure:
     current_version.txt       -> "v1"
     updater.py                -> this script
     releases\
-      v1\                     -> immutable clone
+      v1\                     -> immutable file copy
       v2\                     -> next release
 """
 import subprocess
@@ -100,7 +100,7 @@ def deploy_release(version: str) -> bool:
 
     # Download zip from GitHub and extract (no git clone, no .git directory)
     import zipfile, tempfile, shutil
-    zip_url = f"{REPO_URL.rstrip('.git')}/archive/refs/heads/release/{version}.zip"
+    zip_url = f"{REPO_URL.removesuffix('.git')}/archive/refs/heads/release/{version}.zip"
     zip_path = Path(tempfile.gettempdir()) / f"shraga-{version}.zip"
     try:
         result = subprocess.run(
