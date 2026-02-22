@@ -48,18 +48,53 @@ class TaskManager:
         d = Path.home() / ".shraga"; d.mkdir(exist_ok=True)
         return d / f"sessions_{self.user_email.replace('@','_at_').replace('.','_')}.json"
 
-    def _load_sessions(self) -> dict[str, str]:
+    def _load_sessions(self) -> dict:
+        """Load sessions file. Each entry: { mcs_id: { session_id, prev_session_id } }
+        On startup, we keep the file for reference but mark all sessions as needing refresh.
+        """
         try:
             if self._sessions_path.exists():
                 d = json.loads(self._sessions_path.read_text(encoding="utf-8"))
                 if isinstance(d, dict):
-                    print(f"[SESSIONS] Loaded {len(d)} session(s) from {self._sessions_path}"); return d
+                    # Mark previous sessions for chaining (don't resume, but reference)
+                    prev = {}
+                    for mcs_id, val in d.items():
+                        sid = val if isinstance(val, str) else val.get("session_id", "")
+                        if sid:
+                            prev[mcs_id] = {"prev_session_id": sid, "session_id": None}
+                    print(f"[SESSIONS] Loaded {len(prev)} previous session(s) for chaining")
+                    return prev
         except Exception as e: print(f"[WARN] Failed to load sessions: {e}")
         return {}
 
     def _save_sessions(self):
-        try: self._sessions_path.write_text(json.dumps(self._sessions, indent=2), encoding="utf-8")
+        try:
+            # Save in the new format: { mcs_id: { session_id, prev_session_id } }
+            self._sessions_path.write_text(json.dumps(self._sessions, indent=2), encoding="utf-8")
         except Exception as e: print(f"[WARN] Failed to save sessions: {e}")
+
+    def _get_recent_messages(self, mcs_conversation_id: str, count: int = 10) -> str:
+        """Fetch recent messages from DV for this conversation to provide context."""
+        hdr = self._headers()
+        if not hdr: return ""
+        try:
+            r = requests.get(
+                f"{DV_API}/{CONV_TBL}?$filter=cr_mcs_conversation_id eq '{mcs_conversation_id}'"
+                f" and cr_status eq '{ST_PROCESSED}'"
+                f"&$orderby=createdon desc&$top={count}",
+                headers=hdr, timeout=REQ_TMO)
+            r.raise_for_status()
+            rows = r.json().get("value", [])
+            if not rows: return ""
+            lines = []
+            for row in reversed(rows):  # oldest first
+                direction = "User" if row.get("cr_direction") == DIR_IN else "Assistant"
+                msg = row.get("cr_message", "")[:200]
+                lines.append(f"{direction}: {msg}")
+            return "\n".join(lines)
+        except Exception as e:
+            print(f"[WARN] Could not fetch recent messages: {e}")
+            return ""
 
     def _set_onboarding_completed(self):
         """Set onboardingstep=completed for this user in DV on startup."""
@@ -229,22 +264,49 @@ class TaskManager:
         txt = msg.get("cr_message", "").strip()
         if not txt: self.mark_processed(rid); return
         print(f"[MSG] Processing: {txt[:80]}...")
-        sid = self._sessions.get(mcs) if mcs else None
-        lost = False
+
+        session_entry = self._sessions.get(mcs, {}) if mcs else {}
+        if isinstance(session_entry, str):
+            # Legacy format migration
+            session_entry = {"prev_session_id": session_entry, "session_id": None}
+            self._sessions[mcs] = session_entry
+
+        sid = session_entry.get("session_id")  # Current session (within this run)
+        prev_sid = session_entry.get("prev_session_id")  # Previous run's session
+
         try:
-            resp, new_sid = self._call_claude(txt, session_id=sid)
-            if resp is None and sid:
-                print(f"[SESSIONS] Resume failed for {sid[:8]}..., starting fresh")
-                self._forget_session(mcs); lost = True
-                resp, new_sid = self._call_claude(txt, session_id=None)
+            if sid:
+                # Within-run resume -- same model, same prompt
+                resp, new_sid = self._call_claude(txt, session_id=sid)
+                if resp is None:
+                    print(f"[SESSIONS] Resume failed for {sid[:8]}..., starting fresh")
+                    sid = None  # Fall through to new session below
+
+            if not sid:
+                # New session -- inject context from previous conversation
+                context_prefix = ""
+                if prev_sid or mcs:
+                    recent = self._get_recent_messages(mcs) if mcs else ""
+                    parts = []
+                    if prev_sid:
+                        parts.append(f"[Previous session ID: {prev_sid} -- you can reference this if needed]")
+                    if recent:
+                        parts.append(f"[Recent conversation history:\n{recent}\n]")
+                    if parts:
+                        context_prefix = "\n".join(parts) + "\n\n"
+
+                full_text = context_prefix + txt if context_prefix else txt
+                resp, new_sid = self._call_claude(full_text, session_id=None)
+
             if resp is None: resp = FALLBACK_MESSAGE
             if new_sid and mcs:
-                is_new = mcs not in self._sessions
-                self._sessions[mcs] = new_sid; self._save_sessions()
-                if is_new: print(f"[SESSIONS] New session {new_sid[:8]}... for {mcs[:20]}...")
-            if lost:
-                resp = ("[Note: I lost context from our previous conversation and started "
-                        "a fresh session. Sorry about that!]\n\n" + resp)
+                self._sessions[mcs] = {
+                    "session_id": new_sid,
+                    "prev_session_id": prev_sid or session_entry.get("prev_session_id")
+                }
+                self._save_sessions()
+                if not sid: print(f"[SESSIONS] New session {new_sid[:8]}... for {mcs[:20]}...")
+
         except subprocess.TimeoutExpired: print("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE
         except FileNotFoundError: print("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE
         except Exception as e: print(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE
