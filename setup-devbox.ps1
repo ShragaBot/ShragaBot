@@ -3,8 +3,8 @@
 # Idempotent -- safe to re-run at any time.
 #
 # First box:      irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex
-# Additional box: powershell -ExecutionPolicy Bypass -File setup-devbox.ps1 -WorkerOnly
-# Re-run:         Double-click "Shraga Setup" shortcut on desktop
+# Additional box: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-workerbox.ps1 | iex
+# Re-run:         Same command again (idempotent)
 
 param(
     [switch]$WorkerOnly  # Skip PM -- used by setup-workerbox.ps1
@@ -373,29 +373,6 @@ foreach ($ev in @(
 if ($envOk) { Write-OK "Environment variables set (USER_EMAIL=$userEmail)" }
 else { Write-Warning2 "Some environment variables may not have been set" }
 
-# -- Create desktop shortcut for re-running this script --
-$localScript = Join-Path $WORKING_DIR "setup-devbox.ps1"
-if (-not (Test-Path $localScript)) {
-    Write-Warning2 "Script not found at $localScript -- skipping desktop shortcut"
-} else { try {
-    $desktopPath = [System.Environment]::GetFolderPath("Desktop")
-    if (-not $desktopPath -or -not (Test-Path $desktopPath)) {
-        $desktopPath = Join-Path $env:USERPROFILE "Desktop"
-    }
-    if (-not (Test-Path $desktopPath)) {
-        New-Item -ItemType Directory -Force -Path $desktopPath | Out-Null
-    }
-    # Shortcut runs irm | iex -- always fetches latest from GitHub
-    $ws = New-Object -ComObject WScript.Shell
-    $sc = $ws.CreateShortcut((Join-Path $desktopPath "Shraga Setup.lnk"))
-    $sc.TargetPath = "powershell.exe"
-    $sc.Arguments = "-ExecutionPolicy Bypass -Command `"irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex`""
-    $sc.WorkingDirectory = $WORKING_DIR
-    $sc.Save()
-    Write-OK "Desktop shortcut created: Shraga Setup"
-} catch {
-    Write-Warning2 "Could not create desktop shortcut: $_"
-} }
 
 # -- Register and start scheduled tasks --
 $pyExe = Find-Python
