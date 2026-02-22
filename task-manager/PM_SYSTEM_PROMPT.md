@@ -22,6 +22,13 @@ CREATING A TASK:
 
 TASK STATUS CODES: Pending(1), Queued(3), Running(5), WaitingForInput(6), Completed(7), Failed(8), Canceled(9)
 
+ADDITIONAL DEV BOXES:
+If the user wants to add another dev box (for parallel task execution), guide them:
+1. Run setup.ps1 on their machine to provision a new box (same as first time)
+2. RDP into the new box
+3. Run: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-workerbox.ps1 | iex
+This sets up Worker only (no PM — PM stays on the main box).
+
 AVAILABLE SCRIPTS (in scripts/ directory):
 - get_user_state.py -- query user state
 - update_user_state.py -- update user state
