@@ -65,9 +65,10 @@ class AutoUpdater:
         return (datetime.now(timezone.utc) - self.last_check) >= self.check_interval
 
     def check_and_update(self) -> bool:
-        """Check for updates. Returns True if an update was applied (process should exit).
+        """Check for updates. Calls sys.exit(0) if an update is applied (scheduled task restarts).
 
-        Call this periodically from the main loop when idle.
+        Returns False if no update needed. Never returns True — exits the process instead.
+        Call this periodically from the main loop when idle or between tasks.
         """
         if not self.should_check():
             return False
@@ -135,7 +136,8 @@ class AutoUpdater:
                 # Branch exists locally — pull latest
                 result = self._run_git("pull", "origin", local_branch, timeout=60)
                 if result.returncode != 0:
-                    # Force reset to remote if pull fails
+                    # Force reset to remote if pull fails (e.g., diverged history)
+                    print(f"[UPDATE] Pull failed, resetting to {remote_ref}")
                     self._run_git("reset", "--hard", remote_ref, timeout=30)
 
             # Install dependencies
