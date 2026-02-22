@@ -200,7 +200,9 @@ Each task gets an isolated session folder in OneDrive:
 
 | Script | Description |
 |--------|-------------|
-| `setup.ps1` | Full dev box setup (Python, Git, Claude Code, Azure CLI, dependencies). |
+| `setup.ps1` | Provisions a bare dev box (auto-selects tenant + subscription, creates box, shows RDP URL). |
+| `setup-devbox.ps1` | All-in-one on-box setup: tools, code deployment, auth, services. Run on the dev box after RDP connect. |
+| `setup-workerbox.ps1` | Additional dev box setup (Worker only, no PM). |
 | `authenticate.ps1` | Authenticate with Azure and Claude Code. |
 | `verify-devbox-setup.ps1` | Verify dev box setup is complete and healthy. |
 | `kiosk-auth-helper.ps1` | Helper for kiosk-mode authentication scenarios. |
@@ -237,7 +239,7 @@ Each task gets an isolated session folder in OneDrive:
 | `TABLE_NAME` | `cr_shraga_tasks` | Dataverse tasks table name |
 | `WEBHOOK_USER` | `sagik@microsoft.com` | User email for task ownership |
 | `WORK_BASE_DIR` | Script parent directory | Base directory for local work folders |
-| `UPDATE_BRANCH` | `origin/users/sagik/shraga-worker` | Git branch for auto-updates |
+| `SHRAGA_ROOT` | `C:\Dev\Shraga` | Root directory for immutable releases |
 | `ONEDRIVE_SESSIONS_DIR` | (auto-detected) | Override for OneDrive root path |
 
 ## Running Tests
@@ -252,12 +254,12 @@ Tests use mocked Azure credentials, Dataverse API, and Claude Code CLI calls. No
 - `test_integrated_task_worker.py` -- Tests for IntegratedTaskWorker (token, state, polling, claiming, execution)
 - `test_onedrive_utils.py` -- Tests for OneDrive path resolution and URL generation
 
-## Self-Update Mechanism
+## Version Check and Auto-Update
 
-When idle (no tasks to process), the worker checks for updates every 10 minutes:
-1. `git fetch` from remote
-2. Compare local `VERSION` file with `{UPDATE_BRANCH}:VERSION`
-3. If different, `git pull` and `sys.exit(0)` -- Task Scheduler restarts the worker
+The worker uses an immutable release deployment system:
+1. Code lives in `C:\Dev\Shraga\releases\vN\` as plain file copies (no .git)
+2. Between tasks, the worker calls `version_check.should_exit()` to compare its release folder name against `current_version.txt`
+3. If a newer version is available, the worker exits gracefully and the scheduled task watchdog restarts it from the new release folder via the .cmd wrapper
 
 ## Key Design Decisions
 
