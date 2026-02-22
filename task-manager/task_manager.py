@@ -60,14 +60,13 @@ class TaskManager:
                     prev = {}
                     for mcs_id, val in d.items():
                         if isinstance(val, str):
-                            # Legacy format: plain session ID string
-                            prev[mcs_id] = {"prev_session_id": val, "chain": [val], "session_id": None}
+                            prev[mcs_id] = {"chain": [val], "session_id": None}
                         elif isinstance(val, dict):
                             sid = val.get("session_id", "")
                             chain = val.get("chain", [])
                             if sid and sid not in chain:
                                 chain = chain + [sid]
-                            prev[mcs_id] = {"prev_session_id": sid, "chain": chain, "session_id": None}
+                            prev[mcs_id] = {"chain": chain, "session_id": None}
                     print(f"[SESSIONS] Loaded {len(prev)} previous session(s) for chaining")
                     return prev
         except Exception as e: print(f"[WARN] Failed to load sessions: {e}")
@@ -276,11 +275,11 @@ class TaskManager:
         session_entry = self._sessions.get(mcs, {}) if mcs else {}
         if isinstance(session_entry, str):
             # Legacy format migration
-            session_entry = {"prev_session_id": session_entry, "session_id": None}
+            session_entry = {"chain": [session_entry], "session_id": None}
             self._sessions[mcs] = session_entry
 
         sid = session_entry.get("session_id")  # Current session (within this run)
-        prev_sid = session_entry.get("prev_session_id")  # Previous run's session
+        chain = session_entry.get("chain", [])  # All previous session IDs
 
         try:
             if sid:
@@ -293,11 +292,11 @@ class TaskManager:
             if not sid:
                 # New session -- inject context from previous conversation
                 context_prefix = ""
-                if prev_sid or mcs:
+                if chain or mcs:
                     recent = self._get_recent_messages(mcs) if mcs else ""
                     parts = []
-                    if prev_sid:
-                        parts.append(f"[Previous session ID: {prev_sid} -- you can reference this if needed]")
+                    if chain:
+                        parts.append(f"[Previous session IDs (oldest to newest): {', '.join(chain)}]")
                     if recent:
                         parts.append(f"[Recent conversation history:\n{recent}\n]")
                     if parts:
@@ -308,10 +307,8 @@ class TaskManager:
 
             if resp is None: resp = FALLBACK_MESSAGE
             if new_sid and mcs:
-                chain = session_entry.get("chain", [])
                 self._sessions[mcs] = {
                     "session_id": new_sid,
-                    "prev_session_id": prev_sid or session_entry.get("prev_session_id"),
                     "chain": chain
                 }
                 self._save_sessions()
