@@ -77,7 +77,6 @@ class AutoUpdater:
 
         try:
             # Fetch latest from remote
-            print("[UPDATE] Checking for updates...")
             result = self._run_git("fetch", "--all", "--prune")
             if result.returncode != 0:
                 print(f"[WARN] Git fetch failed: {result.stderr.strip()}")
@@ -85,7 +84,6 @@ class AutoUpdater:
 
             latest = self._get_latest_release_branch()
             if not latest:
-                print("[UPDATE] No release branches found")
                 return False
 
             # Extract local branch name (origin/release/v3 -> release/v3)
