@@ -356,13 +356,16 @@ try {
 if (-not $azLoginSuccess) {
     Write-Info "A browser window will open. Sign in, then come back here -- the script will wait."
     for ($attempt = 1; $attempt -le $MAX_AZ_LOGIN_RETRIES; $attempt++) {
-        az login 2>&1 | Out-Host
+        # Capture all output to prevent red stderr warnings about subscriptions
+        $azOutput = az login 2>&1
         if ($LASTEXITCODE -eq 0) {
             $userEmail = az account show --query "user.name" -o tsv 2>$null
             $azLoginSuccess = $true
             Write-OK "Signed in as: $userEmail"
             break
         }
+        # Only show output on failure (as gray info, not red)
+        $azOutput | ForEach-Object { Write-Info "$_" }
         if ($attempt -lt $MAX_AZ_LOGIN_RETRIES) { Write-Info "Retrying..."; Start-Sleep 5 }
     }
 }
@@ -396,12 +399,20 @@ if (-not $claudePath) {
         $claudeLoginSuccess = $true
         Write-OK "Already authenticated. Skipping login."
     } else {
-        Write-Info "A browser will open for sign-in. Complete it there -- the script will wait."
-        & $claudePath auth login 2>&1 | Out-Host
-        # Re-verify
+        Write-Info "Opening Claude Code login in a separate window..."
+        Write-Info "Complete the login there (browser or device code), then press Enter here when done."
+        # Open claude auth login in a separate console window so it can handle interactive flows
+        Start-Process -FilePath $claudePath -ArgumentList "auth", "login" -Wait:$false
+        Write-Host ""
+        Read-Host "  Press Enter after you finish the Claude login in the other window"
+        # Verify login succeeded
         $authStatus = & $claudePath auth status 2>&1
-        if ($authStatus -match '"loggedIn":\s*true') { $claudeLoginSuccess = $true; Write-OK "Claude Code login verified." }
-        else { Write-Warning2 "Login may not have succeeded. You can retry: claude auth login" }
+        if ($authStatus -match '"loggedIn":\s*true') {
+            $claudeLoginSuccess = $true
+            Write-OK "Claude Code login verified."
+        } else {
+            Write-Warning2 "Login not detected. You can retry: claude auth login"
+        }
     }
 }
 
