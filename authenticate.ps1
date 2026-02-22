@@ -1,6 +1,8 @@
-# Shraga Dev Box Authentication Script
-# Handles Azure login, Claude Code login, env var setup, and worker auto-start.
-# Designed to be run on a freshly provisioned dev box via the desktop shortcut.
+# Shraga Dev Box Setup & Authentication Script
+# Runs ON the dev box. Installs all tools, clones code, authenticates, starts services.
+#
+# Usage: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/authenticate.ps1 | iex
+# Or: Right-click desktop shortcut -> Run with PowerShell
 
 $ErrorActionPreference = "Continue"
 
@@ -8,40 +10,31 @@ $ErrorActionPreference = "Continue"
 # Configuration
 # ---------------------------------------------------------------------------
 $WORKING_DIR = "C:\Dev\shraga-worker"
+$REPO_URL = "https://github.com/ShragaBot/ShragaBot.git"
 $MAX_AZ_LOGIN_RETRIES = 3
 $WORKER_SCRIPT = Join-Path $WORKING_DIR "integrated_task_worker.py"
+$PM_SCRIPT = Join-Path $WORKING_DIR "task-manager\task_manager.py"
 
 # ---------------------------------------------------------------------------
-# Helper: Write colored progress line
+# Helpers
 # ---------------------------------------------------------------------------
-function Write-Step {
-    param(
-        [string]$StepLabel,
-        [string]$Message,
-        [string]$Color = "Yellow"
+function Write-Step { param([string]$StepLabel, [string]$Message, [string]$Color = "Yellow"); Write-Host ""; Write-Host "[$StepLabel] $Message" -ForegroundColor $Color }
+function Write-Success { param([string]$Message); Write-Host "  [OK] $Message" -ForegroundColor Green }
+function Write-Failure { param([string]$Message); Write-Host "  [FAIL] $Message" -ForegroundColor Red }
+function Write-Info { param([string]$Message); Write-Host "  $Message" -ForegroundColor Gray }
+function Write-Warn { param([string]$Message); Write-Host "  [WARN] $Message" -ForegroundColor Yellow }
+
+function Find-Python {
+    $candidates = @(
+        "C:\Python312\python.exe",
+        "C:\ProgramData\chocolatey\lib\python312\tools\python.exe",
+        "C:\ProgramData\chocolatey\bin\python3.exe",
+        "C:\ProgramData\chocolatey\bin\python.exe"
     )
-    Write-Host ""
-    Write-Host "[$StepLabel] $Message" -ForegroundColor $Color
-}
-
-function Write-Success {
-    param([string]$Message)
-    Write-Host "  [OK] $Message" -ForegroundColor Green
-}
-
-function Write-Failure {
-    param([string]$Message)
-    Write-Host "  [FAIL] $Message" -ForegroundColor Red
-}
-
-function Write-Info {
-    param([string]$Message)
-    Write-Host "  $Message" -ForegroundColor Gray
-}
-
-function Write-Warn {
-    param([string]$Message)
-    Write-Host "  [WARN] $Message" -ForegroundColor Yellow
+    foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
+    $found = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if ($found) { return $found }
+    return $null
 }
 
 # ---------------------------------------------------------------------------
@@ -49,300 +42,249 @@ function Write-Warn {
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Cyan
-Write-Host "  Shraga Dev Box Authentication" -ForegroundColor Cyan
+Write-Host "  Shraga Dev Box Setup" -ForegroundColor Cyan
 Write-Host "================================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  This script will:" -ForegroundColor White
-Write-Host "    1. Sign you into Azure" -ForegroundColor White
-Write-Host "    2. Verify Azure authentication" -ForegroundColor White
-Write-Host "    3. Sign you into Claude Code" -ForegroundColor White
-Write-Host "    4. Set environment variables" -ForegroundColor White
-Write-Host "    5. Start the Shraga worker" -ForegroundColor White
-Write-Host ""
 
 # =========================================================================
-# Step 1: Azure Login with retry logic
+# Step 1: Install Tools (Git, Claude Code, Python)
 # =========================================================================
-Write-Step "1/6" "Azure Login" "Yellow"
+Write-Step "1/7" "Installing Tools" "Yellow"
+
+# Git
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    Write-Success "Git already installed: $(git --version)"
+} else {
+    Write-Info "Installing Git via winget..."
+    winget install --id Git.Git --accept-source-agreements --accept-package-agreements --silent 2>$null
+    if ($LASTEXITCODE -eq 0) { Write-Success "Git installed" } else { Write-Warn "Git install may have failed" }
+    # Refresh PATH
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+}
+
+# Claude Code
+$claudeLocalBin = Join-Path $env:USERPROFILE ".local\bin"
+if (Test-Path (Join-Path $claudeLocalBin "claude.exe")) {
+    if ($env:Path -notlike "*$claudeLocalBin*") {
+        $env:Path += ";$claudeLocalBin"
+        $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+        if ($userPath -notlike "*$claudeLocalBin*") {
+            [System.Environment]::SetEnvironmentVariable("Path", "$userPath;$claudeLocalBin", "User")
+        }
+    }
+    Write-Success "Claude Code already installed: $(claude --version 2>$null)"
+} elseif (Get-Command claude -ErrorAction SilentlyContinue) {
+    Write-Success "Claude Code already installed: $(claude --version 2>$null)"
+} else {
+    Write-Info "Installing Claude Code..."
+    try {
+        irm https://claude.ai/install.ps1 | iex 2>$null
+        # Add to PATH
+        if (Test-Path (Join-Path $claudeLocalBin "claude.exe")) {
+            $env:Path += ";$claudeLocalBin"
+            $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+            if ($userPath -notlike "*$claudeLocalBin*") {
+                [System.Environment]::SetEnvironmentVariable("Path", "$userPath;$claudeLocalBin", "User")
+            }
+        }
+        Write-Success "Claude Code installed"
+    } catch {
+        Write-Warn "Claude Code install failed: $_"
+        Write-Info "Install manually: irm https://claude.ai/install.ps1 | iex"
+    }
+}
+
+# Python
+$pyExe = Find-Python
+if ($pyExe) {
+    Write-Success "Python already installed: $($pyExe)"
+} else {
+    Write-Info "Installing Python 3.12 via winget..."
+    winget install --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements --silent 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Info "Trying chocolatey..."
+        if (Get-Command choco -ErrorAction SilentlyContinue) {
+            choco install python312 -y 2>$null
+        }
+    }
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $pyExe = Find-Python
+    if ($pyExe) { Write-Success "Python installed: $pyExe" } else { Write-Warn "Python install failed — install manually" }
+}
+
+# =========================================================================
+# Step 2: Clone/Update Repository
+# =========================================================================
+Write-Step "2/7" "Setting Up Code" "Yellow"
+
+if (Test-Path (Join-Path $WORKING_DIR ".git")) {
+    Write-Info "Repo exists, pulling latest..."
+    Push-Location $WORKING_DIR
+    git pull 2>$null
+    Pop-Location
+    Write-Success "Code updated"
+} else {
+    Write-Info "Cloning repository..."
+    New-Item -ItemType Directory -Force -Path "C:\Dev" -ErrorAction SilentlyContinue | Out-Null
+    # Use full path to git in case PATH isn't refreshed yet
+    $gitExe = "C:\Program Files\Git\cmd\git.exe"
+    if (-not (Test-Path $gitExe)) { $gitExe = "git" }
+    & $gitExe clone --single-branch --depth 1 $REPO_URL $WORKING_DIR 2>$null
+    if (Test-Path $WORKING_DIR) { Write-Success "Code cloned to $WORKING_DIR" } else { Write-Warn "Clone failed" }
+}
+
+# =========================================================================
+# Step 3: Install Python Dependencies
+# =========================================================================
+Write-Step "3/7" "Installing Python Dependencies" "Yellow"
+
+$pyExe = Find-Python
+if ($pyExe) {
+    & $pyExe -m pip install --quiet requests azure-identity azure-core watchdog 2>$null
+    Write-Success "Dependencies installed"
+} else {
+    Write-Warn "Python not found — skipping pip install"
+}
+
+# =========================================================================
+# Step 4: Configure Keep-Alive (prevent hibernation)
+# =========================================================================
+Write-Step "4/7" "Configuring Keep-Alive" "Yellow"
+
+try {
+    powercfg /change monitor-timeout-ac 0 2>$null
+    powercfg /change standby-timeout-ac 0 2>$null
+    powercfg /change hibernate-timeout-ac 0 2>$null
+    powercfg /change disk-timeout-ac 0 2>$null
+    powercfg /hibernate off 2>$null
+    reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fResetBroken /t REG_DWORD /d 0 /f 2>$null | Out-Null
+    Write-Success "Keep-alive configured"
+} catch {
+    Write-Warn "Some keep-alive settings may need admin: $_"
+}
+
+# =========================================================================
+# Step 5: Azure Login
+# =========================================================================
+Write-Step "5/7" "Azure Login" "Yellow"
+
+$azLoginSuccess = $false
+$userEmail = $null
 
 # Check if already authenticated
-$azLoginSuccess = $false
 try {
     $existingAccount = az account show --output json 2>$null | ConvertFrom-Json
     if ($existingAccount -and $existingAccount.user.name) {
-        Write-Success "Already signed in as: $($existingAccount.user.name)"
-        Write-Info "Skipping Azure login (use 'az logout' first to force re-auth)."
+        $userEmail = $existingAccount.user.name
+        Write-Success "Already signed in as: $userEmail"
         $azLoginSuccess = $true
     }
 } catch { }
 
 if (-not $azLoginSuccess) {
     Write-Info "A browser window will open. Sign in with your Microsoft account."
-}
-
-for ($attempt = 1; $attempt -le $MAX_AZ_LOGIN_RETRIES -and -not $azLoginSuccess; $attempt++) {
-    Write-Info "Attempt $attempt of $MAX_AZ_LOGIN_RETRIES..."
-
-    try {
-        # Capture stderr to detect 'no subscription found' warning
-        $azOutput = az login 2>&1
-        $azExitCode = $LASTEXITCODE
-
-        # Convert output to string for inspection
-        $azOutputStr = ($azOutput | Out-String)
-
-        if ($azExitCode -eq 0) {
-            # Check for 'no subscription found' warning - this is non-fatal
-            if ($azOutputStr -match "No subscriptions found" -or $azOutputStr -match "no subscription") {
-                Write-Warn "Azure login succeeded but no subscriptions were found."
-                Write-Warn "This is OK for dev box authentication - continuing."
+    for ($attempt = 1; $attempt -le $MAX_AZ_LOGIN_RETRIES; $attempt++) {
+        try {
+            az login 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $userEmail = az account show --query "user.name" -o tsv 2>$null
+                $azLoginSuccess = $true
+                Write-Success "Signed in as: $userEmail"
+                break
             }
-            $azLoginSuccess = $true
-            Write-Success "Azure login completed."
-            break
-        } else {
-            Write-Failure "Azure login failed (exit code: $azExitCode)."
-            if ($attempt -lt $MAX_AZ_LOGIN_RETRIES) {
-                Write-Info "Retrying in 5 seconds..."
-                Start-Sleep -Seconds 5
-            }
-        }
-    } catch {
-        Write-Failure "Azure login encountered an error: $_"
-        if ($attempt -lt $MAX_AZ_LOGIN_RETRIES) {
-            Write-Info "Retrying in 5 seconds..."
-            Start-Sleep -Seconds 5
-        }
+        } catch { }
+        if ($attempt -lt $MAX_AZ_LOGIN_RETRIES) { Write-Info "Retrying..."; Start-Sleep 5 }
     }
 }
 
 if (-not $azLoginSuccess) {
-    Write-Failure "Azure login failed after $MAX_AZ_LOGIN_RETRIES attempts."
-    Write-Host ""
-    Write-Host "  Troubleshooting tips:" -ForegroundColor Yellow
-    Write-Host "    - Ensure you have network connectivity" -ForegroundColor White
-    Write-Host "    - Try running 'az login' manually in a terminal" -ForegroundColor White
-    Write-Host "    - Check if your account has the required permissions" -ForegroundColor White
-    Write-Host ""
+    Write-Failure "Azure login failed. Run 'az login' manually."
     Read-Host "Press Enter to close"
     exit 1
 }
 
 # =========================================================================
-# Step 2: Verify Azure authentication
+# Step 6: Claude Code Login
 # =========================================================================
-Write-Step "2/6" "Verifying Azure Authentication" "Yellow"
+Write-Step "6/7" "Claude Code Login" "Yellow"
 
-$userEmail = $null
-try {
-    $accountInfo = az account show --output json 2>&1
-    $accountExitCode = $LASTEXITCODE
-
-    if ($accountExitCode -eq 0) {
-        $accountObj = $accountInfo | ConvertFrom-Json
-        $userEmail = $accountObj.user.name
-        $subscriptionName = $accountObj.name
-        $tenantId = $accountObj.tenantId
-
-        Write-Success "Authentication verified."
-        Write-Info "Signed in as: $userEmail"
-        if ($subscriptionName) {
-            Write-Info "Subscription: $subscriptionName"
-        }
-        Write-Info "Tenant: $tenantId"
-    } else {
-        Write-Failure "Could not verify Azure authentication."
-        Write-Info "az account show returned exit code: $accountExitCode"
-        Write-Host ""
-        Read-Host "Press Enter to close"
-        exit 1
-    }
-} catch {
-    Write-Failure "Error verifying Azure authentication: $_"
-    Write-Host ""
-    Read-Host "Press Enter to close"
-    exit 1
-}
-
-# If email is still empty, prompt the user
-if ([string]::IsNullOrWhiteSpace($userEmail)) {
-    Write-Warn "Could not determine user email from Azure account."
-    $userEmail = Read-Host "  Please enter your email address"
-    if ([string]::IsNullOrWhiteSpace($userEmail)) {
-        Write-Failure "Email address is required."
-        Read-Host "Press Enter to close"
-        exit 1
-    }
-}
-
-# =========================================================================
-# Step 3: Claude Code Login with error handling
-# =========================================================================
-Write-Step "3/6" "Claude Code Login" "Yellow"
-Write-Info "Starting Claude Code authentication..."
-
-# Ensure Claude Code is in PATH (native installer puts it in .local\bin)
-$claudeLocalBin = Join-Path $env:USERPROFILE ".local\bin"
-if ((Test-Path (Join-Path $claudeLocalBin "claude.exe")) -and ($env:Path -notlike "*$claudeLocalBin*")) {
-    $env:Path += ";$claudeLocalBin"
-    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
-    if ($userPath -notlike "*$claudeLocalBin*") {
-        [System.Environment]::SetEnvironmentVariable("Path", "$userPath;$claudeLocalBin", "User")
-        Write-Info "Added Claude Code to PATH"
-    }
-}
-
-# Check if already authenticated by running a quick test command
 $claudeLoginSuccess = $false
+
+# Check if already authenticated
 try {
-    $testResult = & claude --print --dangerously-skip-permissions "say ok" 2>&1
+    & claude --print --dangerously-skip-permissions "say ok" 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         $claudeLoginSuccess = $true
-        Write-Success "Claude Code already authenticated. Skipping login."
+        Write-Success "Already authenticated. Skipping login."
     }
 } catch { }
 
 if (-not $claudeLoginSuccess) {
-    try {
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        Write-Info "Claude Code login will open in a new window..."
         $proc = Start-Process -FilePath "claude" -ArgumentList "/login" -Wait -PassThru
-        $claudeExitCode = $proc.ExitCode
-        if ($claudeExitCode -eq 0) {
-            $claudeLoginSuccess = $true
-            Write-Success "Claude Code login completed."
-        } else {
-            Write-Failure "Claude Code login returned exit code: $claudeExitCode"
-        }
-    } catch {
-        Write-Failure "Claude Code login encountered an error: $_"
-    }
-    if (-not $claudeLoginSuccess) {
-        Write-Warn "Claude Code login may not have succeeded."
-        Write-Info "You can retry later by running: claude /login"
-        Write-Info "Continuing with remaining setup steps..."
-    }
-}
-
-# =========================================================================
-# Step 4: Set Environment Variables
-# =========================================================================
-Write-Step "4/6" "Setting Environment Variables" "Yellow"
-
-# Set USER_EMAIL (machine-level so it persists across sessions)
-try {
-    [System.Environment]::SetEnvironmentVariable("USER_EMAIL", $userEmail, "Machine")
-    # Also set for current session
-    $env:USER_EMAIL = $userEmail
-    Write-Success "USER_EMAIL set to: $userEmail"
-} catch {
-    Write-Warn "Could not set machine-level USER_EMAIL (may need admin): $_"
-    # Fall back to user-level
-    try {
-        [System.Environment]::SetEnvironmentVariable("USER_EMAIL", $userEmail, "User")
-        $env:USER_EMAIL = $userEmail
-        Write-Success "USER_EMAIL set (user-level) to: $userEmail"
-    } catch {
-        Write-Failure "Could not set USER_EMAIL: $_"
-    }
-}
-
-# Set WORKING_DIR
-try {
-    [System.Environment]::SetEnvironmentVariable("WORKING_DIR", $WORKING_DIR, "Machine")
-    $env:WORKING_DIR = $WORKING_DIR
-    Write-Success "WORKING_DIR set to: $WORKING_DIR"
-} catch {
-    Write-Warn "Could not set machine-level WORKING_DIR (may need admin): $_"
-    try {
-        [System.Environment]::SetEnvironmentVariable("WORKING_DIR", $WORKING_DIR, "User")
-        $env:WORKING_DIR = $WORKING_DIR
-        Write-Success "WORKING_DIR set (user-level) to: $WORKING_DIR"
-    } catch {
-        Write-Failure "Could not set WORKING_DIR: $_"
-    }
-}
-
-# Set WEBHOOK_USER to the same email for worker compatibility
-try {
-    [System.Environment]::SetEnvironmentVariable("WEBHOOK_USER", $userEmail, "Machine")
-    $env:WEBHOOK_USER = $userEmail
-    Write-Success "WEBHOOK_USER set to: $userEmail"
-} catch {
-    Write-Warn "Could not set machine-level WEBHOOK_USER: $_"
-    try {
-        [System.Environment]::SetEnvironmentVariable("WEBHOOK_USER", $userEmail, "User")
-        $env:WEBHOOK_USER = $userEmail
-        Write-Success "WEBHOOK_USER set (user-level) to: $userEmail"
-    } catch {
-        Write-Failure "Could not set WEBHOOK_USER: $_"
-    }
-}
-
-# =========================================================================
-# Step 5: Install Python dependencies
-# =========================================================================
-Write-Step "5/6" "Installing Python Dependencies" "Yellow"
-try {
-    $pipOutput = & python -m pip install --quiet requests azure-identity azure-core watchdog 2>&1
-    Write-Success "Python dependencies installed."
-} catch {
-    Write-Warn "Could not install dependencies: $_"
-    Write-Info "Try manually: pip install requests azure-identity azure-core watchdog"
-}
-
-# =========================================================================
-# Step 6: Auto-start Worker and PM
-# =========================================================================
-Write-Step "6/6" "Starting Shraga Worker and PM" "Yellow"
-
-$PM_SCRIPT = Join-Path $WORKING_DIR "task-manager\task_manager.py"
-
-foreach ($taskInfo in @(
-    @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker" },
-    @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM" }
-)) {
-    $taskName = $taskInfo.Name
-    $script = $taskInfo.Script
-    $label = $taskInfo.Label
-
-    if (Test-Path $script) {
-        try {
-            $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-            if ($existingTask -and $existingTask.State -eq "Running") {
-                Write-Info "Restarting $label scheduled task..."
-                Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-                Start-Sleep -Seconds 2
-            }
-            if ($existingTask) {
-                Start-ScheduledTask -TaskName $taskName
-                Write-Success "$label started via scheduled task."
-            } else {
-                Write-Info "No scheduled task for $label. Starting directly..."
-                $pyCandidates = @(
-                    "C:\Python312\python.exe",
-                    "C:\ProgramData\chocolatey\lib\python312\tools\python.exe",
-                    "C:\ProgramData\chocolatey\bin\python3.exe",
-                    "C:\ProgramData\chocolatey\bin\python.exe"
-                )
-                $pythonExe = "python"
-                foreach ($c in $pyCandidates) {
-                    if (Test-Path $c) { $pythonExe = $c; break }
-                }
-                Start-Process -FilePath $pythonExe `
-                    -ArgumentList $script `
-                    -WorkingDirectory $WORKING_DIR `
-                    -WindowStyle Hidden
-                Write-Success "$label started directly."
-            }
-        } catch {
-            Write-Warn "Could not auto-start ${label}: $_"
-        }
+        if ($proc.ExitCode -eq 0) { $claudeLoginSuccess = $true; Write-Success "Claude Code login completed." }
+        else { Write-Warn "Claude login returned exit code: $($proc.ExitCode). You can retry: claude /login" }
     } else {
-        Write-Warn "$label script not found at: $script"
+        Write-Warn "Claude Code not found in PATH. Install it first, then run: claude /login"
     }
 }
 
-if (-not (Test-Path $WORKER_SCRIPT) -and -not (Test-Path $PM_SCRIPT)) {
-    Write-Info "Try running: git clone https://github.com/ShragaBot/ShragaBot.git $WORKING_DIR"
+# =========================================================================
+# Step 7: Set Environment Variables + Register & Start Services
+# =========================================================================
+Write-Step "7/7" "Starting Shraga Services" "Yellow"
+
+# Set env vars
+foreach ($varInfo in @(
+    @{ Name = "USER_EMAIL"; Value = $userEmail },
+    @{ Name = "WORKING_DIR"; Value = $WORKING_DIR },
+    @{ Name = "WEBHOOK_USER"; Value = $userEmail }
+)) {
+    try {
+        [System.Environment]::SetEnvironmentVariable($varInfo.Name, $varInfo.Value, "Machine")
+        Set-Item -Path "Env:$($varInfo.Name)" -Value $varInfo.Value
+    } catch {
+        try {
+            [System.Environment]::SetEnvironmentVariable($varInfo.Name, $varInfo.Value, "User")
+            Set-Item -Path "Env:$($varInfo.Name)" -Value $varInfo.Value
+        } catch { Write-Warn "Could not set $($varInfo.Name)" }
+    }
+}
+Write-Success "Environment variables set"
+
+# Register scheduled tasks + start services
+$pyExe = Find-Python
+if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+
+    foreach ($svc in @(
+        @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker" },
+        @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM" }
+    )) {
+        try {
+            $action = New-ScheduledTaskAction -Execute $pyExe -Argument $svc.Script -WorkingDirectory $WORKING_DIR
+            Register-ScheduledTask -TaskName $svc.Name -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+
+            # Stop if already running, then start
+            $existing = Get-ScheduledTask -TaskName $svc.Name -ErrorAction SilentlyContinue
+            if ($existing -and $existing.State -eq "Running") { Stop-ScheduledTask -TaskName $svc.Name -ErrorAction SilentlyContinue; Start-Sleep 2 }
+            Start-ScheduledTask -TaskName $svc.Name
+            Write-Success "$($svc.Label) registered and started"
+        } catch {
+            Write-Warn "Could not start $($svc.Label): $_"
+            # Fallback: start directly
+            Start-Process -FilePath $pyExe -ArgumentList $svc.Script -WorkingDirectory $WORKING_DIR -WindowStyle Hidden
+            Write-Info "$($svc.Label) started directly (no scheduled task)"
+        }
+    }
+} else {
+    Write-Warn "Worker script not found at: $WORKER_SCRIPT"
+    if (-not (Test-Path $WORKING_DIR)) {
+        Write-Info "Try: git clone $REPO_URL $WORKING_DIR"
+    }
 }
 
 # =========================================================================
@@ -350,14 +292,15 @@ if (-not (Test-Path $WORKER_SCRIPT) -and -not (Test-Path $PM_SCRIPT)) {
 # =========================================================================
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Green
-Write-Host "  Authentication Complete" -ForegroundColor Green
+Write-Host "  Setup Complete!" -ForegroundColor Green
 Write-Host "================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Summary:" -ForegroundColor White
-Write-Host "    Azure:       Signed in as $userEmail" -ForegroundColor $(if ($azLoginSuccess) { "Green" } else { "Red" })
-Write-Host "    Claude Code: $(if ($claudeLoginSuccess) { 'Authenticated' } else { 'Needs manual login (claude /login)' })" -ForegroundColor $(if ($claudeLoginSuccess) { "Green" } else { "Yellow" })
-Write-Host "    USER_EMAIL:  $env:USER_EMAIL" -ForegroundColor Green
-Write-Host "    WORKING_DIR: $env:WORKING_DIR" -ForegroundColor Green
-Write-Host "    Worker:      $(if (Test-Path $WORKER_SCRIPT) { 'Started' } else { 'Not deployed' })" -ForegroundColor $(if (Test-Path $WORKER_SCRIPT) { "Green" } else { "Yellow" })
+Write-Host "  Tools:       Git, Claude Code, Python" -ForegroundColor Green
+Write-Host "  Azure:       $userEmail" -ForegroundColor $(if ($azLoginSuccess) { "Green" } else { "Yellow" })
+Write-Host "  Claude Code: $(if ($claudeLoginSuccess) { 'Authenticated' } else { 'Needs: claude /login' })" -ForegroundColor $(if ($claudeLoginSuccess) { "Green" } else { "Yellow" })
+Write-Host "  Worker:      $(if (Test-Path $WORKER_SCRIPT) { 'Running' } else { 'Not deployed' })" -ForegroundColor $(if (Test-Path $WORKER_SCRIPT) { "Green" } else { "Yellow" })
+Write-Host "  PM:          $(if (Test-Path $PM_SCRIPT) { 'Running' } else { 'Not deployed' })" -ForegroundColor $(if (Test-Path $PM_SCRIPT) { "Green" } else { "Yellow" })
+Write-Host ""
+Write-Host "  You can now go back to Teams and start sending coding tasks!" -ForegroundColor Cyan
 Write-Host ""
 Read-Host "Press Enter to close"
