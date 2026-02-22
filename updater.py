@@ -124,14 +124,6 @@ def deploy_release(version: str) -> bool:
     if pip_result.returncode != 0:
         print(f"[WARN] pip install issues: {pip_result.stderr[:200]}")
 
-    # Copy updated updater.py and version_check.py to SHRAGA_ROOT
-    for fname in ("updater.py", "version_check.py"):
-        src = release_dir / fname
-        dst = SHRAGA_ROOT / fname
-        if src.exists():
-            import shutil
-            shutil.copy2(str(src), str(dst))
-
     print(f"[UPDATE] Release {version} deployed to {release_dir}")
     return True
 

@@ -242,10 +242,12 @@ if (Test-Path (Join-Path $WORKING_DIR ".git")) {
 $INITIAL_VERSION | Set-Content $VERSION_FILE -NoNewline
 Write-Info "Version set to: $INITIAL_VERSION"
 
-# Copy updater.py to Shraga root (outside releases, so it persists across versions)
-$updaterSrc = Join-Path $WORKING_DIR "updater.py"
-$updaterDst = Join-Path $SHRAGA_ROOT "updater.py"
-if (Test-Path $updaterSrc) { Copy-Item $updaterSrc $updaterDst -Force }
+# Create updater .cmd wrapper (same pattern as Worker/PM -- reads current_version.txt dynamically)
+$updaterWrapperDir = Join-Path $env:LOCALAPPDATA "Shraga"
+if (-not (Test-Path $updaterWrapperDir)) { New-Item -ItemType Directory -Force -Path $updaterWrapperDir | Out-Null }
+$updaterWrapperPath = Join-Path $updaterWrapperDir "ShragaUpdater.cmd"
+$updaterWrapperContent = "@echo off`r`nset /p VERSION=<`"$VERSION_FILE`"`r`nset `"RELEASE_DIR=$RELEASES_DIR\%VERSION%`"`r`n`"$pyExe`" `"%RELEASE_DIR%\updater.py`"`r`nexit /b %ERRORLEVEL%"
+[System.IO.File]::WriteAllText($updaterWrapperPath, $updaterWrapperContent, [System.Text.Encoding]::ASCII)
 
 if (-not (Test-Path (Join-Path $WORKING_DIR ".git"))) {
     Write-Fail "Code not available. Cannot continue."
@@ -458,10 +460,9 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
 }
 
 # -- Register updater task (checks for new releases every 5 min) --
-$updaterScript = Join-Path $SHRAGA_ROOT "updater.py"
-if ($pyExe -and (Test-Path $updaterScript)) {
+if (Test-Path $updaterWrapperPath) {
     try {
-        $updaterAction = New-ScheduledTaskAction -Execute $pyExe -Argument "`"$updaterScript`"" -WorkingDirectory $SHRAGA_ROOT
+        $updaterAction = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$updaterWrapperPath`"" -WorkingDirectory $SHRAGA_ROOT
         $updaterTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
         Register-ScheduledTask -TaskName "ShragaUpdater" -Action $updaterAction -Trigger $updaterTrigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
         Start-ScheduledTask -TaskName "ShragaUpdater" -ErrorAction SilentlyContinue
