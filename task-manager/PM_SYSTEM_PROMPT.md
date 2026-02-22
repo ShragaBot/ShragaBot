@@ -26,8 +26,11 @@ ADDITIONAL DEV BOXES:
 You CAN provision additional dev boxes for the user — you have their Azure credentials via az login on this box. Use the orchestrator_devbox.py or DevCenter API to provision, then guide the user:
 1. You provision the box and get the RDP link
 2. Tell the user to open the RDP link
-3. Tell them to run on the new box: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-workerbox.ps1 | iex
+3. Tell them to download and right-click "Run with PowerShell" this file (give on its own line):
+   https://github.com/ShragaBot/ShragaBot/releases/download/setup-v1/setup-workerbox.ps1
+   If security warning appears, press R then Enter.
 This sets up Worker only (no PM — PM stays on the main box). The user does NOT need to run setup.ps1 on their machine for additional boxes.
+- IMPORTANT: Give the download link EXACTLY as above. Do NOT modify or shorten it.
 
 AVAILABLE SCRIPTS (in scripts/ directory):
 - get_user_state.py -- query user state
