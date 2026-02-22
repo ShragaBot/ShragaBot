@@ -106,24 +106,17 @@ class TestStateManagement:
 # ===========================================================================
 
 class TestVersionManagement:
+    """Tests for the release-branch-based auto-update system."""
 
-    def test_load_version_from_file(self, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        # Create VERSION file where repo_path points
-        worker = mod.IntegratedTaskWorker()
-        (worker.repo_path / "VERSION").write_text("2.0.0")
-        version = worker.load_version()
-        assert version == "2.0.0"
-
-    def test_load_version_returns_unknown_if_missing(self, monkeypatch, tmp_path):
+    def test_updater_tracks_current_branch(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
-        # Ensure VERSION file doesn't exist in tmp_path
-        vf = worker.repo_path / "VERSION"
-        if vf.exists():
-            vf.unlink()
-        version = worker.load_version()
-        assert version == "unknown"
+        assert worker.updater.current_branch is not None
+
+    def test_updater_check_interval(self, monkeypatch, tmp_path):
+        mod, _ = _import_worker(monkeypatch, tmp_path)
+        worker = mod.IntegratedTaskWorker()
+        assert worker.updater.check_interval.total_seconds() == 600
 
 
 # ===========================================================================
@@ -158,41 +151,25 @@ class TestGetCurrentUser:
 # check_for_updates
 # ===========================================================================
 
-class TestCheckForUpdates:
+class TestAutoUpdater:
 
-    @patch("integrated_task_worker.subprocess.run")
-    def test_no_update_when_versions_match(self, mock_run, monkeypatch, tmp_path):
+    def test_worker_has_updater(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
-        worker.current_version = "1.0.0"
+        assert hasattr(worker, 'updater')
+        assert worker.updater.check_interval.total_seconds() == 600
 
-        # git fetch succeeds, git show returns same version
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="", stderr=""),
-            MagicMock(returncode=0, stdout="1.0.0\n", stderr=""),
-        ]
-
-        assert worker.check_for_updates() is False
-
-    @patch("integrated_task_worker.subprocess.run")
-    def test_update_available_when_versions_differ(self, mock_run, monkeypatch, tmp_path):
+    def test_should_check_true_on_first_call(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
-        worker.current_version = "1.0.0"
+        assert worker.updater.should_check() is True
 
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="", stderr=""),
-            MagicMock(returncode=0, stdout="1.1.0\n", stderr=""),
-        ]
-
-        assert worker.check_for_updates() is True
-
-    @patch("integrated_task_worker.subprocess.run")
-    def test_returns_false_on_fetch_failure(self, mock_run, monkeypatch, tmp_path):
+    def test_should_check_false_after_recent_check(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
+        from datetime import datetime, timezone
         worker = mod.IntegratedTaskWorker()
-        mock_run.return_value = MagicMock(returncode=1, stderr="fetch failed")
-        assert worker.check_for_updates() is False
+        worker.updater.last_check = datetime.now(timezone.utc)
+        assert worker.updater.should_check() is False
 
 
 # ===========================================================================
@@ -588,26 +565,13 @@ class TestCleanupInProgressTask:
 # check_for_updates uses UPDATE_BRANCH
 # ===========================================================================
 
-class TestUpdateBranch:
+class TestAutoUpdaterBranch:
 
-    @patch("integrated_task_worker.subprocess.run")
-    def test_uses_update_branch_env_var(self, mock_run, monkeypatch, tmp_path):
+    def test_get_current_branch(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
-        worker.current_version = "1.0.0"
-
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="", stderr=""),  # git fetch
-            MagicMock(returncode=0, stdout="1.1.0\n", stderr=""),  # git show
-        ]
-
-        worker.check_for_updates()
-
-        # Second call should use the UPDATE_BRANCH value
-        git_show_call = mock_run.call_args_list[1]
-        git_show_cmd = git_show_call[0][0]
-        # The branch ref should be in the command (UPDATE_BRANCH defaults to origin/users/sagik/shraga-worker)
-        assert any("VERSION" in arg for arg in git_show_cmd)
+        # Should return something (even "unknown" if not in a git repo)
+        assert worker.updater.current_branch is not None
 
 
 # ===========================================================================
@@ -644,23 +608,11 @@ class TestTimeoutHandling:
         result = worker.update_task("task-123", status="Running")
         assert result is False
 
-    @patch("integrated_task_worker.subprocess.run")
-    def test_check_for_updates_subprocess_timeout(self, mock_run, monkeypatch, tmp_path):
+    def test_worker_has_auto_updater(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        import subprocess as sp
-        mock_run.side_effect = sp.TimeoutExpired("git", 30)
         worker = mod.IntegratedTaskWorker()
-        result = worker.check_for_updates()
-        assert result is False
-
-    @patch("integrated_task_worker.subprocess.run")
-    def test_apply_update_subprocess_timeout(self, mock_run, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        import subprocess as sp
-        mock_run.side_effect = sp.TimeoutExpired("git", 60)
-        worker = mod.IntegratedTaskWorker()
-        result = worker.apply_update()
-        assert result is False
+        assert hasattr(worker, 'updater')
+        assert worker.updater.check_interval.total_seconds() == 600  # 10 minutes
 
 
 # ===========================================================================

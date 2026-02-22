@@ -30,7 +30,7 @@ STATE_FILE = ".integrated_worker_state.json"
 
 WEBHOOK_USER = os.environ.get("WEBHOOK_USER", "sagik@microsoft.com")
 REQUEST_TIMEOUT = 30  # seconds for HTTP requests to Dataverse
-UPDATE_BRANCH = os.environ.get("UPDATE_BRANCH", "origin/users/sagik/shraga-worker")
+from auto_update import AutoUpdater
 
 MACHINE_NAME = platform.node()  # This dev box's hostname
 
@@ -111,11 +111,9 @@ class IntegratedTaskWorker:
         self._token_cache = None
         self._token_expires = None
 
-        # Version and update tracking
+        # Auto-update via release branches
         self.repo_path = Path(__file__).parent
-        self.current_version = self.load_version()
-        self.last_update_check = None
-        self.update_check_interval = timedelta(minutes=10)
+        self.updater = AutoUpdater(self.repo_path, check_interval_minutes=10)
 
         self.load_state()
 
@@ -221,90 +219,13 @@ class IntegratedTaskWorker:
             print(f"[ERROR] Getting current user: {e}")
             return None
 
-    def load_version(self):
-        """Load current version from VERSION file"""
-        version_file = self.repo_path / "VERSION"
-        try:
-            if version_file.exists():
-                return version_file.read_text().strip()
-            return "unknown"
-        except Exception as e:
-            print(f"[WARN] Could not read VERSION file: {e}")
-            return "unknown"
-
     def check_for_updates(self):
-        """Check if new version available (when idle)"""
-        try:
-            # Fetch latest from remote
-            result = subprocess.run(
-                ["git", "fetch"],
-                cwd=self.repo_path,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-
-            if result.returncode != 0:
-                print(f"[WARN] Git fetch failed: {result.stderr}")
-                return False
-
-            # Read remote VERSION file
-            result = subprocess.run(
-                ["git", "show", f"{UPDATE_BRANCH}:VERSION"],
-                cwd=self.repo_path,
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
-            if result.returncode != 0:
-                print(f"[WARN] Could not read remote VERSION: {result.stderr}")
-                return False
-
-            remote_version = result.stdout.strip()
-
-            if remote_version != self.current_version:
-                print(f"[UPDATE] New version available: {remote_version} (current: {self.current_version})")
-                return True
-
-            return False
-        except subprocess.TimeoutExpired:
-            print(f"[WARN] Update check timed out")
-            return False
-        except Exception as e:
-            print(f"[WARN] Update check failed: {e}")
-            return False
+        """Check if new release branch available (when idle). Delegates to AutoUpdater."""
+        return self.updater.should_check()
 
     def apply_update(self):
-        """Pull latest code and restart worker"""
-        try:
-            print("[UPDATE] Applying update...")
-
-            # Pull latest code
-            result = subprocess.run(
-                ["git", "pull"],
-                cwd=self.repo_path,
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-
-            if result.returncode != 0:
-                print(f"[ERROR] Git pull failed: {result.stderr}")
-                return False
-
-            print(f"[UPDATE] Code updated successfully")
-            print("[UPDATE] Restarting worker...")
-
-            # Exit - Task Scheduler will restart us
-            sys.exit(0)
-
-        except subprocess.TimeoutExpired:
-            print(f"[ERROR] Update timed out")
-            return False
-        except Exception as e:
-            print(f"[ERROR] Update failed: {e}")
-            return False
+        """Check and apply update. AutoUpdater handles everything including sys.exit."""
+        self.updater.check_and_update()
 
     def commit_task_results(self, task_id, work_dir):
         """Commit task results to Git for audit trail"""
@@ -1128,7 +1049,7 @@ JSON output:"""
                 f"| Terminal Status | **{terminal_status}** |",
                 f"| Timestamp | {timestamp} |",
                 f"| Dev Box | `{dev_box}` |",
-                f"| Worker Version | `{self.current_version}` |",
+                f"| Worker Version | `{self.updater.current_branch}` |",
                 f"| Claude Session ID | `{session_id}` |",
                 f"| Working Directory | `{working_dir}` |",
             ]
@@ -1693,11 +1614,11 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                 return
 
         print(f"Worker started for user: {self.current_user_id}")
-        print(f"Current version: {self.current_version}")
+        print(f"Current version: {self.updater.current_branch}")
         print("\n[POLLING] Monitoring for pending tasks...\n")
 
         # Send startup notification
-        self.send_to_webhook(f"Worker started (v{self.current_version}) on {MACHINE_NAME}")
+        self.send_to_webhook(f"Worker started (v{self.updater.current_branch}) on {MACHINE_NAME}")
 
         try:
             while True:
@@ -1733,17 +1654,10 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                                 except Exception:
                                     pass
                     else:
-                        # IDLE - Check for updates (every 10 minutes)
-                        now = datetime.now(tz=timezone.utc)
-                        if self.last_update_check is None or (now - self.last_update_check) >= self.update_check_interval:
-                            print("[IDLE] Checking for updates...")
-                            self.last_update_check = now
-
-                            if self.check_for_updates():
-                                # New version available, apply update
-                                self.send_to_webhook("Updating worker to new version...")
-                                self.apply_update()
-                                # apply_update() exits, so this line never runs
+                        # IDLE - Check for release branch updates (every 10 minutes)
+                        if self.updater.should_check():
+                            self.updater.check_and_update()
+                            # If update found, check_and_update() calls sys.exit(0)
 
                     # Promote queued tasks after each iteration
                     try:

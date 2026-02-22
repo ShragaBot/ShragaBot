@@ -236,33 +236,25 @@ class TestE2EVersionChecking:
 
         assert orch.check_for_updates() is True
 
-    @patch("integrated_task_worker.subprocess.run")
-    def test_worker_detects_update(self, mock_run, monkeypatch, tmp_path):
+    def test_worker_updater_exists(self, monkeypatch, tmp_path):
         _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
-
         worker = worker_mod.IntegratedTaskWorker()
-        worker.current_version = "1.0.0"
+        assert hasattr(worker, 'updater')
+        assert worker.updater.current_branch is not None
 
-        mock_run.side_effect = [
-            MagicMock(returncode=0),
-            MagicMock(returncode=0, stdout="1.1.0\n"),
-        ]
-
-        assert worker.check_for_updates() is True
-
-    @patch("integrated_task_worker.subprocess.run")
-    def test_worker_no_update_when_same_version(self, mock_run, monkeypatch, tmp_path):
+    def test_worker_updater_should_check_first_time(self, monkeypatch, tmp_path):
         _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
-
         worker = worker_mod.IntegratedTaskWorker()
-        worker.current_version = "1.0.0"
+        # First check should always return True (last_check is None)
+        assert worker.updater.should_check() is True
 
-        mock_run.side_effect = [
-            MagicMock(returncode=0),
-            MagicMock(returncode=0, stdout="1.0.0\n"),
-        ]
-
-        assert worker.check_for_updates() is False
+    def test_worker_updater_respects_interval(self, monkeypatch, tmp_path):
+        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker = worker_mod.IntegratedTaskWorker()
+        from datetime import datetime, timezone
+        worker.updater.last_check = datetime.now(timezone.utc)
+        # Just checked — should not check again
+        assert worker.updater.should_check() is False
 
 
 # ===========================================================================
