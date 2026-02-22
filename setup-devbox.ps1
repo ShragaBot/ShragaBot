@@ -242,19 +242,31 @@ $PM_SCRIPT = Join-Path $WORKING_DIR "task-manager\task_manager.py"
 
 New-Item -ItemType Directory -Force -Path $RELEASES_DIR -ErrorAction SilentlyContinue | Out-Null
 
-if (Test-Path (Join-Path $WORKING_DIR ".git")) {
-    Write-Info "Release $latestVersion exists, pulling latest..."
-    git -C $WORKING_DIR pull 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { Write-OK "Code updated" }
-    else { Write-Warning2 "git pull failed. Run: git -C $WORKING_DIR pull" }
+$sentinel = Join-Path $WORKING_DIR ".deploy_complete"
+if (Test-Path $sentinel) {
+    Write-OK "Release $latestVersion already deployed"
 } else {
-    Write-Info "Cloning release/$latestVersion..."
-    $gitExe = if (Test-Path "C:\Program Files\Git\cmd\git.exe") { "C:\Program Files\Git\cmd\git.exe" } else { "git" }
-    & $gitExe clone --branch "release/$latestVersion" --depth 1 $REPO_URL $WORKING_DIR 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0 -and (Test-Path (Join-Path $WORKING_DIR ".git"))) {
+    # Download zip from GitHub (no git clone -- release folders are plain files)
+    Write-Info "Downloading release/$latestVersion..."
+    $zipUrl = "https://github.com/ShragaBot/ShragaBot/archive/refs/heads/release/$latestVersion.zip"
+    $zipPath = Join-Path $env:TEMP "shraga-$latestVersion.zip"
+    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -ErrorAction SilentlyContinue
+    if (Test-Path $zipPath) {
+        $extractDir = Join-Path $env:TEMP "shraga-extract-$latestVersion"
+        if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
+        Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+        # GitHub zips have a top-level folder like ShragaBot-release-v1/
+        $inner = Get-ChildItem $extractDir | Select-Object -First 1
+        if ($inner -and (Test-Path $WORKING_DIR)) { Remove-Item -Recurse -Force $WORKING_DIR }
+        Move-Item $inner.FullName $WORKING_DIR
+        # Clean up
+        Remove-Item -Force $zipPath -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
+        # Mark as complete
+        $latestVersion | Set-Content $sentinel -NoNewline
         Write-OK "Release $latestVersion deployed to $WORKING_DIR"
     } else {
-        Write-Fail "Clone failed. Check network and try: git clone --branch release/$latestVersion $REPO_URL $WORKING_DIR"
+        Write-Fail "Download failed. Check network."
     }
 }
 

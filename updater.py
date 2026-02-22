@@ -84,12 +84,13 @@ def find_python() -> str:
 
 
 def deploy_release(version: str) -> bool:
-    """Clone the release branch into an immutable release folder and install deps."""
+    """Download release branch as plain files (no .git) into an immutable release folder."""
     release_dir = RELEASES_DIR / version
-    if (release_dir / ".git").exists():
+    sentinel = release_dir / ".deploy_complete"
+    if sentinel.exists():
         print(f"[UPDATE] Release {version} already deployed at {release_dir}")
         return True
-    # Clean up any partial/failed clone
+    # Clean up any partial/failed deploy
     if release_dir.exists():
         import shutil
         shutil.rmtree(release_dir, ignore_errors=True)
@@ -97,19 +98,42 @@ def deploy_release(version: str) -> bool:
     print(f"[UPDATE] Deploying {version}...")
     RELEASES_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Clone the specific branch
-    result = subprocess.run(
-        ["git", "clone", "--branch", f"release/{version}", "--depth", "1",
-         REPO_URL, str(release_dir)],
-        capture_output=True, text=True, timeout=120
-    )
-    if result.returncode != 0:
-        print(f"[ERROR] Clone failed: {result.stderr.strip()}")
-        # Clean up partial clone
+    # Download zip from GitHub and extract (no git clone, no .git directory)
+    import zipfile, tempfile, shutil
+    zip_url = f"{REPO_URL.rstrip('.git')}/archive/refs/heads/release/{version}.zip"
+    zip_path = Path(tempfile.gettempdir()) / f"shraga-{version}.zip"
+    try:
+        result = subprocess.run(
+            ["curl", "-sL", "-o", str(zip_path), zip_url],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode != 0 or not zip_path.exists() or zip_path.stat().st_size < 1000:
+            print(f"[ERROR] Download failed: {result.stderr.strip()}")
+            return False
+
+        # Extract — GitHub zips have a top-level folder like ShragaBot-release-v1/
+        with zipfile.ZipFile(str(zip_path), 'r') as zf:
+            extract_dir = Path(tempfile.gettempdir()) / f"shraga-extract-{version}"
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir, ignore_errors=True)
+            zf.extractall(str(extract_dir))
+            # Find the single top-level directory
+            contents = list(extract_dir.iterdir())
+            if len(contents) == 1 and contents[0].is_dir():
+                shutil.move(str(contents[0]), str(release_dir))
+            else:
+                shutil.move(str(extract_dir), str(release_dir))
+            # Clean up extract dir if still exists
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir, ignore_errors=True)
+    except Exception as e:
+        print(f"[ERROR] Deploy failed: {e}")
         if release_dir.exists():
-            import shutil
             shutil.rmtree(release_dir, ignore_errors=True)
         return False
+    finally:
+        if zip_path.exists():
+            zip_path.unlink(missing_ok=True)
 
     # Install dependencies
     py = find_python()
@@ -128,6 +152,8 @@ def deploy_release(version: str) -> bool:
     if pip_result.returncode != 0:
         print(f"[WARN] pip install issues: {pip_result.stderr[:200]}")
 
+    # Mark deployment as complete (sentinel file for partial-deploy detection)
+    sentinel.write_text(version)
     print(f"[UPDATE] Release {version} deployed to {release_dir}")
     return True
 
