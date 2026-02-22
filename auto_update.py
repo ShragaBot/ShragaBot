@@ -88,7 +88,7 @@ class AutoUpdater:
                 return False
 
             # Extract local branch name (origin/release/v3 -> release/v3)
-            local_branch = latest.replace("origin/", "")
+            local_branch = latest.removeprefix("origin/")
             current = self._get_current_branch()
 
             if current == local_branch:
@@ -119,6 +119,9 @@ class AutoUpdater:
         """Switch to the release branch, install deps, and exit."""
         try:
             print(f"[UPDATE] Switching to {local_branch}...")
+
+            # Clean any local modifications that would block checkout
+            self._run_git("reset", "--hard", timeout=30)
 
             # Checkout the branch (create local tracking branch if needed)
             result = self._run_git("checkout", local_branch, timeout=30)

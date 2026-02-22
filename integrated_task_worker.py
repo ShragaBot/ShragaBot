@@ -219,14 +219,6 @@ class IntegratedTaskWorker:
             print(f"[ERROR] Getting current user: {e}")
             return None
 
-    def check_for_updates(self):
-        """Check if new release branch available (when idle). Delegates to AutoUpdater."""
-        return self.updater.should_check()
-
-    def apply_update(self):
-        """Check and apply update. AutoUpdater handles everything including sys.exit."""
-        self.updater.check_and_update()
-
     def commit_task_results(self, task_id, work_dir):
         """Commit task results to Git for audit trail"""
         try:
