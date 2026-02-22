@@ -306,7 +306,7 @@ class TaskManager:
                     "prev_session_id": prev_sid
                 }
                 self._save_sessions()
-                if not sid: print(f"[SESSIONS] New session {new_sid[:8]}... (chain depth: {len(chain)}) for {mcs[:20]}...")
+                if not sid: print(f"[SESSIONS] New session {new_sid[:8]}... for {mcs[:20]}...")
 
         except subprocess.TimeoutExpired: print("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE
         except FileNotFoundError: print("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE

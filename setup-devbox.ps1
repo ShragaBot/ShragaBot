@@ -403,10 +403,10 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
     # Create a small wrapper .cmd for each service that sets env vars before running Python
     # This ensures the scheduled task always has the right environment
     $services = @(
-        @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker"; EnvVars = @{ WEBHOOK_USER = $userEmail; WORKING_DIR = $WORKING_DIR } }
+        @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker"; EnvVars = @{ WEBHOOK_USER = $userEmail } }
     )
     if (-not $WorkerOnly) {
-        $services += @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM"; EnvVars = @{ USER_EMAIL = $userEmail; WORKING_DIR = $WORKING_DIR } }
+        $services += @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM"; EnvVars = @{ USER_EMAIL = $userEmail } }
     } else {
         Write-Info "WorkerOnly mode -- skipping PM (runs on your first dev box)"
     }
@@ -433,7 +433,7 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
             $envLines = ($svc.EnvVars.GetEnumerator() | ForEach-Object { "set `"$($_.Key)=$($_.Value)`"" }) -join "`r`n"
             # Script path relative to release root (e.g., integrated_task_worker.py or task-manager\task_manager.py)
             $relScript = $svc.Script.Replace($WORKING_DIR + "\", "")
-            $wrapperContent = "@echo off`r`n$envLines`r`nset /p VERSION=<`"$VERSION_FILE`"`r`nset `"RELEASE_DIR=$RELEASES_DIR\%VERSION%`"`r`ncd /d `"%RELEASE_DIR%`"`r`n`"$pyExe`" `"%RELEASE_DIR%\$relScript`"`r`nexit /b %ERRORLEVEL%"
+            $wrapperContent = "@echo off`r`n$envLines`r`nset /p VERSION=<`"$VERSION_FILE`"`r`nset `"RELEASE_DIR=$RELEASES_DIR\%VERSION%`"`r`nset `"WORKING_DIR=%RELEASE_DIR%`"`r`ncd /d `"%RELEASE_DIR%`"`r`n`"$pyExe`" `"%RELEASE_DIR%\$relScript`"`r`nexit /b %ERRORLEVEL%"
             [System.IO.File]::WriteAllText($wrapperPath, $wrapperContent, [System.Text.Encoding]::ASCII)
 
             $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$wrapperPath`"" -WorkingDirectory $SHRAGA_ROOT

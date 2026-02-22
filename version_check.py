@@ -1,4 +1,4 @@
-"""Version check for Shraga services.
+r"""Version check for Shraga services.
 
 Each service runs from an immutable release folder (e.g., C:\Dev\Shraga\releases\v1).
 The updater writes current_version.txt when a new release is available.
@@ -7,14 +7,14 @@ Services compare their folder name against the file and exit if different.
 import os
 from pathlib import Path
 
-SHRAGA_ROOT = Path(os.environ.get("SHRAGA_ROOT", "C:\\Dev\\Shraga"))
+SHRAGA_ROOT = Path(os.environ.get("SHRAGA_ROOT", os.path.join("C:", os.sep, "Dev", "Shraga")))
 VERSION_FILE = SHRAGA_ROOT / "current_version.txt"
 
 
 def get_my_version(script_path: str) -> str:
     """Get version from the release folder name this script is running from.
 
-    E.g., C:\Dev\Shraga\releases\v1\integrated_task_worker.py -> "v1"
+    E.g., C:/Dev/Shraga/releases/v1/integrated_task_worker.py -> "v1"
     Falls back to folder name of the script's parent if not in releases/ structure.
     """
     p = Path(script_path).resolve().parent

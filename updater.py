@@ -1,4 +1,4 @@
-"""Shraga Release Updater — standalone script, runs as a scheduled task.
+r"""Shraga Release Updater -- standalone script, runs as a scheduled task.
 
 Checks for the latest release/v* branch on GitHub. If a newer release
 exists, clones it into an immutable release folder, installs deps,
@@ -19,7 +19,7 @@ import re
 import os
 from pathlib import Path
 
-SHRAGA_ROOT = Path(os.environ.get("SHRAGA_ROOT", "C:\\Dev\\Shraga"))
+SHRAGA_ROOT = Path(os.environ.get("SHRAGA_ROOT", os.path.join("C:", os.sep, "Dev", "Shraga")))
 RELEASES_DIR = SHRAGA_ROOT / "releases"
 VERSION_FILE = SHRAGA_ROOT / "current_version.txt"
 REPO_URL = "https://github.com/ShragaBot/ShragaBot.git"
@@ -123,6 +123,14 @@ def deploy_release(version: str) -> bool:
     )
     if pip_result.returncode != 0:
         print(f"[WARN] pip install issues: {pip_result.stderr[:200]}")
+
+    # Copy updated updater.py and version_check.py to SHRAGA_ROOT
+    for fname in ("updater.py", "version_check.py"):
+        src = release_dir / fname
+        dst = SHRAGA_ROOT / fname
+        if src.exists():
+            import shutil
+            shutil.copy2(str(src), str(dst))
 
     print(f"[UPDATE] Release {version} deployed to {release_dir}")
     return True
