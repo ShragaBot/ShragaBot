@@ -19,12 +19,9 @@ $SHRAGA_ROOT = "C:\Dev\Shraga"
 $RELEASES_DIR = Join-Path $SHRAGA_ROOT "releases"
 $VERSION_FILE = Join-Path $SHRAGA_ROOT "current_version.txt"
 $REPO_URL = "https://github.com/ShragaBot/ShragaBot.git"
-$INITIAL_VERSION = "v1"
-$WORKING_DIR = Join-Path $RELEASES_DIR $INITIAL_VERSION
 $MAX_AZ_LOGIN_RETRIES = 3
-$WORKER_SCRIPT = Join-Path $WORKING_DIR "integrated_task_worker.py"
-$PM_SCRIPT = Join-Path $WORKING_DIR "task-manager\task_manager.py"
 $LOG_FILE = Join-Path $env:TEMP "shraga-setup.log"
+# INITIAL_VERSION, WORKING_DIR, WORKER_SCRIPT, PM_SCRIPT set after Git is installed (need git ls-remote)
 
 # ---------------------------------------------------------------------------
 # Start logging
@@ -220,27 +217,50 @@ if (-not $pyExe) {
 # =========================================================================
 Write-Step "2/7" "Deploying Code"
 
+# Detect latest release branch from GitHub
+Write-Info "Checking for latest release..."
+$latestVersion = $null
+$lsRemoteOutput = git ls-remote --heads $REPO_URL "release/v*" 2>&1
+if ($LASTEXITCODE -eq 0 -and $lsRemoteOutput) {
+    $versions = @()
+    foreach ($line in ($lsRemoteOutput -split "`n")) {
+        if ($line -match 'refs/heads/release/v(\d+)') { $versions += [int]$Matches[1] }
+    }
+    if ($versions.Count -gt 0) {
+        $latestVersion = "v$($versions | Sort-Object -Descending | Select-Object -First 1)"
+    }
+}
+if (-not $latestVersion) {
+    Write-Warning2 "Could not detect latest release. Falling back to v1."
+    $latestVersion = "v1"
+}
+Write-Info "Latest release: $latestVersion"
+
+$WORKING_DIR = Join-Path $RELEASES_DIR $latestVersion
+$WORKER_SCRIPT = Join-Path $WORKING_DIR "integrated_task_worker.py"
+$PM_SCRIPT = Join-Path $WORKING_DIR "task-manager\task_manager.py"
+
 New-Item -ItemType Directory -Force -Path $RELEASES_DIR -ErrorAction SilentlyContinue | Out-Null
 
 if (Test-Path (Join-Path $WORKING_DIR ".git")) {
-    Write-Info "Release $INITIAL_VERSION exists, pulling latest..."
+    Write-Info "Release $latestVersion exists, pulling latest..."
     git -C $WORKING_DIR pull 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-OK "Code updated" }
     else { Write-Warning2 "git pull failed. Run: git -C $WORKING_DIR pull" }
 } else {
-    Write-Info "Cloning release/$INITIAL_VERSION..."
+    Write-Info "Cloning release/$latestVersion..."
     $gitExe = if (Test-Path "C:\Program Files\Git\cmd\git.exe") { "C:\Program Files\Git\cmd\git.exe" } else { "git" }
-    & $gitExe clone --branch "release/$INITIAL_VERSION" --depth 1 $REPO_URL $WORKING_DIR 2>&1 | Out-Null
+    & $gitExe clone --branch "release/$latestVersion" --depth 1 $REPO_URL $WORKING_DIR 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0 -and (Test-Path (Join-Path $WORKING_DIR ".git"))) {
-        Write-OK "Release $INITIAL_VERSION deployed to $WORKING_DIR"
+        Write-OK "Release $latestVersion deployed to $WORKING_DIR"
     } else {
-        Write-Fail "Clone failed. Check network and try: git clone --branch release/$INITIAL_VERSION $REPO_URL $WORKING_DIR"
+        Write-Fail "Clone failed. Check network and try: git clone --branch release/$latestVersion $REPO_URL $WORKING_DIR"
     }
 }
 
 # Write current version file
-$INITIAL_VERSION | Set-Content $VERSION_FILE -NoNewline
-Write-Info "Version set to: $INITIAL_VERSION"
+$latestVersion | Set-Content $VERSION_FILE -NoNewline
+Write-Info "Version set to: $latestVersion"
 
 # Create updater .cmd wrapper (same pattern as Worker/PM -- reads current_version.txt dynamically)
 $updaterWrapperDir = Join-Path $env:LOCALAPPDATA "Shraga"
