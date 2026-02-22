@@ -147,16 +147,26 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 $pyExe = Find-Python
 if ($pyExe) {
     Write-OK "Python already installed: $pyExe"
-} elseif ($hasWinget) {
-    Write-Info "Installing Python 3.12 via winget... (this may take a minute)"
-    winget install --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Null
-    Start-Sleep -Seconds 3
-    Refresh-Path
-    $pyExe = Find-Python
+} else {
+    if ($hasWinget) {
+        Write-Info "Installing Python 3.12 via winget... (this may take a minute)"
+        winget install --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Null
+        Start-Sleep -Seconds 3
+        Refresh-Path
+        $pyExe = Find-Python
+    }
+    if (-not $pyExe) {
+        Write-Info "Installing Python 3.12 from python.org... (this may take a minute)"
+        $pyInstaller = Join-Path $env:TEMP "python-3.12.9-amd64.exe"
+        Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.9/python-3.12.9-amd64.exe" -OutFile $pyInstaller -ErrorAction SilentlyContinue
+        if (Test-Path $pyInstaller) {
+            Start-Process $pyInstaller -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1" -Wait
+            Refresh-Path
+            $pyExe = Find-Python
+        }
+    }
     if ($pyExe) { Write-OK "Python installed: $pyExe" }
     else { Write-Fail "Python install failed. Install from: https://python.org/downloads" }
-} else {
-    Write-Fail "Python not found and winget not available. Install from: https://python.org/downloads"
 }
 
 # -- Claude Code --
