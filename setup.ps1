@@ -84,19 +84,35 @@ try {
 Write-Host "  This typically takes ~25 minutes. Go grab a coffee!" -ForegroundColor Gray
 Write-Host ""
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-$spinner = @('|', '/', '-', '\')
+$spinner = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
 $spinIdx = 0
+$state = "Provisioning"
+$pollInterval = 30
+$lastPoll = $sw.Elapsed.TotalSeconds
 while ($true) {
-    Start-Sleep -Seconds 30
-    $headers = Get-DevCenterToken
-    $status = Invoke-RestMethod -Uri "$DevCenterEndpoint/projects/$Project/users/me/devboxes/$DevBoxName`?api-version=$ApiVersion" -Headers $headers
-    $state = $status.provisioningState
+    # Poll API every 30 seconds
+    if ($sw.Elapsed.TotalSeconds - $lastPoll -ge $pollInterval) {
+        $headers = Get-DevCenterToken
+        $status = Invoke-RestMethod -Uri "$DevCenterEndpoint/projects/$Project/users/me/devboxes/$DevBoxName`?api-version=$ApiVersion" -Headers $headers
+        $state = $status.provisioningState
+        $lastPoll = $sw.Elapsed.TotalSeconds
+        if ($state -eq "Succeeded") {
+            $elapsedMin = [math]::Floor($sw.Elapsed.TotalMinutes)
+            $elapsedSec = $sw.Elapsed.Seconds
+            Write-Host "`r  Done! (took ${elapsedMin}m ${elapsedSec}s)                    " -ForegroundColor Green
+            break
+        }
+        if ($state -eq "Failed") {
+            Write-Host "`r  Provisioning failed.                    " -ForegroundColor Red
+            exit 1
+        }
+    }
+    # Update spinner every second
     $elapsedMin = [math]::Floor($sw.Elapsed.TotalMinutes)
     $elapsedSec = $sw.Elapsed.Seconds
-    $s = $spinner[$spinIdx % 4]; $spinIdx++
-    Write-Host "`r  $s $state... ${elapsedMin}m ${elapsedSec}s elapsed" -NoNewline -ForegroundColor Cyan
-    if ($state -eq "Succeeded") { Write-Host "`n  Done! (took ${elapsedMin}m ${elapsedSec}s)" -ForegroundColor Green; break }
-    if ($state -eq "Failed") { Write-Host "`n  Provisioning failed." -ForegroundColor Red; exit 1 }
+    $s = $spinner[$spinIdx % $spinner.Count]; $spinIdx++
+    Write-Host "`r  $s $state... ${elapsedMin}m ${elapsedSec}s elapsed  " -NoNewline -ForegroundColor Cyan
+    Start-Sleep -Seconds 1
 }
 
 # Step 4: Show connection info
