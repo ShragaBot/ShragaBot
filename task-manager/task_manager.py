@@ -89,7 +89,7 @@ class TaskManager:
             lines = []
             for row in reversed(rows):  # oldest first
                 direction = "User" if row.get("cr_direction") == DIR_IN else "Assistant"
-                msg = row.get("cr_message", "")[:200]
+                msg = row.get("cr_message", "")[:500]
                 lines.append(f"{direction}: {msg}")
             return "\n".join(lines)
         except Exception as e:
@@ -117,7 +117,9 @@ class TaskManager:
 
     def _forget_session(self, mcs_id: str):
         if mcs_id in self._sessions:
-            print(f"[SESSIONS] Forgot stale session {self._sessions.pop(mcs_id)[:8]}... for {mcs_id[:20]}...")
+            entry = self._sessions.pop(mcs_id)
+            sid = entry.get("session_id", "") if isinstance(entry, dict) else str(entry)
+            print(f"[SESSIONS] Forgot session {sid[:8]}... for {mcs_id[:20]}...")
             self._save_sessions()
 
     def get_token(self) -> str | None:
