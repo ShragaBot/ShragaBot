@@ -10,6 +10,12 @@ param(
     [switch]$WorkerOnly  # Skip PM — use for additional dev boxes when PM already runs on first box
 )
 
+# If not explicitly set, ask the user
+if (-not $WorkerOnly -and -not $PSBoundParameters.ContainsKey('WorkerOnly')) {
+    $answer = Read-Host "Is this your first Shraga dev box? (Y/N)"
+    if ($answer -match '^[Nn]') { $WorkerOnly = $true }
+}
+
 $ErrorActionPreference = "Continue"
 
 # ---------------------------------------------------------------------------
