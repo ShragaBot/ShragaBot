@@ -94,7 +94,7 @@ Write-Host "  This script will:" -ForegroundColor White
 Write-Host "    1. Install tools (Git, Python, Claude Code)" -ForegroundColor White
 Write-Host "    2. Clone the Shraga code repository" -ForegroundColor White
 Write-Host "    3. Install Python dependencies" -ForegroundColor White
-Write-Host "    4. Prevent sleep/hibernation" -ForegroundColor White
+Write-Host "    4. Configure sleep/hibernation prevention" -ForegroundColor White
 Write-Host "    5. Sign you into Azure (browser opens)" -ForegroundColor White
 Write-Host "    6. Sign you into Claude Code (window opens)" -ForegroundColor White
 Write-Host "    7. Start Shraga services" -ForegroundColor White
