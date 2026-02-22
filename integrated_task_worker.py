@@ -1639,6 +1639,9 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                         print(f"[FOUND] {len(tasks)} pending task(s)")
 
                         for task in tasks:
+                            # Check for updates between tasks
+                            if self.updater.should_check():
+                                self.updater.check_and_update()
                             try:
                                 self.process_task(task)
                             except Exception as e:
