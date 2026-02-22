@@ -30,7 +30,7 @@ STATE_FILE = ".integrated_worker_state.json"
 
 WEBHOOK_USER = os.environ.get("WEBHOOK_USER", "sagik@microsoft.com")
 REQUEST_TIMEOUT = 30  # seconds for HTTP requests to Dataverse
-from auto_update import AutoUpdater
+from version_check import get_my_version, should_exit
 
 MACHINE_NAME = platform.node()  # This dev box's hostname
 
@@ -111,9 +111,9 @@ class IntegratedTaskWorker:
         self._token_cache = None
         self._token_expires = None
 
-        # Auto-update via release branches
+        # Version check for immutable releases
         self.repo_path = Path(__file__).parent
-        self.updater = AutoUpdater(self.repo_path, check_interval_minutes=10)
+        self._my_version = get_my_version(__file__)
 
         self.load_state()
 
@@ -1041,7 +1041,7 @@ JSON output:"""
                 f"| Terminal Status | **{terminal_status}** |",
                 f"| Timestamp | {timestamp} |",
                 f"| Dev Box | `{dev_box}` |",
-                f"| Worker Version | `{self.updater.current_branch}` |",
+                f"| Worker Version | `{self._my_version}` |",
                 f"| Claude Session ID | `{session_id}` |",
                 f"| Working Directory | `{working_dir}` |",
             ]
@@ -1606,11 +1606,11 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                 return
 
         print(f"Worker started for user: {self.current_user_id}")
-        print(f"Current version: {self.updater.current_branch}")
+        print(f"Current version: {self._my_version}")
         print("\n[POLLING] Monitoring for pending tasks...\n")
 
         # Send startup notification
-        self.send_to_webhook(f"Worker started (v{self.updater.current_branch}) on {MACHINE_NAME}")
+        self.send_to_webhook(f"Worker started (v{self._my_version}) on {MACHINE_NAME}")
 
         try:
             while True:
@@ -1631,9 +1631,10 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                         print(f"[FOUND] {len(tasks)} pending task(s)")
 
                         for task in tasks:
-                            # Check for updates between tasks
-                            if self.updater.should_check():
-                                self.updater.check_and_update()
+                            # Check if a new release is available
+                            if should_exit(self._my_version):
+                                print(f"[UPDATE] New release detected. Exiting to restart with new version.")
+                                sys.exit(0)
                             try:
                                 self.process_task(task)
                             except Exception as e:
@@ -1649,10 +1650,10 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                                 except Exception:
                                     pass
                     else:
-                        # IDLE - Check for release branch updates (every 10 minutes)
-                        if self.updater.should_check():
-                            self.updater.check_and_update()
-                            # If update found, check_and_update() calls sys.exit(0)
+                        # IDLE - Check if a new release is available
+                        if should_exit(self._my_version):
+                            print(f"[UPDATE] New release detected. Exiting to restart with new version.")
+                            sys.exit(0)
 
                     # Promote queued tasks after each iteration
                     try:

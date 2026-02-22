@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from azure.identity import DefaultAzureCredential
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from auto_update import AutoUpdater
+from version_check import get_my_version, should_exit
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 
@@ -40,8 +40,8 @@ class TaskManager:
         # System prompt file path (passed via --system-prompt-file)
         prompt_file = Path(__file__).parent / "PM_SYSTEM_PROMPT.md"
         self._system_prompt_file = str(prompt_file) if prompt_file.exists() else ""
-        # Auto-update via release branches
-        self.updater = AutoUpdater(Path(__file__).parent.parent, check_interval_minutes=10)
+        # Version check for immutable releases
+        self._my_version = get_my_version(__file__)
 
     def _resolve_sessions_path(self) -> Path:
         if SESSIONS_FILE: return Path(SESSIONS_FILE)
@@ -337,8 +337,10 @@ class TaskManager:
                             except Exception: pass
                 if time.time() - last_sweep > 300: self.sweep_stale_tasks(); last_sweep = time.time()
                 if time.time() - last_cleanup > 1800: self.cleanup_stale_outbound(); last_cleanup = time.time()
-                # Check for release branch updates (every 10 min)
-                if self.updater.should_check(): self.updater.check_and_update()
+                # Check if a new release is available
+                if should_exit(self._my_version):
+                    print(f"[UPDATE] New release detected. Exiting to restart with new version.")
+                    sys.exit(0)
                 time.sleep(POLL_SEC)
             except KeyboardInterrupt: print("\n[STOP] Shutting down."); break
             except Exception as e: print(f"[ERROR] Main loop: {e}"); time.sleep(POLL_SEC * 2)

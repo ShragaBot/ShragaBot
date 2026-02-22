@@ -15,8 +15,12 @@ $ErrorActionPreference = "Continue"
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-$WORKING_DIR = "C:\Dev\shraga-worker"
+$SHRAGA_ROOT = "C:\Dev\Shraga"
+$RELEASES_DIR = Join-Path $SHRAGA_ROOT "releases"
+$VERSION_FILE = Join-Path $SHRAGA_ROOT "current_version.txt"
 $REPO_URL = "https://github.com/ShragaBot/ShragaBot.git"
+$INITIAL_VERSION = "v1"
+$WORKING_DIR = Join-Path $RELEASES_DIR $INITIAL_VERSION
 $MAX_AZ_LOGIN_RETRIES = 3
 $WORKER_SCRIPT = Join-Path $WORKING_DIR "integrated_task_worker.py"
 $PM_SCRIPT = Join-Path $WORKING_DIR "task-manager\task_manager.py"
@@ -212,29 +216,39 @@ if (-not $pyExe) {
 }
 
 # =========================================================================
-# Step 2: Clone/Update Repository
+# Step 2: Deploy Release
 # =========================================================================
-Write-Step "2/7" "Setting Up Code"
+Write-Step "2/7" "Deploying Code"
+
+New-Item -ItemType Directory -Force -Path $RELEASES_DIR -ErrorAction SilentlyContinue | Out-Null
 
 if (Test-Path (Join-Path $WORKING_DIR ".git")) {
-    Write-Info "Repo exists, pulling latest..."
+    Write-Info "Release $INITIAL_VERSION exists, pulling latest..."
     git -C $WORKING_DIR pull 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-OK "Code updated" }
-    else { Write-Warning2 "git pull failed -- may have local changes. Run: git -C $WORKING_DIR pull" }
+    else { Write-Warning2 "git pull failed. Run: git -C $WORKING_DIR pull" }
 } else {
-    Write-Info "Cloning repository..."
-    New-Item -ItemType Directory -Force -Path "C:\Dev" -ErrorAction SilentlyContinue | Out-Null
+    Write-Info "Cloning release/$INITIAL_VERSION..."
     $gitExe = if (Test-Path "C:\Program Files\Git\cmd\git.exe") { "C:\Program Files\Git\cmd\git.exe" } else { "git" }
-    & $gitExe clone $REPO_URL $WORKING_DIR 2>&1 | Out-Null
+    & $gitExe clone --branch "release/$INITIAL_VERSION" --depth 1 $REPO_URL $WORKING_DIR 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0 -and (Test-Path (Join-Path $WORKING_DIR ".git"))) {
-        Write-OK "Code cloned to $WORKING_DIR"
+        Write-OK "Release $INITIAL_VERSION deployed to $WORKING_DIR"
     } else {
-        Write-Fail "Clone failed. Check network and try: git clone $REPO_URL $WORKING_DIR"
+        Write-Fail "Clone failed. Check network and try: git clone --branch release/$INITIAL_VERSION $REPO_URL $WORKING_DIR"
     }
 }
 
+# Write current version file
+$INITIAL_VERSION | Set-Content $VERSION_FILE -NoNewline
+Write-Info "Version set to: $INITIAL_VERSION"
+
+# Copy updater.py to Shraga root (outside releases, so it persists across versions)
+$updaterSrc = Join-Path $WORKING_DIR "updater.py"
+$updaterDst = Join-Path $SHRAGA_ROOT "updater.py"
+if (Test-Path $updaterSrc) { Copy-Item $updaterSrc $updaterDst -Force }
+
 if (-not (Test-Path (Join-Path $WORKING_DIR ".git"))) {
-    Write-Fail "Code repository not available. Cannot continue without it."
+    Write-Fail "Code not available. Cannot continue."
     Write-Host "  Log saved to: $LOG_FILE" -ForegroundColor Gray
     Read-Host "Press Enter to close"
     Stop-Transcript | Out-Null
@@ -365,7 +379,8 @@ $envOk = $true
 foreach ($ev in @(
     @{ Name = "USER_EMAIL"; Value = $userEmail },
     @{ Name = "WORKING_DIR"; Value = $WORKING_DIR },
-    @{ Name = "WEBHOOK_USER"; Value = $userEmail }
+    @{ Name = "WEBHOOK_USER"; Value = $userEmail },
+    @{ Name = "SHRAGA_ROOT"; Value = $SHRAGA_ROOT }
 )) {
     try { Set-EnvVar $ev.Name $ev.Value }
     catch { Write-Warning2 "Could not set $($ev.Name): $_"; $envOk = $false }
@@ -411,15 +426,17 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
                 Start-Sleep 3
             }
 
-            # Write a wrapper .cmd that sets env vars then runs python
+            # Write a wrapper .cmd that reads current_version.txt and runs from the right release folder
             $wrapperDir = Join-Path $env:LOCALAPPDATA "Shraga"
             if (-not (Test-Path $wrapperDir)) { New-Item -ItemType Directory -Force -Path $wrapperDir | Out-Null }
             $wrapperPath = Join-Path $wrapperDir "$($svc.Name).cmd"
             $envLines = ($svc.EnvVars.GetEnumerator() | ForEach-Object { "set `"$($_.Key)=$($_.Value)`"" }) -join "`r`n"
-            $wrapperContent = "@echo off`r`n$envLines`r`ncd /d `"$WORKING_DIR`"`r`n`"$pyExe`" `"$($svc.Script)`"`r`nexit /b %ERRORLEVEL%"
+            # Script path relative to release root (e.g., integrated_task_worker.py or task-manager\task_manager.py)
+            $relScript = $svc.Script.Replace($WORKING_DIR + "\", "")
+            $wrapperContent = "@echo off`r`n$envLines`r`nset /p VERSION=<`"$VERSION_FILE`"`r`nset `"RELEASE_DIR=$RELEASES_DIR\%VERSION%`"`r`ncd /d `"%RELEASE_DIR%`"`r`n`"$pyExe`" `"%RELEASE_DIR%\$relScript`"`r`nexit /b %ERRORLEVEL%"
             [System.IO.File]::WriteAllText($wrapperPath, $wrapperContent, [System.Text.Encoding]::ASCII)
 
-            $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$wrapperPath`"" -WorkingDirectory $WORKING_DIR
+            $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$wrapperPath`"" -WorkingDirectory $SHRAGA_ROOT
             Register-ScheduledTask -TaskName $svc.Name -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
             Start-ScheduledTask -TaskName $svc.Name -ErrorAction Stop
             Start-Sleep 5
@@ -438,6 +455,20 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
 } else {
     if (-not $pyExe) { Write-Fail "Python not found -- cannot start services" }
     elseif (-not (Test-Path $WORKER_SCRIPT)) { Write-Fail "Code not deployed at $WORKING_DIR -- clone failed earlier" }
+}
+
+# -- Register updater task (checks for new releases every 5 min) --
+$updaterScript = Join-Path $SHRAGA_ROOT "updater.py"
+if ($pyExe -and (Test-Path $updaterScript)) {
+    try {
+        $updaterAction = New-ScheduledTaskAction -Execute $pyExe -Argument "`"$updaterScript`"" -WorkingDirectory $SHRAGA_ROOT
+        $updaterTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+        Register-ScheduledTask -TaskName "ShragaUpdater" -Action $updaterAction -Trigger $updaterTrigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+        Start-ScheduledTask -TaskName "ShragaUpdater" -ErrorAction SilentlyContinue
+        Write-OK "Updater registered (checks every 5 min)"
+    } catch {
+        Write-Warning2 "Could not register updater: $_"
+    }
 }
 
 # =========================================================================
