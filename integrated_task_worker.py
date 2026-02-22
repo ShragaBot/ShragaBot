@@ -28,7 +28,7 @@ DATAVERSE_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynami
 TABLE = os.environ.get("TABLE_NAME", "cr_shraga_tasks")  # MCS table with solution prefix
 STATE_FILE = ".integrated_worker_state.json"
 
-WEBHOOK_USER = os.environ.get("WEBHOOK_USER", "sagik@microsoft.com")
+WEBHOOK_USER = os.environ.get("WEBHOOK_USER", "")
 REQUEST_TIMEOUT = 30  # seconds for HTTP requests to Dataverse
 from version_check import get_my_version, should_exit
 

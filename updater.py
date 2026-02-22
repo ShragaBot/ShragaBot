@@ -86,9 +86,13 @@ def find_python() -> str:
 def deploy_release(version: str) -> bool:
     """Clone the release branch into an immutable release folder and install deps."""
     release_dir = RELEASES_DIR / version
-    if release_dir.exists():
-        print(f"[UPDATE] Release {version} already exists at {release_dir}")
+    if (release_dir / ".git").exists():
+        print(f"[UPDATE] Release {version} already deployed at {release_dir}")
         return True
+    # Clean up any partial/failed clone
+    if release_dir.exists():
+        import shutil
+        shutil.rmtree(release_dir, ignore_errors=True)
 
     print(f"[UPDATE] Deploying {version}...")
     RELEASES_DIR.mkdir(parents=True, exist_ok=True)

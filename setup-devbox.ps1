@@ -223,10 +223,7 @@ Write-Step "2/7" "Deploying Code"
 New-Item -ItemType Directory -Force -Path $RELEASES_DIR -ErrorAction SilentlyContinue | Out-Null
 
 if (Test-Path (Join-Path $WORKING_DIR ".git")) {
-    Write-Info "Release $INITIAL_VERSION exists, pulling latest..."
-    git -C $WORKING_DIR pull 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { Write-OK "Code updated" }
-    else { Write-Warning2 "git pull failed. Run: git -C $WORKING_DIR pull" }
+    Write-OK "Release $INITIAL_VERSION already deployed (immutable)"
 } else {
     Write-Info "Cloning release/$INITIAL_VERSION..."
     $gitExe = if (Test-Path "C:\Program Files\Git\cmd\git.exe") { "C:\Program Files\Git\cmd\git.exe" } else { "git" }
@@ -246,7 +243,7 @@ Write-Info "Version set to: $INITIAL_VERSION"
 $updaterWrapperDir = Join-Path $env:LOCALAPPDATA "Shraga"
 if (-not (Test-Path $updaterWrapperDir)) { New-Item -ItemType Directory -Force -Path $updaterWrapperDir | Out-Null }
 $updaterWrapperPath = Join-Path $updaterWrapperDir "ShragaUpdater.cmd"
-$updaterWrapperContent = "@echo off`r`nset /p VERSION=<`"$VERSION_FILE`"`r`nset `"RELEASE_DIR=$RELEASES_DIR\%VERSION%`"`r`n`"$pyExe`" `"%RELEASE_DIR%\updater.py`"`r`nexit /b %ERRORLEVEL%"
+$updaterWrapperContent = "@echo off`r`nset /p VERSION=<`"$VERSION_FILE`"`r`nif `"%VERSION%`"==`"`" (exit /b 1)`r`nset `"RELEASE_DIR=$RELEASES_DIR\%VERSION%`"`r`nif not exist `"%RELEASE_DIR%`" (exit /b 1)`r`n`"$pyExe`" `"%RELEASE_DIR%\updater.py`"`r`nexit /b %ERRORLEVEL%"
 [System.IO.File]::WriteAllText($updaterWrapperPath, $updaterWrapperContent, [System.Text.Encoding]::ASCII)
 
 if (-not (Test-Path (Join-Path $WORKING_DIR ".git"))) {
@@ -435,7 +432,7 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
             $envLines = ($svc.EnvVars.GetEnumerator() | ForEach-Object { "set `"$($_.Key)=$($_.Value)`"" }) -join "`r`n"
             # Script path relative to release root (e.g., integrated_task_worker.py or task-manager\task_manager.py)
             $relScript = $svc.Script.Replace($WORKING_DIR + "\", "")
-            $wrapperContent = "@echo off`r`n$envLines`r`nset /p VERSION=<`"$VERSION_FILE`"`r`nset `"RELEASE_DIR=$RELEASES_DIR\%VERSION%`"`r`nset `"WORKING_DIR=%RELEASE_DIR%`"`r`ncd /d `"%RELEASE_DIR%`"`r`n`"$pyExe`" `"%RELEASE_DIR%\$relScript`"`r`nexit /b %ERRORLEVEL%"
+            $wrapperContent = "@echo off`r`n$envLines`r`nset /p VERSION=<`"$VERSION_FILE`"`r`nif `"%VERSION%`"==`"`" (echo [ERROR] current_version.txt missing or empty & exit /b 1)`r`nset `"RELEASE_DIR=$RELEASES_DIR\%VERSION%`"`r`nif not exist `"%RELEASE_DIR%`" (echo [ERROR] Release dir not found: %RELEASE_DIR% & exit /b 1)`r`nset `"WORKING_DIR=%RELEASE_DIR%`"`r`ncd /d `"%RELEASE_DIR%`"`r`n`"$pyExe`" `"%RELEASE_DIR%\$relScript`"`r`nexit /b %ERRORLEVEL%"
             [System.IO.File]::WriteAllText($wrapperPath, $wrapperContent, [System.Text.Encoding]::ASCII)
 
             $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$wrapperPath`"" -WorkingDirectory $SHRAGA_ROOT
