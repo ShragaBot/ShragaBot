@@ -104,7 +104,7 @@ def deploy_release(version: str) -> bool:
     zip_path = Path(tempfile.gettempdir()) / f"shraga-{version}.zip"
     try:
         result = subprocess.run(
-            ["curl", "-sL", "-o", str(zip_path), zip_url],
+            ["curl", "-sfL", "-o", str(zip_path), zip_url],
             capture_output=True, text=True, timeout=120
         )
         if result.returncode != 0 or not zip_path.exists() or zip_path.stat().st_size < 1000:

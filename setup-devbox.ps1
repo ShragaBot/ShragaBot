@@ -270,8 +270,10 @@ if (Test-Path $sentinel) {
     }
 }
 
-# Write current version file
-$latestVersion | Set-Content $VERSION_FILE -NoNewline
+# Write current version file (only if deploy succeeded)
+if (Test-Path $sentinel) {
+    $latestVersion | Set-Content $VERSION_FILE -NoNewline
+}
 Write-Info "Version set to: $latestVersion"
 
 # Create updater .cmd wrapper (same pattern as Worker/PM -- reads current_version.txt dynamically)
