@@ -7,14 +7,8 @@
 # Re-run:         Double-click "Shraga Setup" shortcut on desktop
 
 param(
-    [switch]$WorkerOnly  # Skip PM — use for additional dev boxes when PM already runs on first box
+    [switch]$WorkerOnly  # Skip PM — used by setup-workerbox.ps1
 )
-
-# If not explicitly set, ask the user
-if (-not $WorkerOnly -and -not $PSBoundParameters.ContainsKey('WorkerOnly')) {
-    $answer = Read-Host "Is this your first Shraga dev box? (Y/N)"
-    if ($answer -match '^[Nn]') { $WorkerOnly = $true }
-}
 
 $ErrorActionPreference = "Continue"
 
