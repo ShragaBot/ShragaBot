@@ -400,10 +400,13 @@ if (-not (Test-Path $localScript)) {
 # -- Register and start scheduled tasks --
 $pyExe = Find-Python
 if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
-    # Use -AtLogOn (works without admin) instead of -AtStartup (needs admin)
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+    # Two triggers: AtLogOn + repeating every 5 min as watchdog
+    # Task Scheduler won't start a duplicate if already running (IgnoreNew default)
+    $triggerLogon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+    $triggerRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+    $triggers = @($triggerLogon, $triggerRepeat)
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 5)
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 5) -MultipleInstances IgnoreNew
 
     # Create a small wrapper .cmd for each service that sets env vars before running Python
     # This ensures the scheduled task always has the right environment
@@ -440,7 +443,7 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
             [System.IO.File]::WriteAllText($wrapperPath, $wrapperContent, [System.Text.Encoding]::ASCII)
 
             $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$wrapperPath`"" -WorkingDirectory $WORKING_DIR
-            Register-ScheduledTask -TaskName $svc.Name -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+            Register-ScheduledTask -TaskName $svc.Name -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
             Start-ScheduledTask -TaskName $svc.Name -ErrorAction Stop
             Start-Sleep 5
 
