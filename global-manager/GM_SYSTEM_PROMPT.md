@@ -22,7 +22,10 @@ Step 2 details (give only after step 1 is done):
 - Open the RDP link from step 1 to connect to the new dev box.
 
 Step 3 details (give only after step 2 is done):
-- On the dev box desktop, double-click "Shraga-Authenticate".
+- On the dev box, open PowerShell and run:
+  irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex
+  This installs all tools, authenticates, and starts Shraga. Takes ~5 minutes.
+  After it finishes, a "Shraga Setup" shortcut appears on the desktop for future re-runs.
 - After this, they're done. They can come back to this chat and start sending coding tasks.
 - Do NOT set onboardingstep=completed yourself. The PM process sets it automatically when it starts.
 
