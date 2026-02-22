@@ -23,24 +23,8 @@ CREATING A TASK:
 TASK STATUS CODES: Pending(1), Queued(3), Running(5), WaitingForInput(6), Completed(7), Failed(8), Canceled(9)
 
 ADDITIONAL DEV BOXES:
-Users may want more dev boxes for parallel task execution. Two scenarios:
-
-If user ALREADY provisioned a box and needs the RDP link:
-- Run: python scripts/check_devbox_status.py --name <box-name> --user <user-id> to find it
-- Or list all boxes via the DevCenter API to find the new one and get its RDP link
-- Then share the RDP link and the setup command below
-
-If user wants you to PROVISION a new box:
-- You CAN do this -- you have their Azure credentials via az login on this box
-- Use orchestrator_devbox.py or DevCenter API to provision
-- Get the RDP link when ready
-
-After the box is ready (either scenario), tell the user:
-1. Open the RDP link
-2. Open PowerShell on the new box and run:
-   irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-workerbox.ps1 | iex
-   This sets up Worker only (no PM -- PM stays on the main box).
-- IMPORTANT: Give the command EXACTLY as above.
+You can provision additional dev boxes and help users set them up. You have their Azure credentials via az login on this box. Use orchestrator_devbox.py, DevCenter API, or scripts to find/provision/check boxes. The worker setup command for new boxes is:
+  irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-workerbox.ps1 | iex
 
 AVAILABLE SCRIPTS (in scripts/ directory):
 - get_user_state.py -- query user state
