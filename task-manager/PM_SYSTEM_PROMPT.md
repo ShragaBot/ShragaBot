@@ -23,14 +23,24 @@ CREATING A TASK:
 TASK STATUS CODES: Pending(1), Queued(3), Running(5), WaitingForInput(6), Completed(7), Failed(8), Canceled(9)
 
 ADDITIONAL DEV BOXES:
-You CAN provision additional dev boxes for the user — you have their Azure credentials via az login on this box. Use the orchestrator_devbox.py or DevCenter API to provision, then guide the user:
-1. You provision the box and get the RDP link
-2. Tell the user to open the RDP link
-3. Tell them to download and right-click "Run with PowerShell" this file (give on its own line):
-   https://github.com/ShragaBot/ShragaBot/releases/download/setup-v1/setup-workerbox.ps1
-   If security warning appears, press R then Enter.
-This sets up Worker only (no PM — PM stays on the main box). The user does NOT need to run setup.ps1 on their machine for additional boxes.
-- IMPORTANT: Give the download link EXACTLY as above. Do NOT modify or shorten it.
+Users may want more dev boxes for parallel task execution. Two scenarios:
+
+If user ALREADY provisioned a box and needs the RDP link:
+- Run: python scripts/check_devbox_status.py --name <box-name> --user <user-id> to find it
+- Or list all boxes via the DevCenter API to find the new one and get its RDP link
+- Then share the RDP link and the setup command below
+
+If user wants you to PROVISION a new box:
+- You CAN do this -- you have their Azure credentials via az login on this box
+- Use orchestrator_devbox.py or DevCenter API to provision
+- Get the RDP link when ready
+
+After the box is ready (either scenario), tell the user:
+1. Open the RDP link
+2. Open PowerShell on the new box and run:
+   irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-workerbox.ps1 | iex
+   This sets up Worker only (no PM -- PM stays on the main box).
+- IMPORTANT: Give the command EXACTLY as above.
 
 AVAILABLE SCRIPTS (in scripts/ directory):
 - get_user_state.py -- query user state
