@@ -223,7 +223,10 @@ Write-Step "2/7" "Deploying Code"
 New-Item -ItemType Directory -Force -Path $RELEASES_DIR -ErrorAction SilentlyContinue | Out-Null
 
 if (Test-Path (Join-Path $WORKING_DIR ".git")) {
-    Write-OK "Release $INITIAL_VERSION already deployed (immutable)"
+    Write-Info "Release $INITIAL_VERSION exists, pulling latest..."
+    git -C $WORKING_DIR pull 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { Write-OK "Code updated" }
+    else { Write-Warning2 "git pull failed. Run: git -C $WORKING_DIR pull" }
 } else {
     Write-Info "Cloning release/$INITIAL_VERSION..."
     $gitExe = if (Test-Path "C:\Program Files\Git\cmd\git.exe") { "C:\Program Files\Git\cmd\git.exe" } else { "git" }
