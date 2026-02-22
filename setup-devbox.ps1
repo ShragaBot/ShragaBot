@@ -2,8 +2,13 @@
 # Installs tools, clones code, authenticates, configures, starts services.
 # Idempotent — safe to re-run at any time.
 #
-# First run:  irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex
-# Re-run:     Double-click "Shraga Setup" shortcut on desktop
+# First box:      irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex
+# Additional box: powershell -ExecutionPolicy Bypass -File setup-devbox.ps1 -WorkerOnly
+# Re-run:         Double-click "Shraga Setup" shortcut on desktop
+
+param(
+    [switch]$WorkerOnly  # Skip PM — use for additional dev boxes when PM already runs on first box
+)
 
 $ErrorActionPreference = "Continue"
 
@@ -396,10 +401,15 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
 
     # Create a small wrapper .cmd for each service that sets env vars before running Python
     # This ensures the scheduled task always has the right environment
-    foreach ($svc in @(
-        @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker"; EnvVars = @{ WEBHOOK_USER = $userEmail; WORKING_DIR = $WORKING_DIR } },
-        @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM"; EnvVars = @{ USER_EMAIL = $userEmail; WORKING_DIR = $WORKING_DIR } }
-    )) {
+    $services = @(
+        @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker"; EnvVars = @{ WEBHOOK_USER = $userEmail; WORKING_DIR = $WORKING_DIR } }
+    )
+    if (-not $WorkerOnly) {
+        $services += @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM"; EnvVars = @{ USER_EMAIL = $userEmail; WORKING_DIR = $WORKING_DIR } }
+    } else {
+        Write-Info "WorkerOnly mode — skipping PM (runs on your first dev box)"
+    }
+    foreach ($svc in $services) {
         # Check if this service's script exists
         if (-not (Test-Path $svc.Script)) {
             Write-Warning2 "$($svc.Label) script not found at: $($svc.Script) — skipping"
@@ -449,7 +459,7 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
 # =========================================================================
 # Check actual process state
 $workerRunning = (Get-ScheduledTask -TaskName "ShragaWorker" -ErrorAction SilentlyContinue).State -eq "Running"
-$pmRunning = (Get-ScheduledTask -TaskName "ShragaPM" -ErrorAction SilentlyContinue).State -eq "Running"
+$pmRunning = if ($WorkerOnly) { $true } else { (Get-ScheduledTask -TaskName "ShragaPM" -ErrorAction SilentlyContinue).State -eq "Running" }
 
 $allGood = $workerRunning -and $pmRunning -and $azLoginSuccess -and $claudeLoginSuccess
 $bannerColor = if ($allGood) { "Green" } else { "Yellow" }
@@ -463,7 +473,11 @@ Write-Host ""
 Write-Host "  Azure:       $userEmail" -ForegroundColor $(if ($azLoginSuccess) { "Green" } else { "Yellow" })
 Write-Host "  Claude Code: $(if ($claudeLoginSuccess) { 'Authenticated' } else { 'Needs: claude auth login' })" -ForegroundColor $(if ($claudeLoginSuccess) { "Green" } else { "Yellow" })
 Write-Host "  Worker:      $(if ($workerRunning) { 'Running' } else { 'Not running' })" -ForegroundColor $(if ($workerRunning) { "Green" } else { "Yellow" })
-Write-Host "  PM:          $(if ($pmRunning) { 'Running' } else { 'Not running' })" -ForegroundColor $(if ($pmRunning) { "Green" } else { "Yellow" })
+if ($WorkerOnly) {
+    Write-Host "  PM:          Skipped (WorkerOnly mode)" -ForegroundColor Gray
+} else {
+    Write-Host "  PM:          $(if ($pmRunning) { 'Running' } else { 'Not running' })" -ForegroundColor $(if ($pmRunning) { "Green" } else { "Yellow" })
+}
 Write-Host ""
 if ($allGood) {
     Write-Host "  Go back to Teams and start sending coding tasks!" -ForegroundColor Cyan
