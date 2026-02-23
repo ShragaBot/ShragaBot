@@ -63,7 +63,7 @@
           "inputs": {
             "parameters": {
               "entityName": "cr_shraga_tasks",
-              "$filter": "cr_status eq 'Running' and crb3b_useremail eq '@{triggerBody()['text_1']}'",
+              "$filter": "(cr_status eq 1 or cr_status eq 5) and crb3b_useremail eq '@{triggerBody()['text_1']}'",
               "$orderby": "createdon desc",
               "$top": 1,
               "$select": "cr_shraga_taskid,cr_prompt,cr_status,crb3b_useremail"
@@ -77,54 +77,121 @@
           }
         },
         "Check_Found": {
+          "runAfter": {
+            "List_Running_Tasks": [
+              "Succeeded"
+            ]
+          },
+          "type": "If",
+          "expression": {
+            "greater": [
+              "@length(outputs('List_Running_Tasks')?['body/value'])",
+              0
+            ]
+          },
           "actions": {
-            "Cancel_Task": {
+            "Check_If_Pending": {
               "runAfter": {},
-              "type": "OpenApiConnection",
-              "inputs": {
-                "parameters": {
-                  "entityName": "cr_shraga_tasks",
-                  "recordId": "@first(outputs('List_Running_Tasks')?['body/value'])?['cr_shraga_taskid']",
-                  "item/cr_status": "Canceled"
-                },
-                "host": {
-                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
-                  "connectionName": "shared_commondataserviceforapps",
-                  "operationId": "UpdateRecord"
-                },
-                "authentication": "@parameters('$authentication')"
-              }
-            },
-            "Respond_OK": {
-              "runAfter": {
-                "Cancel_Task": [
-                  "Succeeded"
+              "type": "If",
+              "expression": {
+                "equals": [
+                  "@first(outputs('List_Running_Tasks')?['body/value'])?['cr_status']",
+                  1
                 ]
               },
-              "type": "Response",
-              "kind": "Skills",
-              "inputs": {
-                "statusCode": 200,
-                "body": {
-                  "response": "Task has been canceled."
+              "actions": {
+                "Cancel_Pending_Task": {
+                  "runAfter": {},
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "entityName": "cr_shraga_tasks",
+                      "recordId": "@first(outputs('List_Running_Tasks')?['body/value'])?['cr_shraga_taskid']",
+                      "item/cr_status": 9
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+                      "connectionName": "shared_commondataserviceforapps",
+                      "operationId": "UpdateRecord"
+                    },
+                    "authentication": "@parameters('$authentication')"
+                  }
                 },
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "response": {
-                      "title": "response",
-                      "x-ms-dynamically-added": true,
-                      "type": "string"
+                "Respond_Canceled": {
+                  "runAfter": {
+                    "Cancel_Pending_Task": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Response",
+                  "kind": "Skills",
+                  "inputs": {
+                    "statusCode": 200,
+                    "body": {
+                      "response": "Task was pending and has been canceled."
+                    },
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "response": {
+                          "title": "response",
+                          "x-ms-dynamically-added": true,
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": {}
+                    }
+                  }
+                }
+              },
+              "else": {
+                "actions": {
+                  "Set_Canceling": {
+                    "runAfter": {},
+                    "type": "OpenApiConnection",
+                    "inputs": {
+                      "parameters": {
+                        "entityName": "cr_shraga_tasks",
+                        "recordId": "@first(outputs('List_Running_Tasks')?['body/value'])?['cr_shraga_taskid']",
+                        "item/cr_status": 11
+                      },
+                      "host": {
+                        "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+                        "connectionName": "shared_commondataserviceforapps",
+                        "operationId": "UpdateRecord"
+                      },
+                      "authentication": "@parameters('$authentication')"
+                    }
+                  },
+                  "Respond_Canceling": {
+                    "runAfter": {
+                      "Set_Canceling": [
+                        "Succeeded"
+                      ]
+                    },
+                    "type": "Response",
+                    "kind": "Skills",
+                    "inputs": {
+                      "statusCode": 200,
+                      "body": {
+                        "response": "Task is running and cancellation has been requested. The worker will stop at the next checkpoint."
+                      },
+                      "schema": {
+                        "type": "object",
+                        "properties": {
+                          "response": {
+                            "title": "response",
+                            "x-ms-dynamically-added": true,
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": {}
+                      }
                     }
                   }
                 }
               }
             }
-          },
-          "runAfter": {
-            "List_Running_Tasks": [
-              "Succeeded"
-            ]
           },
           "else": {
             "actions": {
@@ -135,7 +202,7 @@
                 "inputs": {
                   "statusCode": 200,
                   "body": {
-                    "response": "No running tasks found to cancel."
+                    "response": "No pending or running tasks found to cancel."
                   },
                   "schema": {
                     "type": "object",
@@ -145,19 +212,13 @@
                         "x-ms-dynamically-added": true,
                         "type": "string"
                       }
-                    }
+                    },
+                    "additionalProperties": {}
                   }
                 }
               }
             }
-          },
-          "expression": {
-            "greater": [
-              "@length(outputs('List_Running_Tasks')?['body/value'])",
-              0
-            ]
-          },
-          "type": "If"
+          }
         }
       }
     },
@@ -170,25 +231,16 @@
           "type": "string",
           "x-ms-content-hint": "TEXT",
           "x-ms-dynamically-added": true
-        },
-        "text_1": {
-          "description": "Email of the user requesting cancellation",
-          "title": "userEmail",
-          "type": "string",
-          "x-ms-content-hint": "TEXT",
-          "x-ms-dynamically-added": true
         }
       },
       "required": [
-        "text",
-        "text_1"
+        "text"
       ]
     },
     "state": "Started",
     "connectionReferences": {
       "shared_commondataserviceforapps": {
         "connectionName": "57aef69c3763444e8cfb3b0b5ba18fea",
-        "connectionReferenceLogicalName": "copilots_header_4bc17.shared_commondataserviceforapps.57aef69c3763444e8cfb3b0b5ba18fea",
         "source": "Embedded",
         "impersonation": {},
         "id": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
@@ -202,7 +254,7 @@
     },
     "installedConnectionReferences": {},
     "createdTime": "2026-02-15T07:22:21.5730526Z",
-    "lastModifiedTime": "2026-02-15T07:22:22.0020977Z",
+    "lastModifiedTime": "2026-02-23T13:09:34.5924026Z",
     "flowSuspensionReason": "None",
     "environment": {
       "name": "8660590d-33ac-ecd8-aef3-e4dd0d6071f4",
