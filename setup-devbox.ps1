@@ -518,6 +518,57 @@ if (Test-Path $updaterWrapperPath) {
 }
 
 # =========================================================================
+# Register box in Dataverse (crb3b_shragaboxes)
+# =========================================================================
+Write-Step "8" "Registering box in Dataverse..."
+if ($azLoginSuccess -and -not [string]::IsNullOrWhiteSpace($userEmail)) {
+    try {
+        $dvToken = (az account get-access-token --resource "https://org3e79cdb1.crm3.dynamics.com" --query "accessToken" -o tsv 2>$null)
+        if ($dvToken) {
+            $boxName = if ($WorkerOnly) { "$env:COMPUTERNAME-worker" } else { "$env:COMPUTERNAME" }
+            $boxType = if ($WorkerOnly) { "worker" } else { "primary" }
+            $currentVer = if (Test-Path $VERSION_FILE) { Get-Content $VERSION_FILE -Raw | ForEach-Object { $_.Trim() } } else { "unknown" }
+
+            $regBody = @{
+                crb3b_boxname = $boxName
+                crb3b_hostname = $env:COMPUTERNAME
+                crb3b_useremail = $userEmail
+                crb3b_boxtype = $boxType
+                crb3b_boxstatus = "active"
+                crb3b_version = $currentVer
+            } | ConvertTo-Json -Compress
+
+            $headers = @{
+                "Authorization" = "Bearer $dvToken"
+                "Content-Type" = "application/json"
+            }
+
+            # Check if box already registered
+            $existingUrl = "https://org3e79cdb1.crm3.dynamics.com/api/data/v9.2/crb3b_shragaboxes?`$filter=crb3b_hostname eq '$($env:COMPUTERNAME)'&`$select=crb3b_shragaboxid"
+            $existing = Invoke-RestMethod -Uri $existingUrl -Headers $headers -Method Get -ErrorAction Stop
+            if ($existing.value.Count -gt 0) {
+                # Update existing row
+                $rowId = $existing.value[0].crb3b_shragaboxid
+                $patchUrl = "https://org3e79cdb1.crm3.dynamics.com/api/data/v9.2/crb3b_shragaboxes($rowId)"
+                Invoke-RestMethod -Uri $patchUrl -Headers $headers -Method Patch -Body $regBody -ErrorAction Stop | Out-Null
+                Write-OK "Updated box registration: $boxName ($boxType)"
+            } else {
+                # Create new row
+                $postUrl = "https://org3e79cdb1.crm3.dynamics.com/api/data/v9.2/crb3b_shragaboxes"
+                Invoke-RestMethod -Uri $postUrl -Headers $headers -Method Post -Body $regBody -ErrorAction Stop | Out-Null
+                Write-OK "Registered new box: $boxName ($boxType)"
+            }
+        } else {
+            Write-Warning2 "Could not get DV token for box registration"
+        }
+    } catch {
+        Write-Warning2 "Box registration failed: $_"
+    }
+} else {
+    Write-Warning2 "Skipping box registration (no Azure login)"
+}
+
+# =========================================================================
 # Summary
 # =========================================================================
 # Check actual process state
