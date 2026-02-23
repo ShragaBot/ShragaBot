@@ -10,13 +10,13 @@
       "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
       "contentVersion": "1.0.0.0",
       "parameters": {
-        "$connections": {
-          "defaultValue": {},
-          "type": "Object"
-        },
         "$authentication": {
           "defaultValue": {},
           "type": "SecureObject"
+        },
+        "$connections": {
+          "defaultValue": {},
+          "type": "Object"
         }
       },
       "triggers": {
@@ -27,7 +27,7 @@
               "subscriptionRequest/message": 3,
               "subscriptionRequest/entityname": "cr_shraga_task",
               "subscriptionRequest/scope": 4,
-              "subscriptionRequest/filterexpression": "cr_status eq 'Canceled'",
+              "subscriptionRequest/filterexpression": "cr_status eq 9",
               "subscriptionRequest/filteringattributes": "cr_status"
             },
             "host": {
@@ -40,48 +40,14 @@
         }
       },
       "actions": {
-        "Init_RecentMsgs": {
-          "runAfter": {},
-          "type": "InitializeVariable",
-          "inputs": {
-            "variables": [
-              {
-                "name": "RecentMsgs",
-                "type": "string",
-                "value": ""
-              }
-            ]
-          }
-        },
-        "Init_Counter": {
-          "runAfter": {
-            "Init_RecentMsgs": [
-              "Succeeded"
-            ]
-          },
-          "type": "InitializeVariable",
-          "inputs": {
-            "variables": [
-              {
-                "name": "Counter",
-                "type": "integer",
-                "value": 0
-              }
-            ]
-          }
-        },
         "Get_a_row_by_ID": {
-          "runAfter": {
-            "Init_Counter": [
-              "Succeeded"
-            ]
-          },
+          "runAfter": {},
           "type": "OpenApiConnection",
           "inputs": {
             "parameters": {
               "entityName": "cr_shraga_tasks",
               "recordId": "@triggerOutputs()?['body/cr_shraga_taskid']",
-              "$select": "cr_prompt,cr_status,cr_result,cr_statusmessage,crb3b_useremail,crb3b_runningchatid,crb3b_runningmessageid,crb3b_onedriveurl,crb3b_shortdescription,createdon"
+              "$select": "cr_shraga_taskid,cr_prompt,cr_status,crb3b_useremail,crb3b_runningmessageid,crb3b_runningchatid,crb3b_onedriveurl,crb3b_shortdescription,createdon,crb3b_messages"
             },
             "host": {
               "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
@@ -91,14 +57,93 @@
             "authentication": "@parameters('$authentication')"
           }
         },
-        "Check_Email": {
+        "Check_Status": {
           "actions": {
-            "Terminate_No_Email": {
+            "Check_Has_Card": {
+              "actions": {
+                "Update_Card_To_Killed": {
+                  "runAfter": {
+                    "Compose_FullCard": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "OpenApiConnection",
+                  "inputs": {
+                    "parameters": {
+                      "poster": "Flow bot",
+                      "location": "Group chat",
+                      "body/messageId": "@outputs('Get_a_row_by_ID')?['body/crb3b_runningmessageid']",
+                      "body/recipient": "@outputs('Get_a_row_by_ID')?['body/crb3b_runningchatid']",
+                      "body/messageBody": "@outputs('Compose_FullCard')"
+                    },
+                    "host": {
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams",
+                      "connectionName": "shared_teams-1",
+                      "operationId": "UpdateCardInConversation"
+                    },
+                    "authentication": "@parameters('$authentication')"
+                  }
+                },
+                "Compose_TaskTitle": {
+                  "runAfter": {},
+                  "type": "Compose",
+                  "inputs": "@replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'],outputs('Get_a_row_by_ID')?['body/cr_prompt'],'Task'),200),'\\\\','\\\\\\\\'),'\"','\\\\\"'),decodeUriComponent('%0A'),' '),decodeUriComponent('%0D'),'')"
+                },
+                "Compose_SubmittedTime": {
+                  "runAfter": {},
+                  "type": "Compose",
+                  "inputs": "@formatDateTime(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()), 'MMM dd, yyyy h:mm tt')"
+                },
+                "Compose_Duration": {
+                  "runAfter": {},
+                  "type": "Compose",
+                  "inputs": "@concat(string(div(div(sub(ticks(utcNow()), ticks(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()))), 10000000), 60)), 'm ', string(mod(div(sub(ticks(utcNow()), ticks(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()))), 10000000), 60)), 's')"
+                },
+                "Compose_LogMessages": {
+                  "runAfter": {},
+                  "type": "Compose",
+                  "inputs": "@coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_messages'], 'Task canceled by user')"
+                },
+                "Compose_FullCard": {
+                  "runAfter": {
+                    "Compose_TaskTitle": [
+                      "Succeeded"
+                    ],
+                    "Compose_SubmittedTime": [
+                      "Succeeded"
+                    ],
+                    "Compose_Duration": [
+                      "Succeeded"
+                    ],
+                    "Compose_LogMessages": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Compose",
+                  "inputs": "@concat('{\"$schema\":\"http://adaptivecards.io/schemas/adaptive-card.json\",\"type\":\"AdaptiveCard\",\"version\":\"1.5\",\"body\":[{\"type\":\"Container\",\"style\":\"emphasis\",\"bleed\":true,\"items\":[{\"type\":\"ColumnSet\",\"columns\":[{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"Image\",\"url\":\"https://cdn-icons-png.flaticon.com/512/4712/4712109.png\",\"size\":\"Medium\",\"style\":\"Person\",\"altText\":\"Shraga Agent\"}],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"stretch\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Shraga Worker\",\"weight\":\"Bolder\",\"size\":\"Medium\"},{\"type\":\"TextBlock\",\"text\":\"', take(outputs('Compose_TaskTitle'), 200), '\",\"size\":\"Default\",\"isSubtle\":true,\"spacing\":\"None\",\"wrap\":true}],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"KILLED\",\"color\":\"Warning\",\"size\":\"Default\",\"weight\":\"Bolder\"}],\"verticalContentAlignment\":\"Center\"}]}]},{\"type\":\"Container\",\"spacing\":\"Small\",\"items\":[{\"type\":\"Container\",\"style\":\"emphasis\",\"id\":\"logCollapsed\",\"maxHeight\":\"250px\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"', replace(replace(replace(replace(outputs('Compose_LogMessages'), '\\\\', '\\\\\\\\'), '\"', '\\\\\"'), decodeUriComponent('%0A'), '\\n'), decodeUriComponent('%0D'), ''), '\",\"wrap\":true,\"size\":\"Small\",\"fontType\":\"Monospace\",\"isSubtle\":true}]},{\"type\":\"Container\",\"style\":\"emphasis\",\"id\":\"logExpanded\",\"isVisible\":false,\"items\":[{\"type\":\"TextBlock\",\"text\":\"', replace(replace(replace(replace(outputs('Compose_LogMessages'), '\\\\', '\\\\\\\\'), '\"', '\\\\\"'), decodeUriComponent('%0A'), '\\n'), decodeUriComponent('%0D'), ''), '\",\"wrap\":true,\"size\":\"Small\",\"fontType\":\"Monospace\",\"isSubtle\":true}]},{\"type\":\"Container\",\"id\":\"btnExpand\",\"spacing\":\"None\",\"selectAction\":{\"type\":\"Action.ToggleVisibility\",\"targetElements\":[\"logCollapsed\",\"logExpanded\",\"btnExpand\",\"btnCollapse\"]},\"items\":[{\"type\":\"TextBlock\",\"text\":\"▼ show full log\",\"size\":\"Small\",\"color\":\"Accent\",\"horizontalAlignment\":\"Center\"}]},{\"type\":\"Container\",\"id\":\"btnCollapse\",\"isVisible\":false,\"spacing\":\"None\",\"selectAction\":{\"type\":\"Action.ToggleVisibility\",\"targetElements\":[\"logCollapsed\",\"logExpanded\",\"btnExpand\",\"btnCollapse\"]},\"items\":[{\"type\":\"TextBlock\",\"text\":\"▲ collapse log\",\"size\":\"Small\",\"color\":\"Accent\",\"horizontalAlignment\":\"Center\"}]}]},{\"type\":\"Container\",\"spacing\":\"Medium\",\"separator\":true,\"items\":[{\"type\":\"TextBlock\",\"text\":\"', concat('Task canceled by user.', if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat('\\n\\n[Open session folder](', outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'], ')'))), '\",\"wrap\":true,\"size\":\"Default\",\"isSubtle\":true}]},{\"type\":\"Container\",\"spacing\":\"Small\",\"items\":[{\"type\":\"FactSet\",\"facts\":[{\"title\":\"Submitted\",\"value\":\"', outputs('Compose_SubmittedTime'), '\"},{\"title\":\"Started\",\"value\":\"', outputs('Compose_SubmittedTime'), '\"},{\"title\":\"Killed\",\"value\":\"', formatDateTime(utcNow(), 'MMM dd, yyyy hh:mm:ss tt'), '\"},{\"title\":\"Duration\",\"value\":\"', outputs('Compose_Duration'), '\"}]}]}]}')"
+                }
+              },
               "runAfter": {},
-              "type": "Terminate",
-              "inputs": {
-                "runStatus": "Cancelled"
-              }
+              "else": {
+                "actions": {
+                  "Terminate_No_Card": {
+                    "runAfter": {},
+                    "type": "Terminate",
+                    "inputs": {
+                      "runStatus": "Cancelled"
+                    }
+                  }
+                }
+              },
+              "expression": {
+                "not": {
+                  "equals": [
+                    "@coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_runningmessageid'], '')",
+                    ""
+                  ]
+                }
+              },
+              "type": "If"
             }
           },
           "runAfter": {
@@ -107,245 +152,25 @@
             ]
           },
           "else": {
-            "actions": {}
-          },
-          "expression": {
-            "and": [
-              {
-                "equals": [
-                  "@empty(outputs('Get_a_row_by_ID')?['body/crb3b_useremail'])",
-                  true
-                ]
-              }
-            ]
-          },
-          "type": "If"
-        },
-        "Check_Status": {
-          "actions": {
-            "Terminate_Wrong_Status": {
-              "runAfter": {},
-              "type": "Terminate",
-              "inputs": {
-                "runStatus": "Cancelled"
-              }
-            }
-          },
-          "runAfter": {
-            "Check_Email": [
-              "Succeeded"
-            ]
-          },
-          "else": {
-            "actions": {}
-          },
-          "expression": {
-            "and": [
-              {
-                "not": {
-                  "equals": [
-                    "@outputs('Get_a_row_by_ID')?['body/cr_status']",
-                    "Canceled"
-                  ]
-                }
-              }
-            ]
-          },
-          "type": "If"
-        },
-        "List_Messages": {
-          "runAfter": {
-            "Check_Status": [
-              "Succeeded"
-            ]
-          },
-          "type": "OpenApiConnection",
-          "inputs": {
-            "parameters": {
-              "entityName": "cr_shragamessages",
-              "$filter": "crb3b_taskid eq '@{triggerOutputs()?['body/cr_shraga_taskid']}'",
-              "$orderby": "createdon asc",
-              "$top": 20,
-              "$select": "cr_content,createdon"
-            },
-            "host": {
-              "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
-              "connectionName": "shared_commondataserviceforapps",
-              "operationId": "ListRecords"
-            },
-            "authentication": "@parameters('$authentication')"
-          }
-        },
-        "Apply_to_each_message": {
-          "foreach": "@outputs('List_Messages')?['body/value']",
-          "actions": {
-            "Increment_Counter": {
-              "runAfter": {},
-              "type": "IncrementVariable",
-              "inputs": {
-                "name": "Counter",
-                "value": 1
-              }
-            },
-            "Compose_Formatted_Msg": {
-              "runAfter": {
-                "Increment_Counter": [
-                  "Succeeded"
-                ]
-              },
-              "type": "Compose",
-              "inputs": "@concat('[', formatDateTime(items('Apply_to_each_message')?['createdon'], 'HH:mm:ss'), '] ', replace(replace(replace(replace(substring(coalesce(items('Apply_to_each_message')?['cr_content'], '(no content)'), 0, min(length(coalesce(items('Apply_to_each_message')?['cr_content'], '(no content)')), 200)), '\\', '\\\\'), '\"', '\\\"'), decodeUriComponent('%0A'), '\\n'), decodeUriComponent('%0D'), ''))"
-            },
-            "Append_To_Recent": {
-              "runAfter": {
-                "Compose_Formatted_Msg": [
-                  "Succeeded"
-                ]
-              },
-              "type": "AppendToStringVariable",
-              "inputs": {
-                "name": "RecentMsgs",
-                "value": "@{if(greater(variables('Counter'), 1), ',', '')}{\"type\":\"ColumnSet\",\"spacing\":\"Small\",\"columns\":[{\"type\":\"Column\",\"width\":\"90px\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"@{take(outputs('Compose_Formatted_Msg'), add(indexOf(outputs('Compose_Formatted_Msg'), ']'), 1))}\",\"color\":\"Accent\",\"size\":\"Small\",\"spacing\":\"None\",\"fontType\":\"Monospace\"}]},{\"type\":\"Column\",\"width\":\"stretch\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"@{trim(substring(outputs('Compose_Formatted_Msg'), add(indexOf(outputs('Compose_Formatted_Msg'), ']'), 1)))}\",\"size\":\"Small\",\"wrap\":true,\"spacing\":\"None\"}]}]}"
-              }
-            }
-          },
-          "runAfter": {
-            "List_Messages": [
-              "Succeeded"
-            ]
-          },
-          "type": "Foreach",
-          "operationOptions": "Sequential"
-        },
-        "Compose_TaskTitle": {
-          "runAfter": {
-            "Apply_to_each_message": [
-              "Succeeded"
-            ]
-          },
-          "type": "Compose",
-          "inputs": "@replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/cr_prompt'], 'Untitled Task'), 500), '\\', '\\\\'), '\"', '\\\"'), decodeUriComponent('%0A'), ' | '), decodeUriComponent('%0D'), '')"
-        },
-        "Compose_SubmittedTime": {
-          "runAfter": {
-            "Compose_TaskTitle": [
-              "Succeeded"
-            ]
-          },
-          "type": "Compose",
-          "inputs": "@formatDateTime(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()), 'MMM dd, yyyy hh:mm:ss tt')"
-        },
-        "Compose_CanceledTime": {
-          "runAfter": {
-            "Compose_SubmittedTime": [
-              "Succeeded"
-            ]
-          },
-          "type": "Compose",
-          "inputs": "@formatDateTime(utcNow(), 'MMM dd, yyyy hh:mm:ss tt')"
-        },
-        "Compose_MessagesSection": {
-          "runAfter": {
-            "Compose_CanceledTime": [
-              "Succeeded"
-            ]
-          },
-          "type": "Compose",
-          "inputs": "@if(greater(length(variables('RecentMsgs')), 0), concat(',{\"type\":\"Container\",\"spacing\":\"Medium\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Submitted: ', outputs('Compose_SubmittedTime'), '\",\"size\":\"Default\",\"isSubtle\":true},{\"type\":\"TextBlock\",\"text\":\"Canceled: ', outputs('Compose_CanceledTime'), '\",\"size\":\"Default\",\"isSubtle\":true,\"spacing\":\"Small\"},{\"type\":\"TextBlock\",\"text\":\"ACTIVITY LOG\",\"size\":\"Default\",\"isSubtle\":true,\"weight\":\"Bolder\",\"spacing\":\"Small\"}]},{\"type\":\"Container\",\"spacing\":\"Small\",\"style\":\"emphasis\",\"showBorder\":true,\"roundedCorners\":true,\"maxHeight\":\"500px\",\"items\":[', variables('RecentMsgs'), ']}'), concat(',{\"type\":\"Container\",\"spacing\":\"Medium\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Submitted: ', outputs('Compose_SubmittedTime'), '\",\"size\":\"Default\",\"isSubtle\":true},{\"type\":\"TextBlock\",\"text\":\"Canceled: ', outputs('Compose_CanceledTime'), '\",\"size\":\"Default\",\"isSubtle\":true,\"spacing\":\"Small\"}]}'))"
-        },
-        "Compose_FullCard": {
-          "runAfter": {
-            "Compose_MessagesSection": [
-              "Succeeded"
-            ]
-          },
-          "type": "Compose",
-          "inputs": "@concat('{\"$schema\":\"http://adaptivecards.io/schemas/adaptive-card.json\",\"type\":\"AdaptiveCard\",\"version\":\"1.5\",\"body\":[{\"type\":\"Container\",\"style\":\"emphasis\",\"bleed\":true,\"items\":[{\"type\":\"ColumnSet\",\"columns\":[{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"Image\",\"url\":\"https://cdn-icons-png.flaticon.com/512/4712/4712109.png\",\"size\":\"Medium\",\"style\":\"Person\",\"altText\":\"Shraga Agent\"}],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"stretch\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Shraga Worker\",\"weight\":\"Bolder\",\"size\":\"Large\"},{\"type\":\"TextBlock\",\"text\":\"', replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'], outputs('Compose_TaskTitle'), 'Task'), 200), '\\', '\\\\'), '\"', '\\\"'), decodeUriComponent('%0A'), ' '), decodeUriComponent('%0D'), ''), '\",\"size\":\"Default\",\"isSubtle\":true,\"spacing\":\"None\",\"wrap\":true,\"maxLines\":3}', if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat(',{\"type\":\"TextBlock\",\"text\":\"[See full original task description](', replace(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'], ''), '&view=0', '/TASK_PROMPT.md'), ')\",\"size\":\"Small\",\"color\":\"Accent\",\"spacing\":\"None\",\"wrap\":true}')), '],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"CANCELED\",\"color\":\"Attention\",\"size\":\"Default\",\"weight\":\"Bolder\"}],\"verticalContentAlignment\":\"Center\"}]}]}', outputs('Compose_MessagesSection'), ',{\"type\":\"Container\",\"spacing\":\"Medium\",\"separator\":true,\"items\":[{\"type\":\"TextBlock\",\"text\":\"CANCELED\",\"size\":\"Medium\",\"weight\":\"Bolder\",\"color\":\"Attention\"},{\"type\":\"TextBlock\",\"text\":\"Task execution was terminated by user.\",\"wrap\":true,\"size\":\"Small\",\"isSubtle\":true}]}', if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat(',{\"type\":\"TextBlock\",\"text\":\"[See full results in session execution folder](', outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'], ')\",\"size\":\"Small\",\"color\":\"Accent\",\"wrap\":true,\"spacing\":\"Medium\"}')), ']}')"
-        },
-        "Parse_Card_JSON": {
-          "runAfter": {
-            "Compose_FullCard": [
-              "Succeeded"
-            ]
-          },
-          "type": "Compose",
-          "inputs": "@json(outputs('Compose_FullCard'))"
-        },
-        "Check_Running_Card": {
-          "actions": {
-            "Update_an_adaptive_card_in_a_chat_or_channel": {
-              "runAfter": {},
-              "type": "OpenApiConnection",
-              "inputs": {
-                "parameters": {
-                  "poster": "Flow bot",
-                  "location": "Group chat",
-                  "body/messageId": "@outputs('Get_a_row_by_ID')?['body/crb3b_runningmessageid']",
-                  "body/recipient": "@outputs('Get_a_row_by_ID')?['body/crb3b_runningchatid']",
-                  "body/messageBody": "@outputs('Parse_Card_JSON')"
-                },
-                "host": {
-                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams",
-                  "connectionName": "shared_teams",
-                  "operationId": "UpdateCardInConversation"
-                },
-                "retryPolicy": {
-                  "type": "fixed",
-                  "count": 3,
-                  "interval": "PT30S"
-                },
-                "authentication": "@parameters('$authentication')"
-              }
-            }
-          },
-          "runAfter": {
-            "Parse_Card_JSON": [
-              "Succeeded"
-            ]
-          },
-          "else": {
             "actions": {
-              "Post_card_in_a_chat_or_channel": {
+              "Terminate_Not_Canceled": {
                 "runAfter": {},
-                "type": "OpenApiConnection",
+                "type": "Terminate",
                 "inputs": {
-                  "parameters": {
-                    "poster": "Flow bot",
-                    "location": "Chat with Flow bot",
-                    "body/recipient": "@outputs('Get_a_row_by_ID')?['body/crb3b_useremail']",
-                    "body/messageBody": "@outputs('Parse_Card_JSON')"
-                  },
-                  "host": {
-                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams",
-                    "connectionName": "shared_teams",
-                    "operationId": "PostCardToConversation"
-                  },
-                  "retryPolicy": {
-                    "type": "fixed",
-                    "count": 3,
-                    "interval": "PT30S"
-                  },
-                  "authentication": "@parameters('$authentication')"
+                  "runStatus": "Cancelled"
                 }
               }
             }
           },
           "expression": {
-            "and": [
-              {
-                "not": {
-                  "equals": [
-                    "@coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_runningmessageid'], '')",
-                    ""
-                  ]
-                }
-              }
+            "equals": [
+              "@outputs('Get_a_row_by_ID')?['body/cr_status']",
+              9
             ]
           },
           "type": "If"
         }
-      },
-      "outputs": {}
+      }
     },
     "state": "Started",
     "connectionReferences": {
@@ -361,12 +186,12 @@
         "apiName": "commondataserviceforapps",
         "isProcessSimpleApiReferenceConversionAlreadyDone": false
       },
-      "shared_teams": {
+      "shared_teams-1": {
         "connectionName": "70d2dee52a344508a14a40ee6013baf1",
         "source": "Embedded",
         "id": "/providers/Microsoft.PowerApps/apis/shared_teams",
         "displayName": "Microsoft Teams",
-        "iconUri": "https://conn-afd-prod-endpoint-bmc9bqahasf3grgk.b01.azurefd.net/releases/v1.0.1787/1.0.1787.4513/teams/icon.png",
+        "iconUri": "https://conn-afd-prod-endpoint-bmc9bqahasf3grgk.b01.azurefd.net/releases/v1.0.1795/1.0.1795.4870/teams/icon.png",
         "brandColor": "",
         "tier": "Standard",
         "apiName": "teams",
@@ -374,7 +199,7 @@
       }
     },
     "createdTime": "2026-02-15T08:18:22.119274Z",
-    "lastModifiedTime": "2026-02-15T08:18:22.4280174Z",
+    "lastModifiedTime": "2026-02-18T23:03:34.3067232Z",
     "flowSuspensionReason": "None",
     "environment": {
       "name": "8660590d-33ac-ecd8-aef3-e4dd0d6071f4",
@@ -390,12 +215,6 @@
       ],
       "actions": [
         {
-          "type": "InitializeVariable"
-        },
-        {
-          "type": "InitializeVariable"
-        },
-        {
           "type": "OpenApiConnection",
           "swaggerOperationId": "GetItem"
         },
@@ -406,55 +225,23 @@
           "type": "If"
         },
         {
-          "type": "OpenApiConnection",
-          "swaggerOperationId": "ListRecords"
-        },
-        {
-          "type": "Foreach"
-        },
-        {
-          "type": "Compose"
-        },
-        {
-          "type": "Compose"
-        },
-        {
-          "type": "Compose"
-        },
-        {
-          "type": "Compose"
-        },
-        {
-          "type": "Compose"
-        },
-        {
-          "type": "Compose"
-        },
-        {
-          "type": "If"
-        },
-        {
           "type": "Terminate"
         },
         {
-          "type": "Terminate"
-        },
-        {
-          "type": "IncrementVariable"
+          "type": "Compose"
         },
         {
           "type": "Compose"
         },
         {
-          "type": "AppendToStringVariable"
+          "type": "Compose"
         },
         {
           "type": "OpenApiConnection",
           "swaggerOperationId": "UpdateCardInConversation"
         },
         {
-          "type": "OpenApiConnection",
-          "swaggerOperationId": "PostCardToConversation"
+          "type": "Terminate"
         }
       ]
     },
@@ -477,18 +264,6 @@
           {
             "referenceSourceType": "Actions",
             "operationId": "/providers/Microsoft.PowerApps/apis/shared_teams/apiOperations/UpdateCardInConversation"
-          }
-        ]
-      },
-      {
-        "service": "teams",
-        "resource": {
-          "chatId": "@outputs('Get_a_row_by_ID')?['body/crb3b_useremail']"
-        },
-        "referencers": [
-          {
-            "referenceSourceType": "Actions",
-            "operationId": "/providers/Microsoft.PowerApps/apis/shared_teams/apiOperations/PostCardToConversation"
           }
         ]
       }

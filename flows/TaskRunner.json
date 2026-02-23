@@ -27,7 +27,7 @@
               "subscriptionRequest/message": 1,
               "subscriptionRequest/entityname": "cr_shraga_task",
               "subscriptionRequest/scope": 4,
-              "subscriptionRequest/filterexpression": "cr_status eq 'Pending'"
+              "subscriptionRequest/filterexpression": "cr_status eq 10"
             },
             "host": {
               "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
@@ -51,7 +51,7 @@
             "parameters": {
               "entityName": "cr_shraga_tasks",
               "recordId": "@triggerOutputs()?['body/cr_shraga_taskid']",
-              "$select": "cr_shraga_taskid,cr_prompt,cr_status,crb3b_useremail,crb3b_runningmessageid,crb3b_onedriveurl,crb3b_shortdescription"
+              "$select": "cr_shraga_taskid,cr_prompt,cr_status,crb3b_useremail,crb3b_runningmessageid,crb3b_onedriveurl,crb3b_shortdescription,crb3b_mcsconversationid"
             },
             "host": {
               "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
@@ -71,7 +71,7 @@
             }
           },
           "runAfter": {
-            "Check_Status": [
+            "Check_Email": [
               "Succeeded"
             ]
           },
@@ -117,7 +117,8 @@
                     "recordId": "@outputs('Get_a_row_by_ID')?['body/cr_shraga_taskid']",
                     "item/crb3b_deeplink": "@outputs('Post_card_in_a_chat_or_channel')?['body/messageLink']",
                     "item/crb3b_runningchatid": "@outputs('Post_card_in_a_chat_or_channel')?['body/conversationId']",
-                    "item/crb3b_runningmessageid": "@outputs('Post_card_in_a_chat_or_channel')?['body/id']"
+                    "item/crb3b_runningmessageid": "@outputs('Post_card_in_a_chat_or_channel')?['body/id']",
+                    "item/cr_status": 1
                   },
                   "host": {
                     "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
@@ -132,7 +133,7 @@
                 "inputs": {
                   "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                   "type": "AdaptiveCard",
-                  "version": "1.4",
+                  "version": "1.5",
                   "body": [
                     {
                       "type": "Container",
@@ -164,22 +165,13 @@
                                   "type": "TextBlock",
                                   "text": "Shraga Worker",
                                   "weight": "Bolder",
-                                  "size": "Large"
+                                  "size": "Medium"
                                 },
                                 {
                                   "type": "TextBlock",
-                                  "text": "{shortDescription}",
+                                  "text": "{shortDescription} [See full description]({taskPromptUrl})",
                                   "size": "Default",
                                   "isSubtle": true,
-                                  "spacing": "None",
-                                  "wrap": true,
-                                  "maxLines": 3
-                                },
-                                {
-                                  "type": "TextBlock",
-                                  "text": "[See full original task description]({taskPromptUrl})",
-                                  "size": "Small",
-                                  "color": "Accent",
                                   "spacing": "None",
                                   "wrap": true
                                 }
@@ -206,25 +198,84 @@
                     },
                     {
                       "type": "Container",
-                      "spacing": "Medium",
+                      "spacing": "Small",
                       "items": [
-                        {
-                          "type": "TextBlock",
-                          "text": "ACTIVITY LOG",
-                          "size": "Default",
-                          "isSubtle": true,
-                          "weight": "Bolder"
-                        },
                         {
                           "type": "Container",
                           "style": "emphasis",
+                          "id": "logCollapsed",
+                          "maxHeight": "250px",
                           "items": [
                             {
                               "type": "TextBlock",
                               "text": "Task queued. Waiting for available worker...",
                               "wrap": true,
                               "size": "Small",
-                              "fontType": "Monospace"
+                              "fontType": "Monospace",
+                              "isSubtle": true
+                            }
+                          ]
+                        },
+                        {
+                          "type": "Container",
+                          "style": "emphasis",
+                          "id": "logExpanded",
+                          "isVisible": false,
+                          "items": [
+                            {
+                              "type": "TextBlock",
+                              "text": "Task queued. Waiting for available worker...",
+                              "wrap": true,
+                              "size": "Small",
+                              "fontType": "Monospace",
+                              "isSubtle": true
+                            }
+                          ]
+                        },
+                        {
+                          "type": "Container",
+                          "id": "btnExpand",
+                          "spacing": "None",
+                          "selectAction": {
+                            "type": "Action.ToggleVisibility",
+                            "targetElements": [
+                              "logCollapsed",
+                              "logExpanded",
+                              "btnExpand",
+                              "btnCollapse"
+                            ]
+                          },
+                          "items": [
+                            {
+                              "type": "TextBlock",
+                              "text": "▼ show full log",
+                              "size": "Small",
+                              "color": "Accent",
+                              "horizontalAlignment": "Center"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "Container",
+                          "id": "btnCollapse",
+                          "isVisible": false,
+                          "spacing": "None",
+                          "selectAction": {
+                            "type": "Action.ToggleVisibility",
+                            "targetElements": [
+                              "logCollapsed",
+                              "logExpanded",
+                              "btnExpand",
+                              "btnCollapse"
+                            ]
+                          },
+                          "items": [
+                            {
+                              "type": "TextBlock",
+                              "text": "▲ collapse log",
+                              "size": "Small",
+                              "color": "Accent",
+                              "horizontalAlignment": "Center"
                             }
                           ]
                         }
@@ -251,11 +302,33 @@
                       "separator": true,
                       "items": [
                         {
-                          "type": "TextBlock",
-                          "text": "To kill this task, tell the stam bot.",
-                          "size": "Small",
-                          "isSubtle": true,
-                          "wrap": true
+                          "type": "ColumnSet",
+                          "columns": [
+                            {
+                              "type": "Column",
+                              "width": "stretch",
+                              "items": [
+                                {
+                                  "type": "TextBlock",
+                                  "text": "{startedAt}",
+                                  "size": "Small",
+                                  "isSubtle": true
+                                }
+                              ]
+                            },
+                            {
+                              "type": "Column",
+                              "width": "auto",
+                              "items": [
+                                {
+                                  "type": "TextBlock",
+                                  "text": "Want to cancel? [Tell the bot: cancel {taskIdShort}](https://teams.microsoft.com/l/chat/0/0?users=28:BOT_APP_ID&message=cancel%20{taskIdShort})",
+                                  "size": "Small",
+                                  "isSubtle": true
+                                }
+                              ]
+                            }
+                          ]
                         }
                       ]
                     }
@@ -269,7 +342,7 @@
                   ]
                 },
                 "type": "Compose",
-                "inputs": "@replace(replace(replace(string(outputs('Compose_CardTemplate')),'{shortDescription}',replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'],outputs('Get_a_row_by_ID')?['body/cr_prompt'],'Task'),200), '\\', '\\\\'), '\"', '\\\"'), decodeUriComponent('%0A'), ' '), decodeUriComponent('%0D'), '')),'{taskPromptUrl}',if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']),'',replace(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'],''),'&view=0','/TASK_PROMPT.md'))),'{startedAt}',concat(formatDateTime(utcNow(),'MMM dd, yyyy h:mm tt'),' UTC'))"
+                "inputs": "@replace(replace(replace(replace(string(outputs('Compose_CardTemplate')),'{shortDescription}',replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'],outputs('Get_a_row_by_ID')?['body/cr_prompt'],'Task'),200), '\\\\', '\\\\\\\\'), '\"', '\\\\\"'), decodeUriComponent('%0A'), ' '), decodeUriComponent('%0D'), '')),'{taskPromptUrl}',if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']),'',replace(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'],''),'&view=0','/TASK_PROMPT.md'))),'{startedAt}',concat(formatDateTime(utcNow(),'MMM dd, yyyy h:mm tt'),' UTC')),'{taskIdShort}',take(string(outputs('Get_a_row_by_ID')?['body/cr_shraga_taskid']), 8))"
               },
               "Compose_CardWithOneDrive": {
                 "runAfter": {
@@ -279,6 +352,33 @@
                 },
                 "type": "Compose",
                 "inputs": "@json(concat(substring(string(outputs('Compose_CardResolved')), 0, sub(length(string(outputs('Compose_CardResolved'))), 2)), if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat(',{\"type\":\"TextBlock\",\"text\":\"Session folder: ', outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'], '\",\"size\":\"Small\",\"isSubtle\":true,\"spacing\":\"Small\"}')), ']}'))"
+              },
+              "Create_Followup_Message": {
+                "runAfter": {
+                  "Update_a_row": [
+                    "Succeeded"
+                  ]
+                },
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "parameters": {
+                    "entityName": "cr_shraga_conversations",
+                    "item/cr_name": "Task queued - card link",
+                    "item/cr_useremail": "@outputs('Get_a_row_by_ID')?['body/crb3b_useremail']",
+                    "item/cr_mcs_conversation_id": "@outputs('Get_a_row_by_ID')?['body/crb3b_mcsconversationid']",
+                    "item/cr_message": "@{concat('Your task is queued! Track progress here: ', outputs('Post_card_in_a_chat_or_channel')?['body/messageLink'])}",
+                    "item/cr_direction": "Outbound",
+                    "item/cr_status": "Unclaimed",
+                    "item/cr_in_reply_to": "",
+                    "item/cr_followup_expected": ""
+                  },
+                  "host": {
+                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+                    "connectionName": "shared_commondataserviceforapps",
+                    "operationId": "CreateRecord"
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
               }
             }
           },
@@ -324,53 +424,6 @@
             ]
           },
           "type": "If"
-        },
-        "Check_Status": {
-          "actions": {
-            "Terminate_Wrong_Status": {
-              "type": "Terminate",
-              "inputs": {
-                "runStatus": "Cancelled"
-              }
-            }
-          },
-          "runAfter": {
-            "Check_Email": [
-              "Succeeded"
-            ]
-          },
-          "else": {
-            "actions": {}
-          },
-          "expression": {
-            "and": [
-              {
-                "not": {
-                  "or": [
-                    {
-                      "equals": [
-                        "@outputs('Get_a_row_by_ID')?['body/cr_status']",
-                        "Pending"
-                      ]
-                    },
-                    {
-                      "equals": [
-                        "@outputs('Get_a_row_by_ID')?['body/cr_status']",
-                        "Running"
-                      ]
-                    },
-                    {
-                      "equals": [
-                        "@outputs('Get_a_row_by_ID')?['body/cr_status']",
-                        "Queued"
-                      ]
-                    }
-                  ]
-                }
-              }
-            ]
-          },
-          "type": "If"
         }
       },
       "outputs": {}
@@ -394,7 +447,7 @@
         "source": "Embedded",
         "id": "/providers/Microsoft.PowerApps/apis/shared_teams",
         "displayName": "Microsoft Teams",
-        "iconUri": "https://conn-afd-prod-endpoint-bmc9bqahasf3grgk.b01.azurefd.net/releases/v1.0.1787/1.0.1787.4513/teams/icon.png",
+        "iconUri": "https://conn-afd-prod-endpoint-bmc9bqahasf3grgk.b01.azurefd.net/releases/v1.0.1795/1.0.1795.4870/teams/icon.png",
         "brandColor": "",
         "tier": "Standard",
         "apiName": "teams",
@@ -402,7 +455,7 @@
       }
     },
     "createdTime": "2026-02-13T20:13:50.4741319Z",
-    "lastModifiedTime": "2026-02-15T21:03:09.4779139Z",
+    "lastModifiedTime": "2026-02-23T15:26:21.2752788Z",
     "flowSuspensionReason": "None",
     "environment": {
       "name": "8660590d-33ac-ecd8-aef3-e4dd0d6071f4",
@@ -420,9 +473,6 @@
         {
           "type": "OpenApiConnection",
           "swaggerOperationId": "GetItem"
-        },
-        {
-          "type": "If"
         },
         {
           "type": "If"
@@ -451,7 +501,8 @@
           "type": "Compose"
         },
         {
-          "type": "Terminate"
+          "type": "OpenApiConnection",
+          "swaggerOperationId": "CreateRecord"
         },
         {
           "type": "Terminate"
