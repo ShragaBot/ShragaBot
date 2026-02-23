@@ -659,6 +659,33 @@ JSON output:"""
         lines.append(new_entry)
         return "\n".join(line for line in lines if line.strip())
 
+    def _send_heartbeat(self):
+        """Update box heartbeat in crb3b_shragaboxes table."""
+        headers = self._get_headers(content_type="application/json")
+        if not headers:
+            return
+        # Find box by hostname
+        url = (f"{DATAVERSE_URL}/api/data/v9.2/crb3b_shragaboxes"
+               f"?$filter=crb3b_hostname eq '{MACHINE_NAME}'&$select=crb3b_shragaboxid&$top=1")
+        try:
+            r = requests.get(url, headers=headers, timeout=15)
+            if r.status_code != 200:
+                return
+            rows = r.json().get("value", [])
+            if not rows:
+                return
+            box_id = rows[0]["crb3b_shragaboxid"]
+            patch_url = f"{DATAVERSE_URL}/api/data/v9.2/crb3b_shragaboxes({box_id})"
+            from datetime import datetime, timezone
+            now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            requests.patch(patch_url, headers=headers, json={
+                "crb3b_lastheartbeat": now_utc,
+                "crb3b_boxstatus": "active",
+                "crb3b_version": self._my_version or "unknown"
+            }, timeout=15)
+        except Exception:
+            pass  # Non-critical, silently ignore
+
     def send_to_webhook(self, message: str):
         """Send notification message to Dataverse table"""
         headers = self._get_headers(content_type="application/json")
@@ -1543,6 +1570,10 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
         # Send startup notification
         self.send_to_webhook(f"Worker started (v{self._my_version}) on {MACHINE_NAME}")
 
+        # Heartbeat tracking
+        last_heartbeat = 0
+        heartbeat_interval = 300  # 5 minutes
+
         try:
             while True:
                 try:
@@ -1580,6 +1611,15 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                         if should_exit(self._my_version):
                             _log(f"[UPDATE] New release detected. Exiting to restart with new version.")
                             sys.exit(0)
+
+                    # Heartbeat: update box status in DV every 5 minutes
+                    now = time.time()
+                    if now - last_heartbeat >= heartbeat_interval:
+                        try:
+                            self._send_heartbeat()
+                            last_heartbeat = now
+                        except Exception as e:
+                            _log(f"[WARN] Heartbeat failed: {e}")
 
                     # Poll every 10 seconds (autonomous agent takes longer)
                     time.sleep(10)
