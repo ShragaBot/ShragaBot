@@ -1,6 +1,6 @@
 """PM thin wrapper: DV I/O + session persistence + stale detection.
 Claude Code handles all task management autonomously via CLAUDE.md."""
-import requests, json, time, os, sys, subprocess, uuid
+import platform, requests, json, time, os, sys, subprocess, uuid
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from azure.identity import DefaultAzureCredential
@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from version_check import get_my_version, should_exit
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
+os.environ.setdefault('DEVBOX_HOSTNAME', platform.node())
 
 INSTANCE_ID = uuid.uuid4().hex[:8]
 DV_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynamics.com")
