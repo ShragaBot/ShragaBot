@@ -242,10 +242,6 @@ class TaskManager:
         if session_id: cmd.extend(["--resume", session_id])
         cmd.extend(["-p", user_text])
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-        # Inject a fresh DV token so Claude's scripts can auth without needing az CLI
-        dv_token = self.get_token()
-        if dv_token:
-            env["DATAVERSE_TOKEN"] = dv_token
         cwd = self.working_dir if self.working_dir and os.path.isdir(self.working_dir) else None
         # Use Popen so we can kill the process tree on timeout (subprocess.run leaves orphans on Windows)
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
