@@ -99,11 +99,6 @@
                   "type": "Compose",
                   "inputs": "@concat(string(div(div(sub(ticks(utcNow()), ticks(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()))), 10000000), 60)), 'm ', string(mod(div(sub(ticks(utcNow()), ticks(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()))), 10000000), 60)), 's')"
                 },
-                "Compose_LogMessages": {
-                  "runAfter": {},
-                  "type": "Compose",
-                  "inputs": "@coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_messages'], 'Task canceled by user')"
-                },
                 "Compose_FullCard": {
                   "runAfter": {
                     "Compose_TaskTitle": [
@@ -196,7 +191,7 @@
       }
     },
     "createdTime": "2026-02-15T08:18:22.119274Z",
-    "lastModifiedTime": "2026-02-23T19:46:20.8401708Z",
+    "lastModifiedTime": "2026-02-23T21:06:59.656826Z",
     "flowSuspensionReason": "None",
     "environment": {
       "name": "8660590d-33ac-ecd8-aef3-e4dd0d6071f4",
