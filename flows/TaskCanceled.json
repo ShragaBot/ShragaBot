@@ -47,7 +47,7 @@
             "parameters": {
               "entityName": "cr_shraga_tasks",
               "recordId": "@triggerOutputs()?['body/cr_shraga_taskid']",
-              "$select": "cr_shraga_taskid,cr_prompt,cr_status,crb3b_useremail,crb3b_runningmessageid,crb3b_runningchatid,crb3b_onedriveurl,crb3b_shortdescription,createdon,crb3b_messages"
+              "$select": "cr_shraga_taskid,cr_prompt,cr_status,crb3b_useremail,crb3b_runningmessageid,crb3b_runningchatid,crb3b_onedriveurl,crb3b_shortdescription,createdon"
             },
             "host": {
               "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
@@ -196,7 +196,7 @@
       }
     },
     "createdTime": "2026-02-15T08:18:22.119274Z",
-    "lastModifiedTime": "2026-02-23T19:23:57.7095412Z",
+    "lastModifiedTime": "2026-02-23T19:46:20.8401708Z",
     "flowSuspensionReason": "None",
     "environment": {
       "name": "8660590d-33ac-ecd8-aef3-e4dd0d6071f4",

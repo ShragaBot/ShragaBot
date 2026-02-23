@@ -762,14 +762,27 @@ STALE_TASK_2 = {
 }
 
 
+STALE_CANCELING_TASK = {
+    "cr_shraga_taskid": "stale-task-0001-0002-0003-canceling-001",
+    "cr_name": "Stale canceling task",
+    "cr_prompt": "task stuck in canceling",
+    "cr_status": "Canceling",
+    "cr_result": "",
+    "crb3b_useremail": "testuser@example.com",
+    "modifiedon": "2026-02-15T07:30:00Z",
+}
+
+
 class TestSweepStaleTasks:
     @patch("task_manager.requests.patch")
     @patch("task_manager.requests.get")
     def test_sweep_stale_tasks_marks_failed(self, mock_get, mock_patch, manager):
         """sweep_stale_tasks marks Running tasks with stale modifiedon as Failed."""
-        mock_get.return_value = FakeResponse(
-            json_data={"value": [STALE_TASK_1, STALE_TASK_2]}
-        )
+        def get_side_effect(url, **kwargs):
+            if "cr_status eq 5" in url:
+                return FakeResponse(json_data={"value": [STALE_TASK_1, STALE_TASK_2]})
+            return FakeResponse(json_data={"value": []})
+        mock_get.side_effect = get_side_effect
         mock_patch.return_value = FakeResponse(status_code=204)
 
         count = manager.sweep_stale_tasks()
@@ -792,23 +805,73 @@ class TestSweepStaleTasks:
 
     @patch("task_manager.requests.patch")
     @patch("task_manager.requests.get")
+    def test_sweep_stale_canceling_tasks(self, mock_get, mock_patch, manager):
+        """sweep_stale_tasks marks Canceling tasks stuck for 30+ min as Canceled."""
+        def get_side_effect(url, **kwargs):
+            if "cr_status eq 11" in url:
+                return FakeResponse(json_data={"value": [STALE_CANCELING_TASK]})
+            return FakeResponse(json_data={"value": []})
+        mock_get.side_effect = get_side_effect
+        mock_patch.return_value = FakeResponse(status_code=204)
+
+        count = manager.sweep_stale_tasks()
+
+        assert count == 1
+        assert mock_patch.call_count == 1
+
+        body = mock_patch.call_args[1]["json"]
+        assert body["cr_status"] == 9  # Canceled
+        assert "stuck in Canceling" in body["cr_result"]
+
+        patched_url = mock_patch.call_args[0][0]
+        assert "canceling-001" in patched_url
+
+    @patch("task_manager.requests.patch")
+    @patch("task_manager.requests.get")
+    def test_sweep_stale_tasks_both_running_and_canceling(self, mock_get, mock_patch, manager):
+        """sweep_stale_tasks handles both Running and Canceling stale tasks."""
+        def get_side_effect(url, **kwargs):
+            if "cr_status eq 5" in url:
+                return FakeResponse(json_data={"value": [STALE_TASK_1]})
+            elif "cr_status eq 11" in url:
+                return FakeResponse(json_data={"value": [STALE_CANCELING_TASK]})
+            return FakeResponse(json_data={"value": []})
+        mock_get.side_effect = get_side_effect
+        mock_patch.return_value = FakeResponse(status_code=204)
+
+        count = manager.sweep_stale_tasks()
+
+        assert count == 2
+        assert mock_patch.call_count == 2
+
+        # Verify both types of patches happened
+        bodies = [c[1]["json"] for c in mock_patch.call_args_list]
+        statuses = {b["cr_status"] for b in bodies}
+        assert 8 in statuses  # Failed (from Running)
+        assert 9 in statuses  # Canceled (from Canceling)
+
+    @patch("task_manager.requests.patch")
+    @patch("task_manager.requests.get")
     def test_sweep_stale_tasks_ignores_recent(self, mock_get, mock_patch, manager):
         mock_get.return_value = FakeResponse(json_data={"value": []})
         count = manager.sweep_stale_tasks()
         assert count == 0
         assert mock_patch.call_count == 0
 
-        url = mock_get.call_args[0][0]
-        assert "cr_status eq 5" in url
-        assert "modifiedon lt" in url
+        # Both Running and Canceling queries should be made
+        get_urls = [c[0][0] for c in mock_get.call_args_list]
+        assert any("cr_status eq 5" in u for u in get_urls)
+        assert any("cr_status eq 11" in u for u in get_urls)
+        assert all("modifiedon lt" in u for u in get_urls)
 
     @patch("task_manager.requests.patch")
     @patch("task_manager.requests.get")
     def test_sweep_stale_tasks_filters_by_user(self, mock_get, mock_patch, manager):
         mock_get.return_value = FakeResponse(json_data={"value": []})
         manager.sweep_stale_tasks()
-        url = mock_get.call_args[0][0]
-        assert "crb3b_useremail eq 'testuser@example.com'" in url
+        for call in mock_get.call_args_list:
+            url = call[0][0]
+            assert "crb3b_useremail eq 'testuser@example.com'" in url
 
     @patch("task_manager.requests.get")
     def test_sweep_stale_tasks_handles_query_error(self, mock_get, manager):
