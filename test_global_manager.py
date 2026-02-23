@@ -133,112 +133,120 @@ class TestNoToolWrapperCode:
 # Acceptance Criterion 2: Claude --resume with session persistence
 # ============================================================================
 
+def _make_popen_mock(stdout="", stderr="", returncode=0):
+    """Helper: create a mock subprocess.Popen that returns given stdout/stderr via communicate()."""
+    proc = MagicMock()
+    proc.communicate.return_value = (stdout, stderr)
+    proc.returncode = returncode
+    proc.kill = MagicMock()
+    return proc
+
+
 class TestClaudeCodeInvocation:
     """Verify Claude Code is called with --resume and session ID."""
 
-    @patch("global_manager.subprocess.run")
-    def test_call_claude_code_uses_resume_flag(self, mock_run, manager):
+    @patch("global_manager.subprocess.Popen")
+    def test_call_claude_code_uses_resume_flag(self, mock_popen, manager):
         """Claude Code must be called with --resume {session_id}."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps({"result": "Hello! How can I help?", "session_id": "abc123session"}), stderr=""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({"result": "Hello! How can I help?", "session_id": "abc123session"})
         )
         result, sid = manager._call_claude_code("Hello", session_id="abc123session")
 
         assert result == "Hello! How can I help?"
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_popen.call_args[0][0]
         assert "--resume" in cmd
         assert "abc123session" in cmd
         assert "--print" in cmd
         assert "-p" in cmd
 
-    @patch("global_manager.subprocess.run")
-    def test_call_claude_code_passes_message(self, mock_run, manager):
+    @patch("global_manager.subprocess.Popen")
+    def test_call_claude_code_passes_message(self, mock_popen, manager):
         """The user message is passed via -p flag."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps({"result": 'Response text', "session_id": "sess-1"}), stderr=""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({"result": 'Response text', "session_id": "sess-1"})
         )
         manager._call_claude_code("What is Shraga?")
 
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_popen.call_args[0][0]
         # -p flag should be followed by the message
         p_idx = cmd.index("-p")
         assert cmd[p_idx + 1] == "What is Shraga?"
 
-    @patch("global_manager.subprocess.run")
-    def test_call_claude_code_strips_claudecode_env(self, mock_run, manager):
+    @patch("global_manager.subprocess.Popen")
+    def test_call_claude_code_strips_claudecode_env(self, mock_popen, manager):
         """CLAUDECODE env var must be stripped to avoid nested session errors."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps({"result": 'ok', "session_id": "sess-1"}), stderr=""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({"result": 'ok', "session_id": "sess-1"})
         )
         manager._call_claude_code("test")
 
-        call_kwargs = mock_run.call_args[1]
+        call_kwargs = mock_popen.call_args[1]
         env = call_kwargs.get("env", {})
         assert "CLAUDECODE" not in env
 
-    @patch("global_manager.subprocess.run")
-    def test_call_claude_code_uses_dangerously_skip_permissions(self, mock_run, manager):
+    @patch("global_manager.subprocess.Popen")
+    def test_call_claude_code_uses_dangerously_skip_permissions(self, mock_popen, manager):
         """Must include --dangerously-skip-permissions flag."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps({"result": 'ok', "session_id": "sess-1"}), stderr=""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({"result": 'ok', "session_id": "sess-1"})
         )
         manager._call_claude_code("test")
 
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_popen.call_args[0][0]
         assert "--dangerously-skip-permissions" in cmd
 
-    @patch("global_manager.subprocess.run")
-    def test_call_claude_code_handles_failure(self, mock_run, manager):
+    @patch("global_manager.subprocess.Popen")
+    def test_call_claude_code_handles_failure(self, mock_popen, manager):
         """Returns None when Claude Code fails (non-zero exit)."""
-        mock_run.return_value = MagicMock(
-            returncode=1, stdout="", stderr="Error: something broke"
+        mock_popen.return_value = _make_popen_mock(
+            returncode=1, stderr="Error: something broke"
         )
         result, sid = manager._call_claude_code("test")
         assert result is None
 
-    @patch("global_manager.subprocess.run")
-    def test_call_claude_code_handles_timeout(self, mock_run, manager):
+    @patch("global_manager.subprocess.Popen")
+    def test_call_claude_code_handles_timeout(self, mock_popen, manager):
         """Returns None on subprocess timeout."""
         import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=120)
+        proc = _make_popen_mock()
+        proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=120)
+        mock_popen.return_value = proc
         result, sid = manager._call_claude_code("test")
         assert result is None
 
-    @patch("global_manager.subprocess.run")
-    def test_call_claude_code_handles_not_found(self, mock_run, manager):
+    @patch("global_manager.subprocess.Popen")
+    def test_call_claude_code_handles_not_found(self, mock_popen, manager):
         """Returns None when claude CLI is not found."""
-        mock_run.side_effect = FileNotFoundError("claude not found")
+        mock_popen.side_effect = FileNotFoundError("claude not found")
         result, sid = manager._call_claude_code("test")
         assert result is None
 
-    @patch("global_manager.subprocess.run")
-    def test_call_claude_code_handles_empty_output(self, mock_run, manager):
+    @patch("global_manager.subprocess.Popen")
+    def test_call_claude_code_handles_empty_output(self, mock_popen, manager):
         """Returns None when Claude Code returns empty output."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="", stderr=""
-        )
+        mock_popen.return_value = _make_popen_mock(stdout="")
         result, sid = manager._call_claude_code("test")
         assert result is None
 
-    @patch("global_manager.subprocess.run")
-    def test_call_claude_code_encoding_params(self, mock_run, manager):
+    @patch("global_manager.subprocess.Popen")
+    def test_call_claude_code_encoding_params(self, mock_popen, manager):
         """Must use encoding='utf-8' and errors='replace' for Unicode safety."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps({"result": 'ok', "session_id": "sess-1"}), stderr=""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({"result": 'ok', "session_id": "sess-1"})
         )
         manager._call_claude_code("test")
 
-        call_kwargs = mock_run.call_args[1]
+        call_kwargs = mock_popen.call_args[1]
         assert call_kwargs.get("encoding") == "utf-8"
         assert call_kwargs.get("errors") == "replace"
-        assert call_kwargs.get("text") is True
 
-    @patch("global_manager.subprocess.run")
-    def test_call_claude_code_handles_non_ascii(self, mock_run, manager):
+    @patch("global_manager.subprocess.Popen")
+    def test_call_claude_code_handles_non_ascii(self, mock_popen, manager):
         """Claude may return emojis/non-ASCII; must not crash."""
         non_ascii = "Hello! \U0001f44d Great job \u2014 devbox ready \u2705"
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps({"result": non_ascii, "session_id": "sess-1"}), stderr=""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({"result": non_ascii, "session_id": "sess-1"})
         )
         result, sid = manager._call_claude_code("test")
         assert result == non_ascii
@@ -271,13 +279,14 @@ class TestSessionPersistence:
 
         # Create a new SessionManager instance (simulates restart)
         mgr2 = SessionManager(sessions_file=sessions_file)
-        sid2 = mgr2.get_or_create("conv-persist", "user@test.com")
+        entry = mgr2.get_session("conv-persist")
 
-        assert sid == sid2, "Session ID must be the same after restart"
+        assert entry is not None
+        assert entry["session_id"] == "real-session-id-persist", "Session ID must be the same after restart"
 
     def test_session_entry_has_required_fields(self, session_mgr):
         """Each session entry must have session_id, created_at, last_used, user_email."""
-        session_mgr.get_or_create("conv-fields", "fieldtest@test.com")
+        session_mgr.save_session("conv-fields", "session-fields-1", "fieldtest@test.com")
         entry = session_mgr.get_session("conv-fields")
         assert entry is not None
         assert "session_id" in entry
@@ -291,7 +300,7 @@ class TestSessionPersistence:
         from global_manager import SessionManager
         deep_path = tmp_path / "a" / "b" / "c" / "sessions.json"
         mgr = SessionManager(sessions_file=deep_path)
-        mgr.get_or_create("conv-deep", "user@test.com")
+        mgr.save_session("conv-deep", "session-deep-1", "user@test.com")
         assert deep_path.exists()
 
     def test_load_handles_corrupt_file(self, sessions_file):
@@ -311,9 +320,11 @@ class TestSessionPersistence:
 
     def test_multiple_conversations_tracked(self, session_mgr):
         """Multiple conversations get unique session IDs."""
-        sid1 = session_mgr.get_or_create("conv-a", "alice@test.com")
-        sid2 = session_mgr.get_or_create("conv-b", "bob@test.com")
-        assert sid1 != sid2
+        session_mgr.save_session("conv-a", "session-a-1", "alice@test.com")
+        session_mgr.save_session("conv-b", "session-b-1", "bob@test.com")
+        entry_a = session_mgr.get_session("conv-a")
+        entry_b = session_mgr.get_session("conv-b")
+        assert entry_a["session_id"] != entry_b["session_id"]
         assert len(session_mgr.sessions) == 2
 
 
@@ -342,7 +353,7 @@ class TestSessionExpiry:
 
     def test_cleanup_keeps_fresh_sessions(self, session_mgr):
         """Sessions within the expiry window are kept."""
-        session_mgr.get_or_create("fresh-conv", "fresh@test.com")
+        session_mgr.save_session("fresh-conv", "fresh-session-1", "fresh@test.com")
         removed = session_mgr.cleanup_expired(max_age_hours=24)
         assert removed == 0
         assert "fresh-conv" in session_mgr.sessions
@@ -356,7 +367,7 @@ class TestSessionExpiry:
             "last_used": old_time,
             "user_email": "old@test.com",
         }
-        session_mgr.get_or_create("new-conv", "new@test.com")
+        session_mgr.save_session("new-conv", "new-session-1", "new@test.com")
         session_mgr._save()
 
         removed = session_mgr.cleanup_expired(max_age_hours=24)
@@ -386,7 +397,7 @@ class TestSessionExpiry:
             "last_used": old_time,
             "user_email": "expired@test.com",
         }
-        session_mgr.get_or_create("active-conv", "active@test.com")
+        session_mgr.save_session("active-conv", "active-session-1", "active@test.com")
         session_mgr._save()
 
         session_mgr.cleanup_expired(max_age_hours=24)
@@ -399,7 +410,7 @@ class TestSessionExpiry:
 
     def test_last_used_updates_on_access(self, session_mgr):
         """Accessing an existing session updates last_used timestamp."""
-        sid = session_mgr.get_or_create("conv-access", "user@test.com")
+        session_mgr.save_session("conv-access", "session-access-1", "user@test.com")
         entry1 = session_mgr.get_session("conv-access")
         first_used = entry1["last_used"]
 
@@ -407,16 +418,15 @@ class TestSessionExpiry:
         import time
         time.sleep(0.01)
 
-        sid2 = session_mgr.get_or_create("conv-access", "user@test.com")
         entry2 = session_mgr.get_session("conv-access")
 
-        assert sid == sid2, "Same conversation must get same session"
+        assert entry2["session_id"] == "session-access-1", "Same conversation must get same session"
         assert entry2["last_used"] >= first_used
 
     def test_cleanup_no_expired_returns_zero(self, session_mgr):
         """When no sessions are expired, cleanup returns 0."""
-        session_mgr.get_or_create("fresh-1", "a@test.com")
-        session_mgr.get_or_create("fresh-2", "b@test.com")
+        session_mgr.save_session("fresh-1", "session-fresh-1", "a@test.com")
+        session_mgr.save_session("fresh-2", "session-fresh-2", "b@test.com")
         removed = session_mgr.cleanup_expired(max_age_hours=24)
         assert removed == 0
 
@@ -432,16 +442,16 @@ class TestClaudeMdUsage:
         """No _build_system_prompt method should exist."""
         assert not hasattr(manager, "_build_system_prompt")
 
-    def test_claude_md_exists(self):
-        """CLAUDE.md must exist in the global-manager directory."""
-        claude_md = Path(__file__).parent / "global-manager" / "CLAUDE.md"
-        assert claude_md.exists(), f"CLAUDE.md not found at {claude_md}"
+    def test_system_prompt_exists(self):
+        """GM_SYSTEM_PROMPT.md must exist in the global-manager directory."""
+        prompt_file = Path(__file__).parent / "global-manager" / "GM_SYSTEM_PROMPT.md"
+        assert prompt_file.exists(), f"GM_SYSTEM_PROMPT.md not found at {prompt_file}"
 
-    def test_claude_md_has_content(self):
-        """CLAUDE.md must have meaningful content (not empty)."""
-        claude_md = Path(__file__).parent / "global-manager" / "CLAUDE.md"
-        content = claude_md.read_text(encoding="utf-8")
-        assert len(content) > 100, "CLAUDE.md should have substantial content"
+    def test_system_prompt_has_content(self):
+        """GM_SYSTEM_PROMPT.md must have meaningful content (not empty)."""
+        prompt_file = Path(__file__).parent / "global-manager" / "GM_SYSTEM_PROMPT.md"
+        content = prompt_file.read_text(encoding="utf-8")
+        assert len(content) > 100, "GM_SYSTEM_PROMPT.md should have substantial content"
         assert "Global Manager" in content
 
 
@@ -612,7 +622,7 @@ class TestProcessMessage:
         mock_post.return_value = FakeResponse(json_data={})
         mock_patch.return_value = FakeResponse(status_code=204)
 
-        with patch.object(manager, "_call_claude_code", return_value="Hello! I can help you."):
+        with patch.object(manager, "_call_claude_code", return_value=("Hello! I can help you.", "sess-1")):
             manager.process_message(SAMPLE_STALE_MSG)
 
         body = mock_post.call_args[1]["json"]
@@ -625,7 +635,7 @@ class TestProcessMessage:
         mock_post.return_value = FakeResponse(json_data={})
         mock_patch.return_value = FakeResponse(status_code=204)
 
-        with patch.object(manager, "_call_claude_code", return_value=None):
+        with patch.object(manager, "_call_claude_code", return_value=(None, "")):
             manager.process_message(SAMPLE_STALE_MSG)
 
         body = mock_post.call_args[1]["json"]
@@ -646,7 +656,7 @@ class TestProcessMessage:
         mock_post.return_value = FakeResponse(json_data={})
         mock_patch.return_value = FakeResponse(status_code=204)
 
-        with patch.object(manager, "_call_claude_code", return_value="Hi!"):
+        with patch.object(manager, "_call_claude_code", return_value=("Hi!", "sess-hi")):
             manager.process_message(SAMPLE_STALE_MSG)
 
         session = manager.session_manager.get_session(SAMPLE_MCS_CONV_ID)
@@ -660,11 +670,11 @@ class TestProcessMessage:
         mock_post.return_value = FakeResponse(json_data={})
         mock_patch.return_value = FakeResponse(status_code=204)
 
-        session_ids = []
+        session_ids_passed = []
 
-        def capture_session(session_id, prompt):
-            session_ids.append(session_id)
-            return "Response"
+        def capture_session(prompt, session_id=None):
+            session_ids_passed.append(session_id)
+            return ("Response", "sess-reuse")
 
         with patch.object(manager, "_call_claude_code", side_effect=capture_session):
             manager.process_message(SAMPLE_STALE_MSG)
@@ -672,8 +682,10 @@ class TestProcessMessage:
             msg2 = {**SAMPLE_STALE_MSG, "cr_shraga_conversationid": "conv-0002"}
             manager.process_message(msg2)
 
-        assert len(session_ids) == 2
-        assert session_ids[0] == session_ids[1], "Same conversation should reuse session"
+        assert len(session_ids_passed) == 2
+        # First call has no session, second call reuses the session saved from first call
+        assert session_ids_passed[0] is None
+        assert session_ids_passed[1] == "sess-reuse"
 
     @patch("global_manager.requests.post")
     @patch("global_manager.requests.patch")
@@ -682,11 +694,11 @@ class TestProcessMessage:
         mock_post.return_value = FakeResponse(json_data={})
         mock_patch.return_value = FakeResponse(status_code=204)
 
-        session_ids = []
+        call_counter = {"n": 0}
 
-        def capture_session(session_id, prompt):
-            session_ids.append(session_id)
-            return "Response"
+        def capture_session(prompt, session_id=None):
+            call_counter["n"] += 1
+            return ("Response", f"sess-{call_counter['n']}")
 
         with patch.object(manager, "_call_claude_code", side_effect=capture_session):
             manager.process_message(SAMPLE_STALE_MSG)
@@ -697,8 +709,11 @@ class TestProcessMessage:
             }
             manager.process_message(msg2)
 
-        assert len(session_ids) == 2
-        assert session_ids[0] != session_ids[1], "Different conversations must use different sessions"
+        # Verify different conversations got different sessions stored
+        sess1 = manager.session_manager.get_session(SAMPLE_MCS_CONV_ID)
+        sess2 = manager.session_manager.get_session("mcs-conv-different")
+        assert sess1 is not None and sess2 is not None
+        assert sess1["session_id"] != sess2["session_id"], "Different conversations must use different sessions"
 
     @patch("global_manager.requests.post")
     @patch("global_manager.requests.patch")
@@ -709,9 +724,9 @@ class TestProcessMessage:
 
         captured_prompts = []
 
-        def capture_prompt(session_id, prompt):
+        def capture_prompt(prompt, session_id=None):
             captured_prompts.append(prompt)
-            return "Response"
+            return ("Response", "sess-ctx")
 
         with patch.object(manager, "_call_claude_code", side_effect=capture_prompt):
             manager.process_message(SAMPLE_STALE_MSG)
@@ -730,7 +745,7 @@ class TestProcessMessage:
         mock_post.return_value = FakeResponse(json_data={})
         mock_patch.return_value = FakeResponse(status_code=204)
 
-        with patch.object(manager, "_call_claude_code", return_value="Done"):
+        with patch.object(manager, "_call_claude_code", return_value=("Done", "sess-done")):
             manager.process_message(SAMPLE_STALE_MSG)
 
         # Find the PATCH call that sets status to Processed
@@ -978,18 +993,18 @@ class TestSessionManagerEdgeCases:
 
     def test_sessions_property_returns_copy(self, session_mgr):
         """The sessions property should return a copy, not a reference."""
-        session_mgr.get_or_create("conv-1", "a@test.com")
+        session_mgr.save_session("conv-1", "session-copy-1", "a@test.com")
         sessions = session_mgr.sessions
         sessions["conv-1"]["hacked"] = True
         # Original should not be affected
         assert "hacked" not in session_mgr._sessions["conv-1"]
 
-    def test_session_id_is_hex_string(self, session_mgr):
-        """Session IDs should be hex strings (UUID without dashes)."""
-        sid = session_mgr.get_or_create("conv-hex", "user@test.com")
-        assert isinstance(sid, str)
-        assert len(sid) == 32  # uuid4().hex is 32 chars
-        int(sid, 16)  # Should not raise if valid hex
+    def test_session_id_stored_correctly(self, session_mgr):
+        """Session IDs are stored and retrieved correctly."""
+        session_mgr.save_session("conv-hex", "abc123def456", "user@test.com")
+        entry = session_mgr.get_session("conv-hex")
+        assert entry is not None
+        assert entry["session_id"] == "abc123def456"
 
     def test_cleanup_empty_sessions(self, session_mgr):
         """Cleanup on empty sessions should return 0."""

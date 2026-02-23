@@ -34,19 +34,23 @@ from version_check import get_my_version, should_exit
 
 MACHINE_NAME = platform.node()  # This dev box's hostname
 
-# Status labels (used in PATCH/POST bodies -- DV accepts string labels)
 # Status labels used in PATCH/POST bodies (Dataverse accepts string labels)
+STATUS_SUBMITTED = "Submitted"
 STATUS_PENDING = "Pending"
-STATUS_QUEUED = "Queued"
 STATUS_RUNNING = "Running"
-STATUS_WAITING_FOR_INPUT = "WaitingForInput"
 STATUS_COMPLETED = "Completed"
 STATUS_FAILED = "Failed"
 STATUS_CANCELED = "Canceled"
+STATUS_CANCELING = "Canceling"
+
+# Deprecated but kept for historical DV rows:
+# STATUS_QUEUED = "Queued"        # Was 3, replaced by open competition
+# STATUS_WAITING_FOR_INPUT = "WaitingForInput"  # Was 6, never used as intended
 
 # Integer picklist values for OData $filter expressions (DV requires integers in filters)
-_STATUS_INT = {"Pending": 1, "Queued": 3, "Running": 5, "WaitingForInput": 6,
-               "Completed": 7, "Failed": 8, "Canceled": 9}
+_STATUS_INT = {"Submitted": 10, "Pending": 1, "Running": 5,
+               "Completed": 7, "Failed": 8, "Canceled": 9, "Canceling": 11,
+               "Queued": 3, "WaitingForInput": 6}  # last two kept for historical rows
 
 def format_session_numbers(stats: dict) -> str:
     """Format accumulated session stats into a one-line summary string.
@@ -282,12 +286,12 @@ class IntegratedTaskWorker:
 
         url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}"
 
-        # Filter for pending tasks assigned to this dev box or unassigned
-        # Support GUID, email in cr_userid, or email in crb3b_useremail
+        # Filter for Pending tasks with no devbox assigned (open competition).
+        # Workers compete for any of this user's unclaimed tasks.
         filter_parts = [
             f"cr_status eq {_STATUS_INT[STATUS_PENDING]}",
             f"(cr_userid eq '{self.current_user_id}' or cr_userid eq '{WEBHOOK_USER}' or crb3b_useremail eq '{WEBHOOK_USER}' or crb3b_useremail eq null)",
-            f"(crb3b_devbox eq '{MACHINE_NAME}' or crb3b_devbox eq null)"
+            f"crb3b_devbox eq null"
         ]
 
         params = {
@@ -307,39 +311,6 @@ class IntegratedTaskWorker:
         except Exception as e:
             print(f"[ERROR] Polling tasks: {e}")
             return []
-
-    def is_devbox_busy(self):
-        """Check if this dev box already has a running task.
-
-        Queries Dataverse for tasks on this machine with status Running.
-        Returns True if busy, False if free.
-        """
-        headers = self._get_headers()
-        if not headers:
-            return False  # Fail open -- allow pickup if we can't check
-
-        url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}"
-        params = {
-            "$filter": f"crb3b_devbox eq '{MACHINE_NAME}' and cr_status eq {_STATUS_INT[STATUS_RUNNING]}",
-            "$top": 1,
-            "$select": "cr_shraga_taskid"
-        }
-
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            data = response.json()
-            tasks = data.get("value", [])
-            if tasks:
-                print(f"[BUSY] Dev box {MACHINE_NAME} already has a running task: {tasks[0].get('cr_shraga_taskid', '?')}")
-                return True
-            return False
-        except requests.exceptions.Timeout:
-            print(f"[WARN] is_devbox_busy check timed out")
-            return False
-        except Exception as e:
-            print(f"[WARN] is_devbox_busy check failed: {e}")
-            return False
 
     def claim_task(self, task: dict) -> bool:
         """Atomically claim a task using ETag optimistic concurrency.
@@ -366,6 +337,7 @@ class IntegratedTaskWorker:
             body = {
                 "cr_status": _STATUS_INT[STATUS_RUNNING],
                 "cr_statusmessage": f"Claimed by {MACHINE_NAME}",
+                "crb3b_devbox": MACHINE_NAME,
             }
             response = requests.patch(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
             if response.status_code == 412:
@@ -383,9 +355,10 @@ class IntegratedTaskWorker:
             return False
 
     def is_task_canceled(self, task_id: str) -> bool:
-        """Check if a task has been canceled in Dataverse.
+        """Check if a task has been canceled or is being canceled in Dataverse.
 
-        Called periodically during task execution to support cancellation.
+        Called periodically during task execution to support cooperative cancellation.
+        Returns True for both Canceling(11) and Canceled(9) states.
         """
         if not task_id:
             return False
@@ -400,79 +373,16 @@ class IntegratedTaskWorker:
             resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
             if resp.status_code == 200:
                 status = resp.json().get("cr_status")
-                if status == _STATUS_INT[STATUS_CANCELED] or status == STATUS_CANCELED:
-                    print(f"[CANCEL] Task {task_id[:8]} has been canceled")
+                cancel_values = {
+                    _STATUS_INT[STATUS_CANCELED], _STATUS_INT[STATUS_CANCELING],
+                    STATUS_CANCELED, STATUS_CANCELING,
+                }
+                if status in cancel_values:
+                    print(f"[CANCEL] Task {task_id[:8]} has been canceled (status={status})")
                     return True
             return False
         except Exception:
             return False
-
-    def queue_task(self, task: dict) -> bool:
-        """Set a task to Queued status when this dev box is busy.
-
-        Returns True on success, False on failure.
-        """
-        task_id = task.get("cr_shraga_taskid")
-        if not task_id:
-            return False
-
-        headers = self._get_headers(content_type="application/json")
-        if not headers:
-            return False
-
-        try:
-            url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}({task_id})"
-            body = {
-                "cr_status": _STATUS_INT[STATUS_QUEUED],
-                "cr_statusmessage": f"Queued on {MACHINE_NAME} -- waiting for current task to finish",
-            }
-            response = requests.patch(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            print(f"[QUEUED] Task {task_id} queued on {MACHINE_NAME}")
-            return True
-        except requests.exceptions.Timeout:
-            print(f"[WARN] queue_task timed out for {task_id}")
-            return False
-        except Exception as e:
-            print(f"[ERROR] queue_task: {e}")
-            return False
-
-    def promote_queued_tasks(self):
-        """After completing a task, promote any Queued tasks on this dev box back to Pending.
-
-        Promotes the oldest queued task so the next poll cycle picks it up.
-        """
-        headers = self._get_headers()
-        if not headers:
-            return
-
-        url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}"
-        params = {
-            "$filter": f"crb3b_devbox eq '{MACHINE_NAME}' and cr_status eq {_STATUS_INT[STATUS_QUEUED]}",
-            "$orderby": "createdon asc",
-            "$top": 1,
-            "$select": "cr_shraga_taskid"
-        }
-
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            data = response.json()
-            tasks = data.get("value", [])
-
-            if tasks:
-                queued_task_id = tasks[0].get("cr_shraga_taskid")
-                if queued_task_id:
-                    self.update_task(
-                        queued_task_id,
-                        status=STATUS_PENDING,
-                        status_message="Promoted from Queued -- dev box is now free"
-                    )
-                    print(f"[PROMOTE] Promoted queued task {queued_task_id} to Pending")
-        except requests.exceptions.Timeout:
-            print(f"[WARN] promote_queued_tasks timed out")
-        except Exception as e:
-            print(f"[WARN] promote_queued_tasks failed: {e}")
 
     def update_task(self, task_id: str, status: str = None,
                     status_message: str = None, result: str = None,
@@ -1330,29 +1240,20 @@ JSON output:"""
                 self.update_task(task_id, transcript=transcript)
 
                 if status == "blocked":
-                    # Task needs user input
+                    # Worker is blocked -- fail directly (no WaitingForInput state)
+                    blocked_msg = f"Worker blocked: {output}"
                     transcript = self.append_to_transcript(
-                        transcript,
-                        "system",
-                        f"Worker blocked: {output}"
+                        transcript, "system", blocked_msg
                     )
-
                     self.update_task(
                         task_id,
-                        status=STATUS_WAITING_FOR_INPUT,
-                        status_message=f"Blocked: {output}",
+                        status=STATUS_FAILED,
+                        status_message=blocked_msg,
                         transcript=transcript
                     )
-
-                    self.send_to_webhook(
-                        f"Worker blocked\nReason: {output}\n\nWaiting for user input..."
-                    )
-
-                    # Write summary for blocked/failed terminal state
-                    _finalize_summary("failed", f"Blocked: {output}")
-
-                    # For now, fail the task - in production, wait for user response
-                    return False, f"Blocked: {output}", transcript, accumulated_stats
+                    self.send_to_webhook(blocked_msg)
+                    _finalize_summary("failed", blocked_msg)
+                    return False, blocked_msg, transcript, accumulated_stats
 
                 elif status == "done":
                     # Check for cancellation before verification
@@ -1463,12 +1364,6 @@ JSON output:"""
         print(f"[ID] {task_id}")
         print(f"{'='*80}")
 
-        # Check if dev box is already running a task
-        if self.is_devbox_busy():
-            print(f"[QUEUE] Dev box {MACHINE_NAME} is busy, queuing task {task_id}")
-            self.queue_task(task)
-            return False
-
         # Atomically claim the task using ETag (prevents double-pickup)
         if not self.claim_task(task):
             print(f"[SKIP] Could not claim task {task_id}, moving on")
@@ -1551,10 +1446,6 @@ Full details saved in Dataverse (Task ID: {task_id}){git_info}"""
 
             print(f"[TASK] Completed: {task_name}\n")
             self.current_task_id = None
-
-            # Promote any queued tasks on this dev box now that we're free
-            self.promote_queued_tasks()
-
             return True
         else:
             self.update_task(
@@ -1577,10 +1468,6 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
 
             print(f"[TASK] Failed: {task_name}\n")
             self.current_task_id = None
-
-            # Promote any queued tasks on this dev box now that we're free
-            self.promote_queued_tasks()
-
             return False
 
     def run(self):
@@ -1644,22 +1531,11 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                                     self.send_to_webhook(f"Task failed with unhandled error: {e}")
                                 except Exception:
                                     pass
-                                # Promote any queued tasks even after failure
-                                try:
-                                    self.promote_queued_tasks()
-                                except Exception:
-                                    pass
                     else:
                         # IDLE - Check if a new release is available
                         if should_exit(self._my_version):
                             print(f"[UPDATE] New release detected. Exiting to restart with new version.")
                             sys.exit(0)
-
-                    # Promote queued tasks after each iteration
-                    try:
-                        self.promote_queued_tasks()
-                    except Exception as e:
-                        print(f"[ERROR] Error promoting queued tasks: {e}")
 
                     # Poll every 10 seconds (autonomous agent takes longer)
                     time.sleep(10)

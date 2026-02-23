@@ -106,17 +106,18 @@ class TestStateManagement:
 # ===========================================================================
 
 class TestVersionManagement:
-    """Tests for the release-branch-based auto-update system."""
+    """Tests for the immutable-release version check system."""
 
-    def test_updater_tracks_current_branch(self, monkeypatch, tmp_path):
+    def test_worker_stores_version(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
-        assert worker.updater.current_branch is not None
+        assert worker._my_version is not None
 
-    def test_updater_check_interval(self, monkeypatch, tmp_path):
+    def test_should_exit_false_when_no_version_file(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        worker = mod.IntegratedTaskWorker()
-        assert worker.updater.check_interval.total_seconds() == 600
+        from version_check import should_exit
+        # No current_version.txt exists, so should_exit returns False
+        assert should_exit("v99") is False
 
 
 # ===========================================================================
@@ -151,25 +152,27 @@ class TestGetCurrentUser:
 # check_for_updates
 # ===========================================================================
 
-class TestAutoUpdater:
+class TestVersionCheck:
 
-    def test_worker_has_updater(self, monkeypatch, tmp_path):
+    def test_worker_has_version(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
-        assert hasattr(worker, 'updater')
-        assert worker.updater.check_interval.total_seconds() == 600
+        assert hasattr(worker, '_my_version')
+        assert worker._my_version is not None
 
-    def test_should_check_true_on_first_call(self, monkeypatch, tmp_path):
+    def test_get_my_version_returns_string(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        worker = mod.IntegratedTaskWorker()
-        assert worker.updater.should_check() is True
+        from version_check import get_my_version
+        version = get_my_version(__file__)
+        assert isinstance(version, str)
+        assert len(version) > 0
 
-    def test_should_check_false_after_recent_check(self, monkeypatch, tmp_path):
+    def test_should_exit_matches_same_version(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        from datetime import datetime, timezone
-        worker = mod.IntegratedTaskWorker()
-        worker.updater.last_check = datetime.now(timezone.utc)
-        assert worker.updater.should_check() is False
+        from version_check import should_exit, get_my_version
+        v = get_my_version(__file__)
+        # No version file means should_exit returns False (dev mode)
+        assert should_exit(v) is False
 
 
 # ===========================================================================
@@ -461,11 +464,12 @@ class TestPollPendingTasks:
         worker = mod.IntegratedTaskWorker()
         worker.current_user_id = "user-123"
         worker.poll_pending_tasks()
-        # Verify filter includes devbox filter (this machine or unassigned)
+        # V2: filter uses only crb3b_devbox eq null (no hostname match)
         call_kwargs = mock_get.call_args
         filter_param = call_kwargs[1]["params"]["$filter"]
-        assert "crb3b_devbox eq" in filter_param
         assert "crb3b_devbox eq null" in filter_param
+        # Should NOT contain a hostname match
+        assert f"crb3b_devbox eq '{mod.MACHINE_NAME}'" not in filter_param
 
     @patch("integrated_task_worker.requests.get")
     def test_poll_returns_empty_on_error(self, mock_get, monkeypatch, tmp_path):
@@ -565,13 +569,15 @@ class TestCleanupInProgressTask:
 # check_for_updates uses UPDATE_BRANCH
 # ===========================================================================
 
-class TestAutoUpdaterBranch:
+class TestVersionCheckModule:
 
-    def test_get_current_branch(self, monkeypatch, tmp_path):
+    def test_get_my_version_dev_mode(self, monkeypatch, tmp_path):
+        """In dev mode (not under releases/), returns parent folder name."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        worker = mod.IntegratedTaskWorker()
-        # Should return something (even "unknown" if not in a git repo)
-        assert worker.updater.current_branch is not None
+        from version_check import get_my_version
+        version = get_my_version(__file__)
+        assert isinstance(version, str)
+        assert len(version) > 0
 
 
 # ===========================================================================
@@ -608,11 +614,11 @@ class TestTimeoutHandling:
         result = worker.update_task("task-123", status="Running")
         assert result is False
 
-    def test_worker_has_auto_updater(self, monkeypatch, tmp_path):
+    def test_worker_has_version_check(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
-        assert hasattr(worker, 'updater')
-        assert worker.updater.check_interval.total_seconds() == 600  # 10 minutes
+        assert hasattr(worker, '_my_version')
+        assert worker._my_version is not None
 
 
 # ===========================================================================
@@ -1344,20 +1350,33 @@ class TestFetchTaskActivities:
 
 
 # ===========================================================================
-# STATUS_QUEUED constant
+# V2 status constants
 # ===========================================================================
 
-class TestQueuedStatus:
+class TestV2StatusConstants:
 
-    def test_queued_status_constant_exists(self, monkeypatch, tmp_path):
+    def test_submitted_status_constant(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        assert mod.STATUS_QUEUED == "Queued"
+        assert mod.STATUS_SUBMITTED == "Submitted"
+
+    def test_canceling_status_constant(self, monkeypatch, tmp_path):
+        mod, _ = _import_worker(monkeypatch, tmp_path)
+        assert mod.STATUS_CANCELING == "Canceling"
+
+    def test_submitted_status_int(self, monkeypatch, tmp_path):
+        mod, _ = _import_worker(monkeypatch, tmp_path)
+        assert mod._STATUS_INT["Submitted"] == 10
+
+    def test_canceling_status_int(self, monkeypatch, tmp_path):
+        mod, _ = _import_worker(monkeypatch, tmp_path)
+        assert mod._STATUS_INT["Canceling"] == 11
 
     def test_status_constants_are_strings(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
         assert isinstance(mod.STATUS_PENDING, str)
-        assert isinstance(mod.STATUS_QUEUED, str)
+        assert isinstance(mod.STATUS_SUBMITTED, str)
         assert isinstance(mod.STATUS_RUNNING, str)
+        assert isinstance(mod.STATUS_CANCELING, str)
 
     def test_machine_name_constant_exists(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
@@ -1446,160 +1465,95 @@ class TestClaimTask:
 
 
 # ===========================================================================
-# is_devbox_busy
+# V2: claim_task includes crb3b_devbox
 # ===========================================================================
 
-class TestIsDevboxBusy:
-
-    @patch("integrated_task_worker.requests.get")
-    def test_devbox_busy_when_running_task_exists(self, mock_get, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": [{"cr_shraga_taskid": "running-task-001"}]}
-        )
-        worker = mod.IntegratedTaskWorker()
-        assert worker.is_devbox_busy() is True
-
-    @patch("integrated_task_worker.requests.get")
-    def test_devbox_not_busy_when_no_running_tasks(self, mock_get, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": []}
-        )
-        worker = mod.IntegratedTaskWorker()
-        assert worker.is_devbox_busy() is False
-
-    @patch("integrated_task_worker.requests.get")
-    def test_devbox_busy_filters_by_machine_and_running(self, mock_get, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": []}
-        )
-        worker = mod.IntegratedTaskWorker()
-        worker.is_devbox_busy()
-        call_kwargs = mock_get.call_args
-        filter_param = call_kwargs[1]["params"]["$filter"]
-        assert f"cr_status eq {mod._STATUS_INT[mod.STATUS_RUNNING]}" in filter_param
-        assert "crb3b_devbox eq" in filter_param
-
-    @patch("integrated_task_worker.requests.get")
-    def test_devbox_busy_returns_false_on_timeout(self, mock_get, monkeypatch, tmp_path):
-        """Fail open: if we can't check, allow pickup."""
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        import requests as req_lib
-        mock_get.side_effect = req_lib.exceptions.Timeout("timed out")
-        worker = mod.IntegratedTaskWorker()
-        assert worker.is_devbox_busy() is False
-
-    @patch("integrated_task_worker.requests.get")
-    def test_devbox_busy_returns_false_on_error(self, mock_get, monkeypatch, tmp_path):
-        """Fail open: if we can't check, allow pickup."""
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.side_effect = Exception("Network error")
-        worker = mod.IntegratedTaskWorker()
-        assert worker.is_devbox_busy() is False
-
-
-# ===========================================================================
-# queue_task
-# ===========================================================================
-
-class TestQueueTask:
+class TestClaimTaskDevbox:
 
     @patch("integrated_task_worker.requests.patch")
-    def test_queue_task_success(self, mock_patch, monkeypatch, tmp_path):
+    def test_claim_task_includes_devbox_in_body(self, mock_patch, monkeypatch, tmp_path):
+        """claim_task() PATCH body must include crb3b_devbox = MACHINE_NAME."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
+        mock_patch.return_value = MagicMock(
+            status_code=200,
+            raise_for_status=MagicMock()
+        )
         worker = mod.IntegratedTaskWorker()
-        task = {"cr_shraga_taskid": "task-queue-001"}
-        result = worker.queue_task(task)
+        task = {
+            "cr_shraga_taskid": "task-devbox-001",
+            "@odata.etag": 'W/"77777"',
+        }
+        result = worker.claim_task(task)
         assert result is True
         call_body = mock_patch.call_args[1]["json"]
-        assert call_body["cr_status"] == mod._STATUS_INT[mod.STATUS_QUEUED]
-
-    @patch("integrated_task_worker.requests.patch")
-    def test_queue_task_failure(self, mock_patch, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.side_effect = Exception("Network error")
-        worker = mod.IntegratedTaskWorker()
-        task = {"cr_shraga_taskid": "task-queue-002"}
-        result = worker.queue_task(task)
-        assert result is False
-
-    def test_queue_task_missing_id(self, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        worker = mod.IntegratedTaskWorker()
-        result = worker.queue_task({})
-        assert result is False
-
-    @patch("integrated_task_worker.requests.patch")
-    def test_queue_task_timeout(self, mock_patch, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        import requests as req_lib
-        mock_patch.side_effect = req_lib.exceptions.Timeout("timed out")
-        worker = mod.IntegratedTaskWorker()
-        task = {"cr_shraga_taskid": "task-queue-003"}
-        result = worker.queue_task(task)
-        assert result is False
+        assert call_body["crb3b_devbox"] == mod.MACHINE_NAME
 
 
 # ===========================================================================
-# promote_queued_tasks
+# V2: poll_pending_tasks filter uses crb3b_devbox eq null (no hostname match)
 # ===========================================================================
 
-class TestPromoteQueuedTasks:
-
-    @patch("integrated_task_worker.requests.patch")
-    @patch("integrated_task_worker.requests.get")
-    def test_promote_queued_task_to_pending(self, mock_get, mock_patch, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": [{"cr_shraga_taskid": "queued-task-001"}]}
-        )
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
-        worker = mod.IntegratedTaskWorker()
-        worker.promote_queued_tasks()
-        # Verify update_task was called to set status to Pending
-        call_body = mock_patch.call_args[1]["json"]
-        assert call_body["cr_status"] == mod._STATUS_INT[mod.STATUS_PENDING]
+class TestPollFilterDevboxNull:
 
     @patch("integrated_task_worker.requests.get")
-    def test_promote_no_queued_tasks(self, mock_get, monkeypatch, tmp_path):
+    def test_poll_filter_uses_devbox_null_only(self, mock_get, monkeypatch, tmp_path):
+        """poll_pending_tasks filter should use 'crb3b_devbox eq null' without hostname match."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
         mock_get.return_value = MagicMock(
             raise_for_status=MagicMock(),
             json=lambda: {"value": []}
         )
         worker = mod.IntegratedTaskWorker()
-        # Should not raise or error
-        worker.promote_queued_tasks()
-
-    @patch("integrated_task_worker.requests.get")
-    def test_promote_queries_queued_status(self, mock_get, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": []}
-        )
-        worker = mod.IntegratedTaskWorker()
-        worker.promote_queued_tasks()
+        worker.current_user_id = "user-123"
+        worker.poll_pending_tasks()
         call_kwargs = mock_get.call_args
         filter_param = call_kwargs[1]["params"]["$filter"]
-        assert f"cr_status eq {mod._STATUS_INT[mod.STATUS_QUEUED]}" in filter_param
-        assert "crb3b_devbox eq" in filter_param
+        assert "crb3b_devbox eq null" in filter_param
+        # The filter should NOT contain a hostname match (only null)
+        assert f"crb3b_devbox eq '{mod.MACHINE_NAME}'" not in filter_param
+
+
+# ===========================================================================
+# V2: is_task_canceled checks both Canceling(11) and Canceled(9)
+# ===========================================================================
+
+class TestIsTaskCanceledV2:
 
     @patch("integrated_task_worker.requests.get")
-    def test_promote_handles_timeout(self, mock_get, monkeypatch, tmp_path):
+    def test_is_task_canceled_true_for_canceling(self, mock_get, monkeypatch, tmp_path):
+        """is_task_canceled returns True when status is Canceling (11)."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        import requests as req_lib
-        mock_get.side_effect = req_lib.exceptions.Timeout("timed out")
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"cr_status": mod._STATUS_INT[mod.STATUS_CANCELING]},
+        )
         worker = mod.IntegratedTaskWorker()
-        # Should not raise
-        worker.promote_queued_tasks()
+        result = worker.is_task_canceled("task-canceling-001")
+        assert result is True
+
+    @patch("integrated_task_worker.requests.get")
+    def test_is_task_canceled_true_for_canceled(self, mock_get, monkeypatch, tmp_path):
+        """is_task_canceled returns True when status is Canceled (9)."""
+        mod, _ = _import_worker(monkeypatch, tmp_path)
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"cr_status": mod._STATUS_INT[mod.STATUS_CANCELED]},
+        )
+        worker = mod.IntegratedTaskWorker()
+        result = worker.is_task_canceled("task-canceled-001")
+        assert result is True
+
+    @patch("integrated_task_worker.requests.get")
+    def test_is_task_canceled_true_for_string_canceling(self, mock_get, monkeypatch, tmp_path):
+        """is_task_canceled returns True for the string label 'Canceling'."""
+        mod, _ = _import_worker(monkeypatch, tmp_path)
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"cr_status": mod.STATUS_CANCELING},
+        )
+        worker = mod.IntegratedTaskWorker()
+        result = worker.is_task_canceled("task-str-canceling-001")
+        assert result is True
 
 
 # ===========================================================================
@@ -1642,7 +1596,6 @@ class TestWorkerRunLoopResilience:
 
         worker.poll_pending_tasks = fake_poll
         worker.process_task = MagicMock()  # Succeeds silently
-        worker.promote_queued_tasks = MagicMock()
         worker.send_to_webhook = MagicMock()
         worker.check_for_updates = MagicMock(return_value=False)
         worker.last_update_check = datetime.now(tz=timezone.utc)
@@ -1675,7 +1628,6 @@ class TestWorkerRunLoopResilience:
 
         worker.poll_pending_tasks = fake_poll
         worker.process_task = MagicMock(side_effect=RuntimeError("Task exploded"))
-        worker.promote_queued_tasks = MagicMock()
         worker.send_to_webhook = MagicMock()
         worker._cleanup_in_progress_task = MagicMock()
         worker.check_for_updates = MagicMock(return_value=False)
@@ -1708,7 +1660,6 @@ class TestWorkerRunLoopResilience:
                 raise KeyboardInterrupt()
 
         worker.poll_pending_tasks = fake_poll
-        worker.promote_queued_tasks = MagicMock()
         worker.send_to_webhook = MagicMock()
         worker.check_for_updates = MagicMock(return_value=False)
         worker.last_update_check = datetime.now(tz=timezone.utc)
@@ -1737,7 +1688,6 @@ class TestWorkerRunLoopResilience:
 
         worker.poll_pending_tasks = fake_poll
         worker.send_to_webhook = MagicMock()
-        worker.promote_queued_tasks = MagicMock()
 
         worker.run()
 
@@ -1778,14 +1728,13 @@ class TestProcessTask:
                                   mock_popen, mock_subrun,
                                   monkeypatch, tmp_path):
         """Successful task: claim succeeds, agent returns success, status set
-        to COMPLETED, result and transcript saved, queued tasks promoted."""
+        to COMPLETED, result and transcript saved."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
 
         # --- HTTP mocks ---
-        # requests.get is used by is_devbox_busy and potentially get_current_user
         mock_get.return_value = MagicMock(
             raise_for_status=MagicMock(),
-            json=lambda: {"value": []}  # no running tasks (not busy)
+            json=lambda: {"value": []}
         )
         # requests.patch succeeds (claim_task, update_task)
         mock_patch.return_value = MagicMock(
@@ -1823,9 +1772,6 @@ class TestProcessTask:
             return_value=(True, success_result, final_transcript, session_stats)
         )
 
-        # Mock promote_queued_tasks to track calls
-        worker.promote_queued_tasks = MagicMock()
-
         task = self._make_task()
         result = worker.process_task(task)
 
@@ -1859,9 +1805,6 @@ class TestProcessTask:
         # At minimum, start notification and completion notification were sent
         assert mock_post.call_count >= 2, "At least start and completion webhooks should be sent"
 
-        # promote_queued_tasks was called after completion
-        worker.promote_queued_tasks.assert_called_once()
-
     # ------------------------------------------------------------------
     # Failure path
     # ------------------------------------------------------------------
@@ -1873,13 +1816,13 @@ class TestProcessTask:
     def test_process_task_failure(self, mock_get, mock_patch, mock_post,
                                   mock_popen, monkeypatch, tmp_path):
         """Failed task: agent returns failure, status set to STATUS_FAILED,
-        error saved in result, queued tasks still promoted."""
+        error saved in result."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
 
         # --- HTTP mocks ---
         mock_get.return_value = MagicMock(
             raise_for_status=MagicMock(),
-            json=lambda: {"value": []}  # not busy
+            json=lambda: {"value": []}
         )
         mock_patch.return_value = MagicMock(
             status_code=200,
@@ -1908,8 +1851,6 @@ class TestProcessTask:
             return_value=(False, error_msg, final_transcript, session_stats)
         )
 
-        worker.promote_queued_tasks = MagicMock()
-
         task = self._make_task()
         result = worker.process_task(task)
 
@@ -1935,11 +1876,8 @@ class TestProcessTask:
         # send_to_webhook was called with failure message
         assert mock_post.call_count >= 2, "At least start and failure webhooks should be sent"
 
-        # promote_queued_tasks is still called after failure
-        worker.promote_queued_tasks.assert_called_once()
-
     # ------------------------------------------------------------------
-    # Cancellation path (devbox busy → task queued; agent returns canceled)
+    # Cancellation path (agent returns canceled)
     # ------------------------------------------------------------------
 
     @patch("integrated_task_worker.subprocess.Popen")
@@ -1950,47 +1888,9 @@ class TestProcessTask:
                                    mock_popen, monkeypatch, tmp_path):
         """Canceled task: when execute_with_autonomous_agent detects
         cancellation (returns success=False with cancel message), the task is
-        marked as FAILED with the cancellation reason.  Also verifies the
-        early-exit path where the devbox is busy and the task is queued."""
+        marked as FAILED with the cancellation reason."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
 
-        # ---- Part A: Devbox busy → task queued (early return) ----
-        # is_devbox_busy returns True (running task exists)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": [{"cr_shraga_taskid": "running-other"}]}
-        )
-        mock_patch.return_value = MagicMock(
-            status_code=200,
-            raise_for_status=MagicMock()
-        )
-
-        worker_a = mod.IntegratedTaskWorker()
-        worker_a.current_user_id = "user-test"
-
-        task_a = self._make_task(cr_shraga_taskid="task-busy-001")
-        result_a = worker_a.process_task(task_a)
-
-        assert result_a is False, "process_task should return False when devbox is busy"
-
-        # Verify queue_task was called (PATCH with STATUS_QUEUED)
-        queued_found = False
-        for patch_call in mock_patch.call_args_list:
-            call_data = patch_call[1].get("json", {})
-            if call_data.get("cr_status") == mod._STATUS_INT[mod.STATUS_QUEUED]:
-                queued_found = True
-                break
-        assert queued_found, "Task should be queued when devbox is busy"
-
-        # current_task_id should NOT be set (task was never claimed)
-        assert worker_a.current_task_id is None
-
-        # ---- Part B: Agent detects cancellation mid-execution ----
-        mock_get.reset_mock()
-        mock_patch.reset_mock()
-        mock_post.reset_mock()
-
-        # is_devbox_busy returns False
         mock_get.return_value = MagicMock(
             raise_for_status=MagicMock(),
             json=lambda: {"value": []}
@@ -2010,26 +1910,25 @@ class TestProcessTask:
         popen_proc.returncode = 0
         mock_popen.return_value = popen_proc
 
-        worker_b = mod.IntegratedTaskWorker()
-        worker_b.current_user_id = "user-test"
+        worker = mod.IntegratedTaskWorker()
+        worker.current_user_id = "user-test"
 
         # execute_with_autonomous_agent returns cancellation
         cancel_msg = "Task canceled by user"
         cancel_transcript = '{"from":"system","message":"Task canceled by user"}'
         cancel_stats = {"total_cost_usd": 0.02, "total_duration_ms": 3000}
 
-        worker_b.execute_with_autonomous_agent = MagicMock(
+        worker.execute_with_autonomous_agent = MagicMock(
             return_value=(False, cancel_msg, cancel_transcript, cancel_stats)
         )
-        worker_b.promote_queued_tasks = MagicMock()
 
-        task_b = self._make_task(cr_shraga_taskid="task-cancel-001")
-        result_b = worker_b.process_task(task_b)
+        task = self._make_task(cr_shraga_taskid="task-cancel-001")
+        result = worker.process_task(task)
 
-        assert result_b is False, "process_task should return False on cancellation"
+        assert result is False, "process_task should return False on cancellation"
 
         # current_task_id cleared
-        assert worker_b.current_task_id is None
+        assert worker.current_task_id is None
 
         # Status set to FAILED (cancellation comes through the failure branch)
         failed_found = False
@@ -2049,9 +1948,6 @@ class TestProcessTask:
             cancel_msg in str(c) for c in webhook_calls
         )
         assert failure_webhook_found, "Failure webhook should contain the cancellation message"
-
-        # promote_queued_tasks still called
-        worker_b.promote_queued_tasks.assert_called_once()
 
 
 # ===========================================================================
@@ -2294,7 +2190,7 @@ class TestExecuteWithAutonomousAgent:
 
         Verifies:
         - Returns (False, "Blocked: ...", transcript, stats)
-        - Dataverse updated with STATUS_WAITING_FOR_INPUT
+        - Dataverse updated with STATUS_FAILED
         - Webhook notification sent with blocked reason
         - Session summary written with 'failed' terminal status
         - Verifier and summarizer are NOT called
@@ -2321,15 +2217,15 @@ class TestExecuteWithAutonomousAgent:
 
         # Returns failure
         assert success is False
-        assert "Blocked:" in result
+        assert "blocked" in result.lower() or "Blocked" in result
         assert "Missing API credentials" in result
 
-        # Dataverse updated with WAITING_FOR_INPUT
+        # Dataverse updated with STATUS_FAILED (not WAITING_FOR_INPUT)
         update_calls = worker.update_task.call_args_list
         assert any(
-            c[1].get("status") == mod.STATUS_WAITING_FOR_INPUT
+            c[1].get("status") == mod.STATUS_FAILED
             for c in update_calls
-        ), "Expected STATUS_WAITING_FOR_INPUT update"
+        ), "Expected STATUS_FAILED update for blocked task"
 
         # Webhook sent with blocked reason
         webhook_calls = [str(c) for c in worker.send_to_webhook.call_args_list]
@@ -2742,7 +2638,6 @@ class TestRunLoopContinuesAfterTask:
 
         worker.poll_pending_tasks = fake_poll
         worker.process_task = MagicMock(return_value=True)  # Tasks succeed
-        worker.promote_queued_tasks = MagicMock()
         worker.send_to_webhook = MagicMock()
         worker.check_for_updates = MagicMock(return_value=False)
         worker.last_update_check = datetime.now(tz=timezone.utc)
@@ -2800,7 +2695,6 @@ class TestRunLoopContinuesAfterTask:
 
         worker.poll_pending_tasks = fake_poll
         worker.process_task = fake_process
-        worker.promote_queued_tasks = MagicMock()
         worker.send_to_webhook = MagicMock()
         worker._cleanup_in_progress_task = MagicMock()
         worker.check_for_updates = MagicMock(return_value=False)
@@ -2832,7 +2726,6 @@ class TestRunLoopContinuesAfterTask:
             raise KeyboardInterrupt()
 
         worker.poll_pending_tasks = fake_poll
-        worker.promote_queued_tasks = MagicMock()
         worker.send_to_webhook = MagicMock()
         worker.check_for_updates = MagicMock(return_value=False)
         worker.last_update_check = datetime.now(tz=timezone.utc)

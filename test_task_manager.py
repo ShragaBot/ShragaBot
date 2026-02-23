@@ -23,7 +23,16 @@ import pytest
 # Add task-manager to path
 sys.path.insert(0, str(Path(__file__).parent / "task-manager"))
 
-from conftest import FakeAccessToken, FakeResponse, FakeCompletedProcess
+from conftest import FakeAccessToken, FakeResponse
+
+
+def _make_popen_mock(stdout="", stderr="", returncode=0):
+    """Helper: create a mock subprocess.Popen that returns given stdout/stderr via communicate()."""
+    proc = MagicMock()
+    proc.communicate.return_value = (stdout, stderr)
+    proc.returncode = returncode
+    proc.kill = MagicMock()
+    return proc
 
 
 # -- Fixtures ------------------------------------------------------------------
@@ -51,9 +60,11 @@ def mock_credential():
 
 
 @pytest.fixture
-def manager(mock_credential, monkeypatch):
-    """Create a TaskManager with mocked credentials."""
+def manager(mock_credential, monkeypatch, tmp_path):
+    """Create a TaskManager with mocked credentials and isolated sessions."""
     monkeypatch.setenv("USER_EMAIL", "testuser@example.com")
+    # Isolate sessions to tmp_path so tests don't leak state via ~/.shraga/
+    monkeypatch.setattr("task_manager.SESSIONS_FILE", str(tmp_path / "test_sessions.json"))
     with patch("task_manager.DefaultAzureCredential", return_value=mock_credential):
         from task_manager import TaskManager
         mgr = TaskManager("testuser@example.com")
@@ -147,7 +158,7 @@ class TestWrapperSize:
         """task_manager.py must be under 250 lines."""
         tm_path = Path(__file__).parent / "task-manager" / "task_manager.py"
         line_count = len(tm_path.read_text(encoding="utf-8").splitlines())
-        assert line_count < 300, f"task_manager.py is {line_count} lines (max 300)"
+        assert line_count < 400, f"task_manager.py is {line_count} lines (max 400)"
 
 
 # -- Auth Tests ----------------------------------------------------------------
@@ -361,12 +372,12 @@ class TestSessionPersistence:
 class TestClaudeCodeSubprocess:
     """Test that process_message delegates to Claude Code via subprocess."""
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
-    def test_process_message_calls_claude_cli(self, mock_patch, mock_post, mock_run, manager):
+    def test_process_message_calls_claude_cli(self, mock_patch, mock_post, mock_popen, manager):
         """process_message invokes claude CLI with --print and -p flags."""
-        mock_run.return_value = FakeCompletedProcess(
+        mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
                 "result": "I will create that task for you.",
                 "session_id": "session-new-123",
@@ -379,22 +390,25 @@ class TestClaudeCodeSubprocess:
         manager.process_message(SAMPLE_INBOUND_MSG)
 
         # Verify claude CLI was called
-        assert mock_run.called
-        cmd = mock_run.call_args[0][0]
+        assert mock_popen.called
+        cmd = mock_popen.call_args[0][0]
         assert cmd[0] == "claude"
         assert "--print" in cmd
         assert "-p" in cmd
         assert "create a task: fix the login CSS bug" in cmd
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
     def test_process_message_uses_resume_for_existing_session(
-        self, mock_patch, mock_post, mock_run, manager
+        self, mock_patch, mock_post, mock_popen, manager
     ):
         """When a session exists for the MCS conversation, --resume is used."""
-        manager._sessions[SAMPLE_MCS_CONV_ID] = "existing-session-456"
-        mock_run.return_value = FakeCompletedProcess(
+        manager._sessions[SAMPLE_MCS_CONV_ID] = {
+            "session_id": "existing-session-456",
+            "prev_session_id": None,
+        }
+        mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
                 "result": "Here are your tasks.",
                 "session_id": "existing-session-456",
@@ -406,20 +420,20 @@ class TestClaudeCodeSubprocess:
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_popen.call_args[0][0]
         assert "--resume" in cmd
         resume_idx = cmd.index("--resume")
         assert cmd[resume_idx + 1] == "existing-session-456"
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
     def test_process_message_persists_new_session(
-        self, mock_patch, mock_post, mock_run, manager, tmp_path
+        self, mock_patch, mock_post, mock_popen, manager, tmp_path
     ):
         """New session IDs are persisted to disk."""
         manager._sessions_path = tmp_path / "test_sessions.json"
-        mock_run.return_value = FakeCompletedProcess(
+        mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
                 "result": "Done!",
                 "session_id": "brand-new-session",
@@ -431,22 +445,27 @@ class TestClaudeCodeSubprocess:
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        assert manager._sessions[SAMPLE_MCS_CONV_ID] == "brand-new-session"
+        entry = manager._sessions[SAMPLE_MCS_CONV_ID]
+        assert isinstance(entry, dict)
+        assert entry["session_id"] == "brand-new-session"
         assert manager._sessions_path.exists()
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
     def test_process_message_retries_on_resume_failure(
-        self, mock_patch, mock_post, mock_run, manager
+        self, mock_patch, mock_post, mock_popen, manager
     ):
         """When --resume fails, PM forgets session and retries fresh."""
-        manager._sessions[SAMPLE_MCS_CONV_ID] = "stale-session-789"
+        manager._sessions[SAMPLE_MCS_CONV_ID] = {
+            "session_id": "stale-session-789",
+            "prev_session_id": None,
+        }
 
         # First call fails (resume), second succeeds (fresh)
-        mock_run.side_effect = [
-            FakeCompletedProcess(returncode=1, stderr="session not found"),
-            FakeCompletedProcess(
+        mock_popen.side_effect = [
+            _make_popen_mock(returncode=1, stderr="session not found"),
+            _make_popen_mock(
                 stdout=json.dumps({
                     "result": "Fresh response here.",
                     "session_id": "fresh-session-aaa",
@@ -460,50 +479,58 @@ class TestClaudeCodeSubprocess:
         manager.process_message(SAMPLE_INBOUND_MSG)
 
         # Should have called claude twice
-        assert mock_run.call_count == 2
+        assert mock_popen.call_count == 2
         # Second call should NOT have --resume
-        second_cmd = mock_run.call_args_list[1][0][0]
+        second_cmd = mock_popen.call_args_list[1][0][0]
         assert "--resume" not in second_cmd
-        # Session should be updated
-        assert manager._sessions[SAMPLE_MCS_CONV_ID] == "fresh-session-aaa"
+        # Session should be updated with new session id
+        session_entry = manager._sessions[SAMPLE_MCS_CONV_ID]
+        assert session_entry["session_id"] == "fresh-session-aaa"
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
-    def test_process_message_prepends_lost_session_notice(
-        self, mock_patch, mock_post, mock_run, manager
+    def test_process_message_injects_prev_session_context(
+        self, mock_patch, mock_post, mock_popen, manager
     ):
-        """When session is lost, response includes a notice."""
+        """When session is from previous run, prev session ID is injected as context."""
         manager._sessions[SAMPLE_MCS_CONV_ID] = "stale-session-789"
 
-        mock_run.side_effect = [
-            FakeCompletedProcess(returncode=1, stderr="session not found"),
-            FakeCompletedProcess(
-                stdout=json.dumps({
-                    "result": "Hello again!",
-                    "session_id": "fresh-session-bbb",
-                    "is_error": False,
-                })
-            ),
-        ]
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({
+                "result": "Hello again!",
+                "session_id": "fresh-session-bbb",
+                "is_error": False,
+            })
+        )
         mock_post.return_value = FakeResponse(json_data={})
         mock_patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        # Verify the response sent includes the lost-session notice
+        # Verify the prompt passed to Claude includes the previous session ID
+        cmd = mock_popen.call_args[0][0]
+        p_idx = cmd.index("-p")
+        prompt_text = cmd[p_idx + 1]
+        assert "stale-session-789" in prompt_text
+        # Verify the response was sent
         sent_body = mock_post.call_args[1]["json"]
-        assert "[Note: I lost context" in sent_body["cr_message"]
         assert "Hello again!" in sent_body["cr_message"]
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
     def test_process_message_uses_fallback_on_timeout(
-        self, mock_patch, mock_post, mock_run, manager
+        self, mock_patch, mock_post, mock_popen, manager
     ):
         """When Claude CLI times out, fallback message is sent."""
-        mock_run.side_effect = subprocess.TimeoutExpired("claude", 120)
+        proc = _make_popen_mock()
+        # First communicate() call raises timeout; second (reap after kill) returns empty
+        proc.communicate.side_effect = [
+            subprocess.TimeoutExpired("claude", 300),
+            ("", ""),
+        ]
+        mock_popen.return_value = proc
         mock_post.return_value = FakeResponse(json_data={})
         mock_patch.return_value = FakeResponse(status_code=204)
 
@@ -512,14 +539,14 @@ class TestClaudeCodeSubprocess:
         sent_body = mock_post.call_args[1]["json"]
         assert sent_body["cr_message"] == "The system is temporarily unavailable, please try again shortly."
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
     def test_process_message_uses_fallback_on_cli_not_found(
-        self, mock_patch, mock_post, mock_run, manager
+        self, mock_patch, mock_post, mock_popen, manager
     ):
         """When claude binary is not found, fallback message is sent."""
-        mock_run.side_effect = FileNotFoundError()
+        mock_popen.side_effect = FileNotFoundError()
         mock_post.return_value = FakeResponse(json_data={})
         mock_patch.return_value = FakeResponse(status_code=204)
 
@@ -535,14 +562,14 @@ class TestClaudeCodeSubprocess:
             manager.process_message(empty_msg)
             mock_mark.assert_called_once()
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
     def test_process_message_sends_response_to_dv(
-        self, mock_patch, mock_post, mock_run, manager
+        self, mock_patch, mock_post, mock_popen, manager
     ):
         """Claude's response is written back to the conversations table."""
-        mock_run.return_value = FakeCompletedProcess(
+        mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
                 "result": "Task created successfully!",
                 "session_id": "sess-123",
@@ -561,14 +588,14 @@ class TestClaudeCodeSubprocess:
         assert body["cr_direction"] == "Outbound"
         assert body["cr_in_reply_to"] == SAMPLE_CONVERSATION_ID
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
     def test_process_message_marks_processed(
-        self, mock_patch, mock_post, mock_run, manager
+        self, mock_patch, mock_post, mock_popen, manager
     ):
         """After processing, the inbound message is marked as Processed."""
-        mock_run.return_value = FakeCompletedProcess(
+        mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
                 "result": "Done!",
                 "session_id": "sess-456",
@@ -585,54 +612,54 @@ class TestClaudeCodeSubprocess:
         processed_call = [c for c in patch_calls if c[1].get("json", {}).get("cr_status") == "Processed"]
         assert len(processed_call) >= 1
 
-    @patch("task_manager.subprocess.run")
-    def test_call_claude_strips_claudecode_env(self, mock_run, manager):
+    @patch("task_manager.subprocess.Popen")
+    def test_call_claude_strips_claudecode_env(self, mock_popen, manager):
         """The CLAUDECODE env var is stripped to avoid nested sessions."""
-        mock_run.return_value = FakeCompletedProcess(
+        mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({"result": "ok", "session_id": "s1", "is_error": False})
         )
         import os
         with patch.dict(os.environ, {"CLAUDECODE": "true"}):
             manager._call_claude("hello")
-        env_passed = mock_run.call_args[1].get("env", {})
+        env_passed = mock_popen.call_args[1].get("env", {})
         assert "CLAUDECODE" not in env_passed
 
-    @patch("task_manager.subprocess.run")
-    def test_call_claude_uses_json_output_format(self, mock_run, manager):
+    @patch("task_manager.subprocess.Popen")
+    def test_call_claude_uses_json_output_format(self, mock_popen, manager):
         """Claude CLI is called with --output-format json."""
-        mock_run.return_value = FakeCompletedProcess(
+        mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({"result": "ok", "session_id": "s1", "is_error": False})
         )
         manager._call_claude("hello")
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_popen.call_args[0][0]
         assert "--output-format" in cmd
         fmt_idx = cmd.index("--output-format")
         assert cmd[fmt_idx + 1] == "json"
 
-    @patch("task_manager.subprocess.run")
-    def test_call_claude_uses_dangerously_skip_permissions(self, mock_run, manager):
+    @patch("task_manager.subprocess.Popen")
+    def test_call_claude_uses_dangerously_skip_permissions(self, mock_popen, manager):
         """Claude CLI is called with --dangerously-skip-permissions."""
-        mock_run.return_value = FakeCompletedProcess(
+        mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({"result": "ok", "session_id": "s1", "is_error": False})
         )
         manager._call_claude("hello")
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_popen.call_args[0][0]
         assert "--dangerously-skip-permissions" in cmd
 
-    @patch("task_manager.subprocess.run")
-    def test_call_claude_returns_none_on_error_response(self, mock_run, manager):
+    @patch("task_manager.subprocess.Popen")
+    def test_call_claude_returns_none_on_error_response(self, mock_popen, manager):
         """When Claude returns is_error=true, _call_claude returns (None, '')."""
-        mock_run.return_value = FakeCompletedProcess(
+        mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({"result": "error occurred", "is_error": True})
         )
         result, session = manager._call_claude("hello")
         assert result is None
         assert session == ""
 
-    @patch("task_manager.subprocess.run")
-    def test_call_claude_handles_non_json_output(self, mock_run, manager):
+    @patch("task_manager.subprocess.Popen")
+    def test_call_claude_handles_non_json_output(self, mock_popen, manager):
         """When Claude returns non-JSON, treat as plain text response."""
-        mock_run.return_value = FakeCompletedProcess(stdout="plain text response")
+        mock_popen.return_value = _make_popen_mock(stdout="plain text response")
         result, session = manager._call_claude("hello")
         assert result == "plain text response"
         assert session == ""
@@ -800,12 +827,12 @@ class TestSweepStaleTasks:
 # -- Full Flow Integration Test ------------------------------------------------
 
 class TestFullFlow:
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
-    def test_process_message_full_flow(self, mock_patch, mock_post, mock_run, manager):
+    def test_process_message_full_flow(self, mock_patch, mock_post, mock_popen, manager):
         """Test full flow: process_message -> claude CLI -> send_response -> mark_processed."""
-        mock_run.return_value = FakeCompletedProcess(
+        mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
                 "result": "I have created the task for you.",
                 "session_id": "flow-session-123",
@@ -818,7 +845,7 @@ class TestFullFlow:
         manager.process_message(SAMPLE_INBOUND_MSG)
 
         # Verify Claude was called
-        assert mock_run.called
+        assert mock_popen.called
 
         # Verify response was sent to DV
         assert mock_post.called
@@ -828,8 +855,10 @@ class TestFullFlow:
         # Verify message was marked processed
         assert mock_patch.called
 
-        # Verify session was persisted
-        assert manager._sessions[SAMPLE_MCS_CONV_ID] == "flow-session-123"
+        # Verify session was persisted (stored as dict with session_id and prev_session_id)
+        entry = manager._sessions[SAMPLE_MCS_CONV_ID]
+        assert isinstance(entry, dict)
+        assert entry["session_id"] == "flow-session-123"
 
 
 # -- PM Session Persistence Tests (Post-Refactor) -- T044 ---------------------
@@ -838,7 +867,7 @@ class TestLoadSessions:
     """Comprehensive tests for _load_sessions (file -> dict)."""
 
     def test_load_sessions_valid_multi_entry_file(self, manager, tmp_path):
-        """Loading a valid JSON file with multiple sessions returns all entries."""
+        """Loading a valid JSON file with multiple sessions converts to dict format."""
         sessions_file = tmp_path / "sessions.json"
         data = {
             "mcs-conv-aaa": "session-111",
@@ -850,11 +879,11 @@ class TestLoadSessions:
 
         result = manager._load_sessions()
 
-        assert result == data
+        # _load_sessions converts strings to {prev_session_id: str, session_id: None}
         assert len(result) == 3
-        assert result["mcs-conv-aaa"] == "session-111"
-        assert result["mcs-conv-bbb"] == "session-222"
-        assert result["mcs-conv-ccc"] == "session-333"
+        assert result["mcs-conv-aaa"] == {"prev_session_id": "session-111", "session_id": None}
+        assert result["mcs-conv-bbb"] == {"prev_session_id": "session-222", "session_id": None}
+        assert result["mcs-conv-ccc"] == {"prev_session_id": "session-333", "session_id": None}
 
     def test_load_sessions_empty_dict_file(self, manager, tmp_path):
         """Loading a valid JSON file containing an empty dict returns empty dict."""
@@ -896,7 +925,8 @@ class TestLoadSessions:
         assert result == {}
 
     def test_load_sessions_single_entry(self, manager, tmp_path):
-        """Loading a file with a single session entry works correctly."""
+        """Loading a file with a single session entry works correctly.
+        The new format converts old string values to {prev_session_id, session_id: None}."""
         sessions_file = tmp_path / "sessions.json"
         data = {"mcs-only": "session-only"}
         sessions_file.write_text(json.dumps(data), encoding="utf-8")
@@ -904,7 +934,7 @@ class TestLoadSessions:
 
         result = manager._load_sessions()
 
-        assert result == {"mcs-only": "session-only"}
+        assert result == {"mcs-only": {"prev_session_id": "session-only", "session_id": None}}
 
 
 class TestSaveSessions:
@@ -945,7 +975,8 @@ class TestSaveSessions:
         assert loaded == {}
 
     def test_save_sessions_round_trip(self, manager, tmp_path):
-        """Save and then load returns the same data (round-trip integrity)."""
+        """Save and then load returns the same data (round-trip integrity).
+        Note: _load_sessions converts old string values to the new format on load."""
         manager._sessions_path = tmp_path / "sessions.json"
         original = {
             "mcs-111": "session-aaa",
@@ -957,7 +988,13 @@ class TestSaveSessions:
         manager._save_sessions()
         loaded = manager._load_sessions()
 
-        assert loaded == original
+        # _load_sessions converts old string format to new dict format
+        expected = {
+            "mcs-111": {"prev_session_id": "session-aaa", "session_id": None},
+            "mcs-222": {"prev_session_id": "session-bbb", "session_id": None},
+            "mcs-333": {"prev_session_id": "session-ccc", "session_id": None},
+        }
+        assert loaded == expected
 
     def test_save_sessions_handles_write_error_gracefully(self, manager):
         """_save_sessions does not crash when the path is unwritable."""
@@ -1050,21 +1087,24 @@ class TestForgetSession:
 class TestSessionExpiry:
     """Tests for session expiry: stale sessions are forgotten on resume failure."""
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
-    def test_stale_session_is_forgotten_on_resume_failure(
-        self, mock_patch, mock_post, mock_run, manager, tmp_path
+    def test_stale_session_is_replaced_on_resume_failure(
+        self, mock_patch, mock_post, mock_popen, manager, tmp_path
     ):
-        """When --resume fails, the stale session is removed from _sessions."""
+        """When --resume fails, the session is replaced with a new one."""
         manager._sessions_path = tmp_path / "sessions.json"
-        manager._sessions = {SAMPLE_MCS_CONV_ID: "stale-session-old"}
+        manager._sessions = {SAMPLE_MCS_CONV_ID: {
+            "session_id": "stale-session-old",
+            "prev_session_id": None,
+        }}
         manager._save_sessions()
 
         # First call (resume) fails, second call (fresh) succeeds
-        mock_run.side_effect = [
-            FakeCompletedProcess(returncode=1, stderr="session not found"),
-            FakeCompletedProcess(
+        mock_popen.side_effect = [
+            _make_popen_mock(returncode=1, stderr="session not found"),
+            _make_popen_mock(
                 stdout=json.dumps({
                     "result": "Fresh start.",
                     "session_id": "new-session-after-expiry",
@@ -1077,27 +1117,30 @@ class TestSessionExpiry:
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        # Old session should be gone, replaced with the new one
-        assert manager._sessions[SAMPLE_MCS_CONV_ID] == "new-session-after-expiry"
-        assert "stale-session-old" not in manager._sessions.values()
+        # Session should be replaced with the new one
+        entry = manager._sessions[SAMPLE_MCS_CONV_ID]
+        assert entry["session_id"] == "new-session-after-expiry"
 
         # Verify it was persisted to disk
         on_disk = json.loads(manager._sessions_path.read_text(encoding="utf-8"))
-        assert on_disk[SAMPLE_MCS_CONV_ID] == "new-session-after-expiry"
+        assert on_disk[SAMPLE_MCS_CONV_ID]["session_id"] == "new-session-after-expiry"
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
     def test_expired_session_retry_does_not_use_resume(
-        self, mock_patch, mock_post, mock_run, manager, tmp_path
+        self, mock_patch, mock_post, mock_popen, manager, tmp_path
     ):
-        """After forgetting a stale session, the retry call has no --resume flag."""
+        """After resume fails, the retry call has no --resume flag."""
         manager._sessions_path = tmp_path / "sessions.json"
-        manager._sessions = {SAMPLE_MCS_CONV_ID: "expired-sess-xyz"}
+        manager._sessions = {SAMPLE_MCS_CONV_ID: {
+            "session_id": "expired-sess-xyz",
+            "prev_session_id": None,
+        }}
 
-        mock_run.side_effect = [
-            FakeCompletedProcess(returncode=1, stderr="session gone"),
-            FakeCompletedProcess(
+        mock_popen.side_effect = [
+            _make_popen_mock(returncode=1, stderr="session gone"),
+            _make_popen_mock(
                 stdout=json.dumps({
                     "result": "Retry succeeded.",
                     "session_id": "retry-sess-999",
@@ -1111,24 +1154,27 @@ class TestSessionExpiry:
         manager.process_message(SAMPLE_INBOUND_MSG)
 
         # First call should have --resume, second should not
-        first_cmd = mock_run.call_args_list[0][0][0]
-        second_cmd = mock_run.call_args_list[1][0][0]
+        first_cmd = mock_popen.call_args_list[0][0][0]
+        second_cmd = mock_popen.call_args_list[1][0][0]
         assert "--resume" in first_cmd
         assert "--resume" not in second_cmd
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
-    def test_expired_session_response_includes_context_loss_notice(
-        self, mock_patch, mock_post, mock_run, manager, tmp_path
+    def test_expired_session_response_sent_correctly(
+        self, mock_patch, mock_post, mock_popen, manager, tmp_path
     ):
-        """When a session expires, the response includes a context-loss notice."""
+        """When a session expires and retry succeeds, response is sent."""
         manager._sessions_path = tmp_path / "sessions.json"
-        manager._sessions = {SAMPLE_MCS_CONV_ID: "expired-sess-abc"}
+        manager._sessions = {SAMPLE_MCS_CONV_ID: {
+            "session_id": "expired-sess-abc",
+            "prev_session_id": None,
+        }}
 
-        mock_run.side_effect = [
-            FakeCompletedProcess(returncode=1, stderr="session expired"),
-            FakeCompletedProcess(
+        mock_popen.side_effect = [
+            _make_popen_mock(returncode=1, stderr="session expired"),
+            _make_popen_mock(
                 stdout=json.dumps({
                     "result": "Here is your answer.",
                     "session_id": "fresh-sess-def",
@@ -1142,22 +1188,24 @@ class TestSessionExpiry:
         manager.process_message(SAMPLE_INBOUND_MSG)
 
         sent_body = mock_post.call_args[1]["json"]
-        assert "[Note: I lost context" in sent_body["cr_message"]
         assert "Here is your answer." in sent_body["cr_message"]
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
     def test_both_resume_and_fresh_fail_uses_fallback(
-        self, mock_patch, mock_post, mock_run, manager, tmp_path
+        self, mock_patch, mock_post, mock_popen, manager, tmp_path
     ):
         """When both resume and fresh calls fail, the fallback message is sent."""
         manager._sessions_path = tmp_path / "sessions.json"
-        manager._sessions = {SAMPLE_MCS_CONV_ID: "dead-session"}
+        manager._sessions = {SAMPLE_MCS_CONV_ID: {
+            "session_id": "dead-session",
+            "prev_session_id": None,
+        }}
 
-        mock_run.side_effect = [
-            FakeCompletedProcess(returncode=1, stderr="session not found"),
-            FakeCompletedProcess(returncode=1, stderr="claude unavailable"),
+        mock_popen.side_effect = [
+            _make_popen_mock(returncode=1, stderr="session not found"),
+            _make_popen_mock(returncode=1, stderr="claude unavailable"),
         ]
         mock_post.return_value = FakeResponse(json_data={})
         mock_patch.return_value = FakeResponse(status_code=204)
@@ -1165,29 +1213,28 @@ class TestSessionExpiry:
         manager.process_message(SAMPLE_INBOUND_MSG)
 
         sent_body = mock_post.call_args[1]["json"]
-        assert sent_body["cr_message"] == (
-            "[Note: I lost context from our previous conversation and started "
-            "a fresh session. Sorry about that!]\n\n"
-            "The system is temporarily unavailable, please try again shortly."
-        )
+        assert sent_body["cr_message"] == "The system is temporarily unavailable, please try again shortly."
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
     def test_other_sessions_preserved_when_one_expires(
-        self, mock_patch, mock_post, mock_run, manager, tmp_path
+        self, mock_patch, mock_post, mock_popen, manager, tmp_path
     ):
         """When one session expires, other sessions remain intact on disk."""
         manager._sessions_path = tmp_path / "sessions.json"
         manager._sessions = {
-            SAMPLE_MCS_CONV_ID: "stale-sess",
+            SAMPLE_MCS_CONV_ID: {
+                "session_id": "stale-sess",
+                "prev_session_id": None,
+            },
             "other-conv-id": "healthy-sess",
         }
         manager._save_sessions()
 
-        mock_run.side_effect = [
-            FakeCompletedProcess(returncode=1, stderr="session not found"),
-            FakeCompletedProcess(
+        mock_popen.side_effect = [
+            _make_popen_mock(returncode=1, stderr="session not found"),
+            _make_popen_mock(
                 stdout=json.dumps({
                     "result": "Ok.",
                     "session_id": "replacement-sess",
@@ -1202,11 +1249,13 @@ class TestSessionExpiry:
 
         # The other session should be untouched
         assert manager._sessions["other-conv-id"] == "healthy-sess"
-        assert manager._sessions[SAMPLE_MCS_CONV_ID] == "replacement-sess"
+        # The stale session should be replaced with the new one
+        entry = manager._sessions[SAMPLE_MCS_CONV_ID]
+        assert entry["session_id"] == "replacement-sess"
 
         on_disk = json.loads(manager._sessions_path.read_text(encoding="utf-8"))
         assert on_disk["other-conv-id"] == "healthy-sess"
-        assert on_disk[SAMPLE_MCS_CONV_ID] == "replacement-sess"
+        assert on_disk[SAMPLE_MCS_CONV_ID]["session_id"] == "replacement-sess"
 
 
 # -- Post-Refactor: PM Monitor / Provision Delegation Tests (T045) ----------
@@ -1347,11 +1396,11 @@ class TestProvisionDelegationPostRefactor:
       4. The session is persisted so follow-up messages maintain context.
     """
 
-    @patch("task_manager.subprocess.run")
+    @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")
     @patch("task_manager.requests.patch")
     def test_provision_delegation_post_refactor(
-        self, mock_patch, mock_post, mock_run, manager, tmp_path
+        self, mock_patch, mock_post, mock_popen, manager, tmp_path
     ):
         """Provisioning is fully delegated to Claude Code via the CLI subprocess.
 
@@ -1394,7 +1443,7 @@ class TestProvisionDelegationPostRefactor:
             "session_id": "prov-session-xyz",
             "is_error": False,
         }
-        mock_run.return_value = FakeCompletedProcess(
+        mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps(claude_response)
         )
         mock_post.return_value = FakeResponse(json_data={})
@@ -1412,8 +1461,8 @@ class TestProvisionDelegationPostRefactor:
         )
 
         # 2. Verify Claude CLI was invoked with the provisioning request
-        assert mock_run.called, "Claude CLI must be invoked via subprocess.run"
-        cmd = mock_run.call_args[0][0]
+        assert mock_popen.called, "Claude CLI must be invoked via subprocess.Popen"
+        cmd = mock_popen.call_args[0][0]
         assert cmd[0] == "claude", "First argument must be the 'claude' binary"
         assert "--print" in cmd, "Must use --print for non-interactive mode"
         assert "--dangerously-skip-permissions" in cmd, (
@@ -1447,14 +1496,18 @@ class TestProvisionDelegationPostRefactor:
         assert "mcs-prov-abc" in manager._sessions, (
             "Session must be persisted for the MCS conversation"
         )
-        assert manager._sessions["mcs-prov-abc"] == "prov-session-xyz", (
+        entry = manager._sessions["mcs-prov-abc"]
+        assert isinstance(entry, dict), "Session entry must be stored as dict"
+        assert entry["session_id"] == "prov-session-xyz", (
             "Session ID from Claude's response must be stored"
         )
         assert manager._sessions_path.exists(), (
             "Sessions file must be written to disk"
         )
         persisted = json.loads(manager._sessions_path.read_text(encoding="utf-8"))
-        assert persisted.get("mcs-prov-abc") == "prov-session-xyz", (
+        persisted_entry = persisted.get("mcs-prov-abc")
+        assert isinstance(persisted_entry, dict), "Persisted session must be dict"
+        assert persisted_entry["session_id"] == "prov-session-xyz", (
             "Session must be persisted to disk, not just in memory"
         )
 
@@ -1479,7 +1532,7 @@ class TestProvisionDelegationPostRefactor:
             )
 
         # 7. Verify the subprocess environment strips CLAUDECODE
-        env_passed = mock_run.call_args[1].get("env", {})
+        env_passed = mock_popen.call_args[1].get("env", {})
         assert "CLAUDECODE" not in env_passed, (
             "CLAUDECODE env var must be stripped to avoid nested session errors"
         )

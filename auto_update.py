@@ -7,7 +7,7 @@ so the scheduled task restarts the process with the new code.
 import subprocess
 import sys
 import re
-import os
+import random
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -18,7 +18,8 @@ class AutoUpdater:
     def __init__(self, repo_path: str | Path, check_interval_minutes: int = 10):
         self.repo_path = Path(repo_path)
         self.check_interval = timedelta(minutes=check_interval_minutes)
-        self.last_check = None
+        # Random initial delay (0-60s) so Worker and PM don't check simultaneously
+        self.last_check = datetime.now(timezone.utc) - self.check_interval + timedelta(seconds=random.randint(0, 60))
         self.current_branch = self._get_current_branch()
 
     def _run_git(self, *args, timeout=30) -> subprocess.CompletedProcess:
@@ -76,21 +77,6 @@ class AutoUpdater:
 
         self.last_check = datetime.now(timezone.utc)
 
-        # File lock to prevent Worker and PM from updating simultaneously
-        lock_path = self.repo_path / ".update.lock"
-        try:
-            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.close(lock_fd)
-        except FileExistsError:
-            # Another process is updating — skip this check
-            # Clean up stale locks older than 5 minutes
-            try:
-                if lock_path.exists() and (datetime.now(timezone.utc).timestamp() - lock_path.stat().st_mtime) > 300:
-                    lock_path.unlink()
-            except Exception:
-                pass
-            return False
-
         try:
             # Fetch latest from remote
             result = self._run_git("fetch", "--all", "--prune")
@@ -129,10 +115,6 @@ class AutoUpdater:
         except Exception as e:
             print(f"[WARN] Update check failed: {e}")
             return False
-        finally:
-            # Clean up lock file (won't run after sys.exit in _apply_update, but stale lock cleanup handles that)
-            try: lock_path.unlink(missing_ok=True)
-            except Exception: pass
 
     def _apply_update(self, local_branch: str, remote_ref: str) -> bool:
         """Switch to the release branch, install deps, and exit."""
