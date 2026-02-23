@@ -300,7 +300,7 @@ class IntegratedTaskWorker:
         # Workers compete for any of this user's unclaimed tasks.
         filter_parts = [
             f"cr_status eq {_STATUS_INT[STATUS_PENDING]}",
-            f"(cr_userid eq '{self.current_user_id}' or cr_userid eq '{WEBHOOK_USER}' or crb3b_useremail eq '{WEBHOOK_USER}' or crb3b_useremail eq null)",
+            f"(cr_userid eq '{self.current_user_id}' or cr_userid eq '{WEBHOOK_USER}' or crb3b_useremail eq '{WEBHOOK_USER}')",
             f"crb3b_devbox eq null"
         ]
 
