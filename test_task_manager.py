@@ -395,7 +395,10 @@ class TestClaudeCodeSubprocess:
         assert cmd[0] == "claude"
         assert "--print" in cmd
         assert "-p" in cmd
-        assert "create a task: fix the login CSS bug" in cmd
+        # The -p argument contains the user text (may have MCS_CONVERSATION_ID prefix)
+        p_idx = cmd.index("-p")
+        p_arg = cmd[p_idx + 1]
+        assert "create a task: fix the login CSS bug" in p_arg
 
     @patch("task_manager.subprocess.Popen")
     @patch("task_manager.requests.post")

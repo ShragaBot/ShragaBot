@@ -281,6 +281,9 @@ class TaskManager:
         txt = msg.get("cr_message", "").strip()
         if not txt: self.mark_processed(rid); return
         _log(f"[MSG] Processing: {txt[:80]}...")
+        # Inject MCS conversation ID so Claude can write it to task rows
+        if mcs:
+            txt = f"[MCS_CONVERSATION_ID={mcs}]\n{txt}"
 
         session_entry = self._sessions.get(mcs, {}) if mcs else {}
         if isinstance(session_entry, str):
@@ -326,9 +329,12 @@ class TaskManager:
         except subprocess.TimeoutExpired: _log("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE
         except FileNotFoundError: _log("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE
         except Exception as e: _log(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE
-        self.send_response(in_reply_to=rid, mcs_conversation_id=mcs, text=resp)
+        # If response mentions a task ID, expect a follow-up (card link from TaskRunner)
+        task_created = "task" in resp.lower() and ("submitted" in resp.lower() or "created" in resp.lower() or "id:" in resp.lower())
+        self.send_response(in_reply_to=rid, mcs_conversation_id=mcs, text=resp,
+                           followup_expected=task_created)
         self.mark_processed(rid)
-        _log(f"[MSG] Responded: {resp[:80]}...")
+        _log(f"[MSG] Responded (followup={task_created}): {resp[:80]}...")
 
     def run(self):
         if sys.platform == "win32":
