@@ -24,7 +24,7 @@ Poll -> Parse -> Claim -> Execute (Worker/Verifier Loop) -> Summarize -> Complet
 
 ### 3. Claim Task (Atomic)
 
-`IntegratedTaskWorker.claim_task()` uses ETag-based optimistic concurrency (`If-Match` header) to atomically set the task from Pending to Running. If another worker claimed it first, HTTP 412 is returned and the task is skipped. If the dev box is already busy with another task, the new task is set to Queued status (`cr_status == 'Queued'`) via `queue_task()`.
+`IntegratedTaskWorker.claim_task()` uses ETag-based optimistic concurrency (`If-Match` header) to atomically set the task from Pending to Running and write `crb3b_devbox={hostname}` in the same PATCH. If another worker claimed it first, HTTP 412 is returned and the task is skipped.
 
 ### 4. Create Session Folder
 
@@ -51,7 +51,6 @@ On completion, the system:
 - Updates Dataverse with status, result, and transcript
 - Commits results to Git for audit trail
 - Sends completion notification via `cr_shragamessages` table
-- Promotes any queued tasks on this dev box back to Pending
 
 ## Worker/Verifier Loop
 
@@ -105,7 +104,7 @@ Iteration 2:
   -> Summarizer creates SUMMARY.md -> Pipeline completes
 ```
 
-If the worker returns `STATUS: blocked`, the task is set to `STATUS_WAITING_FOR_INPUT` (6) and the pipeline terminates with failure (future: wait for user response).
+If the worker returns `STATUS: blocked`, the task is set to `STATUS_FAILED` and the pipeline terminates with failure.
 
 If 10 iterations pass without approval, the task fails.
 
@@ -115,7 +114,7 @@ Cancellation is **cooperative** -- the system checks for cancellation at defined
 
 ### How It Works
 
-`IntegratedTaskWorker.is_task_canceled()` queries Dataverse for the task's current status. If `cr_status == 'Canceled'`, it returns `True`.
+`IntegratedTaskWorker.is_task_canceled()` queries Dataverse for the task's current status. Returns `True` if `cr_status` is Canceled(9) or Canceling(11).
 
 ### Cancellation Checkpoints
 
@@ -221,15 +220,19 @@ Each task gets an isolated session folder in OneDrive:
 
 ## Dataverse Status Codes
 
-| Value | Constant | Meaning |
-|-------|----------|---------|
-| `"Pending"` | `STATUS_PENDING` | Task waiting to be picked up |
-| `"Queued"` | `STATUS_QUEUED` | Task queued (dev box busy) |
-| `"Running"` | `STATUS_RUNNING` | Task actively executing |
-| `"WaitingForInput"` | `STATUS_WAITING_FOR_INPUT` | Worker blocked, needs user input |
-| `"Completed"` | `STATUS_COMPLETED` | Task completed and verified |
-| `"Failed"` | `STATUS_FAILED` | Task failed |
-| `"Canceled"` | `STATUS_CANCELED` | Task canceled by user |
+| Value | Integer | Constant | Meaning |
+|-------|---------|----------|---------|
+| `"Submitted"` | 10 | `STATUS_SUBMITTED` | PM created task, awaiting TaskRunner flow |
+| `"Pending"` | 1 | `STATUS_PENDING` | TaskRunner posted card, Workers can claim |
+| `"Running"` | 5 | `STATUS_RUNNING` | Worker executing task |
+| `"Completed"` | 7 | `STATUS_COMPLETED` | Task completed and verified |
+| `"Failed"` | 8 | `STATUS_FAILED` | Task failed |
+| `"Canceling"` | 11 | `STATUS_CANCELING` | Cancel requested, Worker cooperating |
+| `"Canceled"` | 9 | `STATUS_CANCELED` | Task canceled |
+
+Deprecated (kept in DV picklist for historical rows):
+- `"Queued"` (3) -- replaced by open competition routing
+- `"WaitingForInput"` (6) -- blocked tasks now fail directly
 
 ## Environment Variables
 
@@ -267,4 +270,4 @@ The worker uses an immutable release deployment system:
 - **ETag concurrency**: Task claiming uses HTTP `If-Match` headers to prevent double-pickup across dev boxes.
 - **CLAUDECODE env stripping**: All subprocess calls to Claude Code strip the `CLAUDECODE` environment variable to avoid "nested session" errors.
 - **Suffix-based file detection**: `_path_looks_like_file()` uses path suffix instead of `Path.is_file()` to avoid OneDrive sync race conditions where files exist locally but haven't synced yet.
-- **Queued task promotion**: After completing a task, `promote_queued_tasks()` moves the oldest queued task on this dev box back to Pending so it gets picked up on the next poll cycle.
+- **Open competition routing**: PM creates tasks with `crb3b_devbox=null`. All workers for the same user compete for unclaimed Pending tasks. Winner writes hostname on claim.
