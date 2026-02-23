@@ -394,7 +394,9 @@ class IntegratedTaskWorker:
                     status_message: str = None, result: str = None,
                     transcript: str = None, workingdir: str = None,
                     onedriveurl: str = None, session_summary: str = None,
-                    short_description: str = None):
+                    short_description: str = None,
+                    session_cost: str = None, session_tokens: str = None,
+                    session_duration: str = None):
         """Update task in Dataverse"""
         headers = self._get_headers(content_type="application/json")
         if not headers:
@@ -419,6 +421,12 @@ class IntegratedTaskWorker:
             data["crb3b_sessionsummary"] = session_summary
         if short_description is not None:
             data["crb3b_shortdescription"] = short_description
+        if session_cost is not None:
+            data["crb3b_sessioncost"] = session_cost
+        if session_tokens is not None:
+            data["crb3b_sessiontokens"] = session_tokens
+        if session_duration is not None:
+            data["crb3b_sessionduration"] = session_duration
 
         try:
             response = requests.patch(url, headers=headers, json=data, timeout=REQUEST_TIMEOUT)
@@ -430,7 +438,8 @@ class IntegratedTaskWorker:
         except Exception as e:
             # If optional DV columns don't exist yet, retry without them
             error_str = str(e).lower()
-            optional_columns = ["crb3b_sessionsummary", "crb3b_shortdescription"]
+            optional_columns = ["crb3b_sessionsummary", "crb3b_shortdescription",
+                                "crb3b_sessioncost", "crb3b_sessiontokens", "crb3b_sessionduration"]
             removed_any = False
             if "property" in error_str or "column" in error_str or "attribute" in error_str:
                 for col in optional_columns:
@@ -1421,6 +1430,25 @@ Worker/Verifier loop initiated..."""
         # Session numbers are stored in session_summary.json (via write_session_summary),
         # not appended to cr_result, to keep completed cards shorter and cleaner.
 
+        # Extract session stats for card display
+        _cost_str = _tokens_str = _duration_str = None
+        if session_stats:
+            cost = session_stats.get("total_cost_usd", 0.0)
+            _cost_str = f"${cost:.2f}"
+            tokens = session_stats.get("tokens", {})
+            tok_in = tokens.get("input", 0)
+            tok_out = tokens.get("output", 0)
+            tok_cache = tokens.get("cache_read", 0)
+            parts = [f"{tok_in/1000:.1f}k in", f"{tok_out/1000:.1f}k out"]
+            if tok_cache > 0:
+                parts.append(f"{tok_cache/1000:.1f}k cached")
+            _tokens_str = " / ".join(parts)
+            total_ms = session_stats.get("total_duration_ms", 0)
+            total_sec = total_ms / 1000
+            mins = int(total_sec // 60)
+            secs = int(total_sec % 60)
+            _duration_str = f"{mins}m {secs:02d}s" if mins > 0 else f"{secs}s"
+
         # Update final status
         if success:
             # Commit results to Git for audit trail
@@ -1436,7 +1464,10 @@ Worker/Verifier loop initiated..."""
                 status=STATUS_COMPLETED,
                 status_message="Task completed and verified",
                 result=result_with_git,
-                transcript=final_transcript
+                transcript=final_transcript,
+                session_cost=_cost_str,
+                session_tokens=_tokens_str,
+                session_duration=_duration_str
             )
 
             # Send completion message with full result and Git info
@@ -1459,7 +1490,10 @@ Full details saved in Dataverse (Task ID: {task_id}){git_info}"""
                 status=STATUS_FAILED,
                 status_message="Task failed",
                 result=f"Error: {result}",
-                transcript=final_transcript
+                transcript=final_transcript,
+                session_cost=_cost_str,
+                session_tokens=_tokens_str,
+                session_duration=_duration_str
             )
 
             # Send failure message with error details
