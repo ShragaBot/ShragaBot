@@ -81,7 +81,6 @@ class Orchestrator:
                     devcenter_endpoint=DEVCENTER_ENDPOINT,
                     project_name=DEVBOX_PROJECT,
                     pool_name=DEVBOX_POOL,
-                    use_device_code=False
                 )
                 print(f"[INIT] Dev Box manager initialized")
             except Exception as e:

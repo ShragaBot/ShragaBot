@@ -158,9 +158,13 @@ class IntegratedTaskWorker:
         """Load worker state"""
         state_path = Path(STATE_FILE)
         if state_path.exists():
-            with open(state_path, encoding="utf-8") as f:
-                data = json.load(f)
-                self.current_user_id = data.get("current_user_id")
+            try:
+                with open(state_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.current_user_id = data.get("current_user_id")
+            except (json.JSONDecodeError, OSError) as e:
+                _log(f"[WARN] Could not load state file: {e}")
+                self.current_user_id = None
 
     def save_state(self):
         """Save worker state"""
@@ -1593,7 +1597,10 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
         except KeyboardInterrupt:
             _log("\n\n[INTERRUPT] Stopping worker...")
             self._cleanup_in_progress_task("Worker interrupted by user")
-            self.send_to_webhook("Task worker stopped")
+            try:
+                self.send_to_webhook("Task worker stopped")
+            except Exception:
+                pass
 
         _log("[SHUTDOWN] Worker stopped")
 
