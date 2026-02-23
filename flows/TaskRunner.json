@@ -198,99 +198,59 @@
                     },
                     {
                       "type": "Container",
-                      "spacing": "Small",
+                      "spacing": "Medium",
                       "items": [
                         {
-                          "type": "Container",
-                          "style": "emphasis",
-                          "id": "logCollapsed",
-                          "maxHeight": "250px",
-                          "items": [
-                            {
-                              "type": "TextBlock",
-                              "text": "Task queued. Waiting for available worker...",
-                              "wrap": true,
-                              "size": "Small",
-                              "fontType": "Monospace",
-                              "isSubtle": true
-                            }
-                          ]
+                          "type": "TextBlock",
+                          "text": "Submitted: {startedAt}",
+                          "size": "Default",
+                          "isSubtle": true
                         },
                         {
-                          "type": "Container",
-                          "style": "emphasis",
-                          "id": "logExpanded",
-                          "isVisible": false,
-                          "items": [
-                            {
-                              "type": "TextBlock",
-                              "text": "Task queued. Waiting for available worker...",
-                              "wrap": true,
-                              "size": "Small",
-                              "fontType": "Monospace",
-                              "isSubtle": true
-                            }
-                          ]
-                        },
-                        {
-                          "type": "Container",
-                          "id": "btnExpand",
-                          "spacing": "None",
-                          "selectAction": {
-                            "type": "Action.ToggleVisibility",
-                            "targetElements": [
-                              "logCollapsed",
-                              "logExpanded",
-                              "btnExpand",
-                              "btnCollapse"
-                            ]
-                          },
-                          "items": [
-                            {
-                              "type": "TextBlock",
-                              "text": "▼ show full log",
-                              "size": "Small",
-                              "color": "Accent",
-                              "horizontalAlignment": "Center"
-                            }
-                          ]
-                        },
-                        {
-                          "type": "Container",
-                          "id": "btnCollapse",
-                          "isVisible": false,
-                          "spacing": "None",
-                          "selectAction": {
-                            "type": "Action.ToggleVisibility",
-                            "targetElements": [
-                              "logCollapsed",
-                              "logExpanded",
-                              "btnExpand",
-                              "btnCollapse"
-                            ]
-                          },
-                          "items": [
-                            {
-                              "type": "TextBlock",
-                              "text": "▲ collapse log",
-                              "size": "Small",
-                              "color": "Accent",
-                              "horizontalAlignment": "Center"
-                            }
-                          ]
+                          "type": "TextBlock",
+                          "text": "ACTIVITY LOG",
+                          "size": "Default",
+                          "isSubtle": true,
+                          "weight": "Bolder",
+                          "spacing": "Small"
                         }
                       ]
                     },
                     {
                       "type": "Container",
                       "spacing": "Small",
+                      "style": "emphasis",
                       "items": [
                         {
-                          "type": "FactSet",
-                          "facts": [
+                          "type": "ColumnSet",
+                          "spacing": "Small",
+                          "columns": [
                             {
-                              "title": "Submitted",
-                              "value": "{startedAt}"
+                              "type": "Column",
+                              "width": "90px",
+                              "items": [
+                                {
+                                  "type": "TextBlock",
+                                  "text": "{startedAt}",
+                                  "color": "Accent",
+                                  "size": "Small",
+                                  "spacing": "None",
+                                  "fontType": "Monospace"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "Column",
+                              "width": "stretch",
+                              "items": [
+                                {
+                                  "type": "TextBlock",
+                                  "text": "Task queued. Waiting for available worker...",
+                                  "size": "Small",
+                                  "wrap": true,
+                                  "spacing": "None"
+                                }
+                              ]
                             }
                           ]
                         }
@@ -302,33 +262,10 @@
                       "separator": true,
                       "items": [
                         {
-                          "type": "ColumnSet",
-                          "columns": [
-                            {
-                              "type": "Column",
-                              "width": "stretch",
-                              "items": [
-                                {
-                                  "type": "TextBlock",
-                                  "text": "{startedAt}",
-                                  "size": "Small",
-                                  "isSubtle": true
-                                }
-                              ]
-                            },
-                            {
-                              "type": "Column",
-                              "width": "auto",
-                              "items": [
-                                {
-                                  "type": "TextBlock",
-                                  "text": "Want to cancel? [Tell the bot: cancel {taskIdShort}](https://teams.microsoft.com/l/chat/0/0?users=28:BOT_APP_ID&message=cancel%20{taskIdShort})",
-                                  "size": "Small",
-                                  "isSubtle": true
-                                }
-                              ]
-                            }
-                          ]
+                          "type": "TextBlock",
+                          "text": "Want to cancel? [Tell the bot: cancel {taskIdShort}](https://teams.microsoft.com/l/chat/0/0?users=28:420df934-d9e8-4c2f-bb03-f4c103dfb399&message=cancel%20{taskIdShort})",
+                          "size": "Small",
+                          "isSubtle": true
                         }
                       ]
                     }
@@ -455,7 +392,7 @@
       }
     },
     "createdTime": "2026-02-13T20:13:50.4741319Z",
-    "lastModifiedTime": "2026-02-23T15:26:21.2752788Z",
+    "lastModifiedTime": "2026-02-23T18:47:27.8914815Z",
     "flowSuspensionReason": "None",
     "environment": {
       "name": "8660590d-33ac-ecd8-aef3-e4dd0d6071f4",

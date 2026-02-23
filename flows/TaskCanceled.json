@@ -87,7 +87,7 @@
                 "Compose_TaskTitle": {
                   "runAfter": {},
                   "type": "Compose",
-                  "inputs": "@replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'],outputs('Get_a_row_by_ID')?['body/cr_prompt'],'Task'),200),'\\\\','\\\\\\\\'),'\"','\\\\\"'),decodeUriComponent('%0A'),' '),decodeUriComponent('%0D'),'')"
+                  "inputs": "@replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'],outputs('Get_a_row_by_ID')?['body/cr_prompt'],'Task'),200), '\\\\', '\\\\\\\\'), '\"', '\\\\\"'), decodeUriComponent('%0A'), ' '), decodeUriComponent('%0D'), '')"
                 },
                 "Compose_SubmittedTime": {
                   "runAfter": {},
@@ -114,13 +114,10 @@
                     ],
                     "Compose_Duration": [
                       "Succeeded"
-                    ],
-                    "Compose_LogMessages": [
-                      "Succeeded"
                     ]
                   },
                   "type": "Compose",
-                  "inputs": "@concat('{\"$schema\":\"http://adaptivecards.io/schemas/adaptive-card.json\",\"type\":\"AdaptiveCard\",\"version\":\"1.5\",\"body\":[{\"type\":\"Container\",\"style\":\"emphasis\",\"bleed\":true,\"items\":[{\"type\":\"ColumnSet\",\"columns\":[{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"Image\",\"url\":\"https://cdn-icons-png.flaticon.com/512/4712/4712109.png\",\"size\":\"Medium\",\"style\":\"Person\",\"altText\":\"Shraga Agent\"}],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"stretch\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Shraga Worker\",\"weight\":\"Bolder\",\"size\":\"Medium\"},{\"type\":\"TextBlock\",\"text\":\"', take(outputs('Compose_TaskTitle'), 200), '\",\"size\":\"Default\",\"isSubtle\":true,\"spacing\":\"None\",\"wrap\":true}],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"KILLED\",\"color\":\"Warning\",\"size\":\"Default\",\"weight\":\"Bolder\"}],\"verticalContentAlignment\":\"Center\"}]}]},{\"type\":\"Container\",\"spacing\":\"Small\",\"items\":[{\"type\":\"Container\",\"style\":\"emphasis\",\"id\":\"logCollapsed\",\"maxHeight\":\"250px\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"', replace(replace(replace(replace(outputs('Compose_LogMessages'), '\\\\', '\\\\\\\\'), '\"', '\\\\\"'), decodeUriComponent('%0A'), '\\n'), decodeUriComponent('%0D'), ''), '\",\"wrap\":true,\"size\":\"Small\",\"fontType\":\"Monospace\",\"isSubtle\":true}]},{\"type\":\"Container\",\"style\":\"emphasis\",\"id\":\"logExpanded\",\"isVisible\":false,\"items\":[{\"type\":\"TextBlock\",\"text\":\"', replace(replace(replace(replace(outputs('Compose_LogMessages'), '\\\\', '\\\\\\\\'), '\"', '\\\\\"'), decodeUriComponent('%0A'), '\\n'), decodeUriComponent('%0D'), ''), '\",\"wrap\":true,\"size\":\"Small\",\"fontType\":\"Monospace\",\"isSubtle\":true}]},{\"type\":\"Container\",\"id\":\"btnExpand\",\"spacing\":\"None\",\"selectAction\":{\"type\":\"Action.ToggleVisibility\",\"targetElements\":[\"logCollapsed\",\"logExpanded\",\"btnExpand\",\"btnCollapse\"]},\"items\":[{\"type\":\"TextBlock\",\"text\":\"▼ show full log\",\"size\":\"Small\",\"color\":\"Accent\",\"horizontalAlignment\":\"Center\"}]},{\"type\":\"Container\",\"id\":\"btnCollapse\",\"isVisible\":false,\"spacing\":\"None\",\"selectAction\":{\"type\":\"Action.ToggleVisibility\",\"targetElements\":[\"logCollapsed\",\"logExpanded\",\"btnExpand\",\"btnCollapse\"]},\"items\":[{\"type\":\"TextBlock\",\"text\":\"▲ collapse log\",\"size\":\"Small\",\"color\":\"Accent\",\"horizontalAlignment\":\"Center\"}]}]},{\"type\":\"Container\",\"spacing\":\"Medium\",\"separator\":true,\"items\":[{\"type\":\"TextBlock\",\"text\":\"', concat('Task canceled by user.', if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat('\\n\\n[Open session folder](', outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'], ')'))), '\",\"wrap\":true,\"size\":\"Default\",\"isSubtle\":true}]},{\"type\":\"Container\",\"spacing\":\"Small\",\"items\":[{\"type\":\"FactSet\",\"facts\":[{\"title\":\"Submitted\",\"value\":\"', outputs('Compose_SubmittedTime'), '\"},{\"title\":\"Started\",\"value\":\"', outputs('Compose_SubmittedTime'), '\"},{\"title\":\"Killed\",\"value\":\"', formatDateTime(utcNow(), 'MMM dd, yyyy hh:mm:ss tt'), '\"},{\"title\":\"Duration\",\"value\":\"', outputs('Compose_Duration'), '\"}]}]}]}')"
+                  "inputs": "@concat('{\"$schema\":\"http://adaptivecards.io/schemas/adaptive-card.json\",\"type\":\"AdaptiveCard\",\"version\":\"1.5\",\"body\":[{\"type\":\"Container\",\"style\":\"emphasis\",\"bleed\":true,\"items\":[{\"type\":\"ColumnSet\",\"columns\":[{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"Image\",\"url\":\"https://cdn-icons-png.flaticon.com/512/4712/4712109.png\",\"size\":\"Medium\",\"style\":\"Person\",\"altText\":\"Shraga Agent\"}],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"stretch\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Shraga Worker\",\"weight\":\"Bolder\",\"size\":\"Medium\"},{\"type\":\"TextBlock\",\"text\":\"', take(outputs('Compose_TaskTitle'), 200), '\",\"size\":\"Default\",\"isSubtle\":true,\"spacing\":\"None\",\"wrap\":true}],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"KILLED\",\"color\":\"Warning\",\"size\":\"Default\",\"weight\":\"Bolder\"}],\"verticalContentAlignment\":\"Center\"}]}]},{\"type\":\"Container\",\"spacing\":\"Medium\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Submitted: ', outputs('Compose_SubmittedTime'), '\",\"size\":\"Default\",\"isSubtle\":true},{\"type\":\"TextBlock\",\"text\":\"Started: ', outputs('Compose_SubmittedTime'), '\",\"size\":\"Default\",\"isSubtle\":true,\"spacing\":\"None\"},{\"type\":\"TextBlock\",\"text\":\"ACTIVITY LOG\",\"size\":\"Default\",\"isSubtle\":true,\"weight\":\"Bolder\",\"spacing\":\"Small\"}]},{\"type\":\"Container\",\"spacing\":\"Small\",\"style\":\"emphasis\",\"items\":[{\"type\":\"ColumnSet\",\"spacing\":\"Small\",\"columns\":[{\"type\":\"Column\",\"width\":\"90px\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"', outputs('Compose_SubmittedTime'), '\",\"color\":\"Accent\",\"size\":\"Small\",\"spacing\":\"None\",\"fontType\":\"Monospace\"}]},{\"type\":\"Column\",\"width\":\"stretch\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Task canceled by user\",\"size\":\"Small\",\"wrap\":true,\"spacing\":\"None\"}]}]}]},{\"type\":\"Container\",\"spacing\":\"Medium\",\"separator\":true,\"items\":[{\"type\":\"TextBlock\",\"text\":\"', concat('Task canceled by user.', if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat('\\n\\n[Open session folder](', outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'], ')'))), '\",\"wrap\":true,\"size\":\"Default\",\"isSubtle\":true}]},{\"type\":\"Container\",\"spacing\":\"Small\",\"items\":[{\"type\":\"FactSet\",\"facts\":[{\"title\":\"Killed\",\"value\":\"', formatDateTime(utcNow(), 'MMM dd, yyyy h:mm tt'), '\"},{\"title\":\"Duration\",\"value\":\"', outputs('Compose_Duration'), '\"}]}]}]}')"
                 }
               },
               "runAfter": {},
@@ -199,7 +196,7 @@
       }
     },
     "createdTime": "2026-02-15T08:18:22.119274Z",
-    "lastModifiedTime": "2026-02-18T23:03:34.3067232Z",
+    "lastModifiedTime": "2026-02-23T18:50:39.4839669Z",
     "flowSuspensionReason": "None",
     "environment": {
       "name": "8660590d-33ac-ecd8-aef3-e4dd0d6071f4",
@@ -228,17 +225,23 @@
           "type": "Terminate"
         },
         {
-          "type": "Compose"
-        },
-        {
-          "type": "Compose"
-        },
-        {
-          "type": "Compose"
-        },
-        {
           "type": "OpenApiConnection",
           "swaggerOperationId": "UpdateCardInConversation"
+        },
+        {
+          "type": "Compose"
+        },
+        {
+          "type": "Compose"
+        },
+        {
+          "type": "Compose"
+        },
+        {
+          "type": "Compose"
+        },
+        {
+          "type": "Compose"
         },
         {
           "type": "Terminate"
