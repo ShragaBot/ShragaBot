@@ -449,11 +449,12 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
 
     # Create a small wrapper .cmd for each service that sets env vars before running Python
     # This ensures the scheduled task always has the right environment
+    $boxName = $env:COMPUTERNAME
     $services = @(
-        @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker"; EnvVars = @{ WEBHOOK_USER = $userEmail } }
+        @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker"; EnvVars = @{ WEBHOOK_USER = $userEmail; DEVBOX_HOSTNAME = $boxName } }
     )
     if (-not $WorkerOnly) {
-        $services += @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM"; EnvVars = @{ USER_EMAIL = $userEmail } }
+        $services += @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM"; EnvVars = @{ USER_EMAIL = $userEmail; DEVBOX_HOSTNAME = $boxName } }
     } else {
         Write-Info "WorkerOnly mode -- skipping PM (runs on your first dev box)"
     }
