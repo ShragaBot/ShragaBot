@@ -42,11 +42,16 @@ DEVCENTER_ENDPOINT = os.environ.get("DEVCENTER_ENDPOINT")
 DEVBOX_PROJECT = os.environ.get("DEVBOX_PROJECT")
 DEVBOX_POOL = os.environ.get("DEVBOX_POOL", "botdesigner-pool-italynorth")
 
-# Task status codes (string values matching Dataverse picklist)
+# Task status codes -- string labels for readability
 STATUS_PENDING = "Pending"
 STATUS_RUNNING = "Running"
 STATUS_COMPLETED = "Completed"
 STATUS_FAILED = "Failed"
+
+# Integer picklist values for OData $filter expressions and PATCH/POST bodies
+# (cr_shraga_tasks.cr_status is a Picklist/Whole Number, NOT a string)
+_STATUS_INT = {"Pending": 1, "Running": 5, "Completed": 7, "Failed": 8,
+               "Canceled": 9, "Submitted": 10, "Canceling": 11}
 
 # Provisioning threshold
 PROVISION_THRESHOLD = int(os.environ.get("PROVISION_THRESHOLD", "5"))
@@ -290,7 +295,7 @@ class Orchestrator:
         try:
             # Query for user tasks that need mirroring
             filter_query = (
-                f"cr_status eq '{STATUS_PENDING}' "
+                f"cr_status eq {_STATUS_INT[STATUS_PENDING]} "
                 f"and cr_ismirror eq false "
                 f"and cr_mirrortaskid eq null"
             )
@@ -343,7 +348,7 @@ class Orchestrator:
         mirror_data = {
             "cr_name": user_task.get("cr_name", "Unnamed Task"),
             "cr_prompt": user_task.get("cr_prompt", ""),
-            "cr_status": STATUS_PENDING,
+            "cr_status": _STATUS_INT[STATUS_PENDING],
             "cr_ismirror": True,
             "cr_mirroroftaskid": user_task_id,
             "cr_transcript": "",  # Start empty
@@ -436,7 +441,11 @@ class Orchestrator:
         for key, value in fields.items():
             dv_field = dataverse_fields.get(key, key)
             if value is not None:  # Skip None values
-                data[dv_field] = value
+                # Convert status string labels to integer picklist values
+                if dv_field == "cr_status" and isinstance(value, str):
+                    data[dv_field] = _STATUS_INT.get(value, value)
+                else:
+                    data[dv_field] = value
 
         if not data:
             print(f"[WARN] update_task called with no fields to update")

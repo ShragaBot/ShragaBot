@@ -332,7 +332,7 @@ class TestOrchestratorUpdateTask:
         result = orch.update_task("task-1", status="Running", assigned_worker_id="w-1")
         assert result is True
         sent_data = mock_patch.call_args[1]["json"]
-        assert sent_data["cr_status"] == "Running"
+        assert sent_data["cr_status"] == 5  # Running (integer picklist)
         assert sent_data["cr_assignedworkerid"] == "w-1"
 
     @patch("orchestrator.requests.patch")
