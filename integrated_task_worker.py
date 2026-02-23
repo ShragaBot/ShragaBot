@@ -25,6 +25,12 @@ os.environ.setdefault('PYTHONUNBUFFERED', '1')
 from onedrive_utils import find_onedrive_root, local_path_to_web_url, OneDriveRootNotFoundError
 
 DATAVERSE_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynamics.com")
+
+
+def _log(msg: str):
+    """Print with timestamp prefix."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}")
 TABLE = os.environ.get("TABLE_NAME", "cr_shraga_tasks")  # MCS table with solution prefix
 STATE_FILE = ".integrated_worker_state.json"
 
@@ -139,11 +145,11 @@ class IntegratedTaskWorker:
             sessions_root.mkdir(exist_ok=True)
             session_folder = sessions_root / folder_name
             session_folder.mkdir(exist_ok=True, parents=True)
-            print(f"[ONEDRIVE] Session folder: {session_folder}")
+            _log(f"[ONEDRIVE] Session folder: {session_folder}")
             return session_folder
         except OneDriveRootNotFoundError as e:
-            print(f"[WARN] OneDrive not found: {e}")
-            print(f"[WARN] Falling back to local work directory")
+            _log(f"[WARN] OneDrive not found: {e}")
+            _log(f"[WARN] Falling back to local work directory")
             fallback = self.work_base_dir / f"agent_task_{folder_name}"
             fallback.mkdir(exist_ok=True, parents=True)
             return fallback
@@ -180,8 +186,8 @@ class IntegratedTaskWorker:
 
             return self._token_cache
         except Exception as e:
-            print(f"[ERROR] Getting token: {e}")
-            print("[HINT] Make sure you've run: az login")
+            _log(f"[ERROR] Getting token: {e}")
+            _log("[HINT] Make sure you've run: az login")
             return None
 
     def _get_headers(self, content_type=None, etag=None):
@@ -217,16 +223,16 @@ class IntegratedTaskWorker:
             self.save_state()
             return user_id
         except requests.exceptions.Timeout:
-            print(f"[ERROR] WhoAmI request timed out")
+            _log(f"[ERROR] WhoAmI request timed out")
             return None
         except Exception as e:
-            print(f"[ERROR] Getting current user: {e}")
+            _log(f"[ERROR] Getting current user: {e}")
             return None
 
     def commit_task_results(self, task_id, work_dir):
         """Commit task results to Git for audit trail"""
         try:
-            print(f"[GIT] Committing task {task_id} results...")
+            _log(f"[GIT] Committing task {task_id} results...")
 
             # Add all changes
             subprocess.run(
@@ -251,9 +257,9 @@ class IntegratedTaskWorker:
             if result.returncode != 0:
                 # Check if no changes to commit
                 if "nothing to commit" in result.stdout:
-                    print(f"[GIT] No changes to commit for task {task_id}")
+                    _log(f"[GIT] No changes to commit for task {task_id}")
                     return None
-                print(f"[WARN] Git commit failed: {result.stderr}")
+                _log(f"[WARN] Git commit failed: {result.stderr}")
                 return None
 
             # Get commit SHA
@@ -267,12 +273,12 @@ class IntegratedTaskWorker:
             )
 
             commit_sha = result.stdout.strip()
-            print(f"[GIT] Committed as {commit_sha[:8]}")
+            _log(f"[GIT] Committed as {commit_sha[:8]}")
 
             return commit_sha
 
         except Exception as e:
-            print(f"[ERROR] Git commit failed: {e}")
+            _log(f"[ERROR] Git commit failed: {e}")
             return None
 
     def poll_pending_tasks(self):
@@ -306,10 +312,10 @@ class IntegratedTaskWorker:
             data = response.json()
             return data.get("value", [])
         except requests.exceptions.Timeout:
-            print(f"[ERROR] Polling tasks timed out")
+            _log(f"[ERROR] Polling tasks timed out")
             return []
         except Exception as e:
-            print(f"[ERROR] Polling tasks: {e}")
+            _log(f"[ERROR] Polling tasks: {e}")
             return []
 
     def claim_task(self, task: dict) -> bool:
@@ -322,7 +328,7 @@ class IntegratedTaskWorker:
         task_id = task.get("cr_shraga_taskid")
         etag = task.get("@odata.etag")
         if not task_id or not etag:
-            print(f"[WARN] Cannot claim task -- missing id or etag")
+            _log(f"[WARN] Cannot claim task -- missing id or etag")
             return False
 
         headers = self._get_headers(
@@ -342,16 +348,16 @@ class IntegratedTaskWorker:
             response = requests.patch(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
             if response.status_code == 412:
                 # Someone else claimed it first (optimistic concurrency conflict)
-                print(f"[INFO] Task {task_id} already claimed by another worker")
+                _log(f"[INFO] Task {task_id} already claimed by another worker")
                 return False
             response.raise_for_status()
-            print(f"[CLAIM] Successfully claimed task {task_id}")
+            _log(f"[CLAIM] Successfully claimed task {task_id}")
             return True
         except requests.exceptions.Timeout:
-            print(f"[WARN] claim_task timed out for {task_id}")
+            _log(f"[WARN] claim_task timed out for {task_id}")
             return False
         except Exception as e:
-            print(f"[ERROR] claim_task: {e}")
+            _log(f"[ERROR] claim_task: {e}")
             return False
 
     def is_task_canceled(self, task_id: str) -> bool:
@@ -378,7 +384,7 @@ class IntegratedTaskWorker:
                     STATUS_CANCELED, STATUS_CANCELING,
                 }
                 if status in cancel_values:
-                    print(f"[CANCEL] Task {task_id[:8]} has been canceled (status={status})")
+                    _log(f"[CANCEL] Task {task_id[:8]} has been canceled (status={status})")
                     return True
             return False
         except Exception:
@@ -419,7 +425,7 @@ class IntegratedTaskWorker:
             response.raise_for_status()
             return True
         except requests.exceptions.Timeout:
-            print(f"[ERROR] Task update timed out")
+            _log(f"[ERROR] Task update timed out")
             return False
         except Exception as e:
             # If optional DV columns don't exist yet, retry without them
@@ -429,7 +435,7 @@ class IntegratedTaskWorker:
             if "property" in error_str or "column" in error_str or "attribute" in error_str:
                 for col in optional_columns:
                     if col in data:
-                        print(f"[WARN] {col} column may not exist yet, removing from update")
+                        _log(f"[WARN] {col} column may not exist yet, removing from update")
                         del data[col]
                         removed_any = True
             if removed_any and data:
@@ -438,9 +444,9 @@ class IntegratedTaskWorker:
                     response.raise_for_status()
                     return True
                 except Exception as retry_e:
-                    print(f"[ERROR] Retry without optional columns also failed: {retry_e}")
+                    _log(f"[ERROR] Retry without optional columns also failed: {retry_e}")
                     return False
-            print(f"[ERROR] Updating task: {e}")
+            _log(f"[ERROR] Updating task: {e}")
             return False
 
     def parse_prompt_with_llm(self, raw_prompt: str) -> dict:
@@ -454,7 +460,7 @@ class IntegratedTaskWorker:
         Returns:
             dict with keys: task_description, success_criteria
         """
-        print("[LLM PARSER] Parsing unstructured prompt...")
+        _log("[LLM PARSER] Parsing unstructured prompt...")
 
         parsing_prompt = f"""You are a prompt parser. Extract the following fields from the raw task prompt below:
 
@@ -524,23 +530,23 @@ JSON output:"""
                 if field not in parsed:
                     parsed[field] = ""  # Provide empty default
 
-            print(f"[LLM PARSER] ✓ Successfully parsed prompt")
-            print(f"  - Task: {parsed['task_description'][:60]}...")
-            print(f"  - Criteria: {parsed['success_criteria'][:60]}...")
+            _log(f"[LLM PARSER] ✓ Successfully parsed prompt")
+            _log(f"  - Task: {parsed['task_description'][:60]}...")
+            _log(f"  - Criteria: {parsed['success_criteria'][:60]}...")
 
             return parsed
 
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
-            print("[LLM PARSER] ✗ Timeout - falling back to default")
+            _log("[LLM PARSER] ✗ Timeout - falling back to default")
             return {
                 'task_description': raw_prompt,
                 'success_criteria': 'Review and confirm task is complete'
             }
         except Exception as e:
-            print(f"[LLM PARSER] ✗ Error: {e}")
-            print(f"[LLM PARSER] Falling back to using raw prompt")
+            _log(f"[LLM PARSER] ✗ Error: {e}")
+            _log(f"[LLM PARSER] Falling back to using raw prompt")
             return {
                 'task_description': raw_prompt,
                 'success_criteria': 'Review and confirm task is complete'
@@ -560,7 +566,7 @@ JSON output:"""
             A 1-2 sentence summary string. Falls back to the first 120 chars of
             the raw prompt if LLM generation fails.
         """
-        print("[SHORT DESC] Generating short task description...")
+        _log("[SHORT DESC] Generating short task description...")
 
         summarize_prompt = (
             "Summarize the following task prompt in exactly 1-2 concise sentences "
@@ -609,19 +615,19 @@ JSON output:"""
             if not result_text:
                 raise Exception("Empty result from Claude")
 
-            print(f"[SHORT DESC] Generated: {result_text}")
+            _log(f"[SHORT DESC] Generated: {result_text}")
             return result_text
 
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
-            print("[SHORT DESC] Timeout - falling back to truncated prompt")
+            _log("[SHORT DESC] Timeout - falling back to truncated prompt")
             fallback = raw_prompt.replace('\n', ' ').strip()[:120]
             if len(raw_prompt) > 120:
                 fallback += "..."
             return fallback
         except Exception as e:
-            print(f"[SHORT DESC] Error: {e} - falling back to truncated prompt")
+            _log(f"[SHORT DESC] Error: {e} - falling back to truncated prompt")
             fallback = raw_prompt.replace('\n', ' ').strip()[:120]
             if len(raw_prompt) > 120:
                 fallback += "..."
@@ -668,17 +674,17 @@ JSON output:"""
         try:
             response = requests.post(url, headers=headers, json=data, timeout=10)
             response.raise_for_status()
-            print(f"[MESSAGE] Saved: {message[:80]}...")
+            _log(f"[MESSAGE] Saved: {message[:80]}...")
             return True
         except requests.exceptions.HTTPError as e:
             # Capture detailed error information
             error_detail = e.response.text if hasattr(e.response, 'text') else str(e)
-            print(f"[ERROR] Saving message (HTTP {e.response.status_code}): {error_detail[:500]}")
-            print(f"[ERROR] Message size: {len(message)} chars, Title: {title[:100]}")
+            _log(f"[ERROR] Saving message (HTTP {e.response.status_code}): {error_detail[:500]}")
+            _log(f"[ERROR] Message size: {len(message)} chars, Title: {title[:100]}")
 
             # If message is too large, try truncating content
             if e.response.status_code == 400 and len(message) > 10000:
-                print(f"[RETRY] Message too large ({len(message)} chars), truncating to 10000 chars")
+                _log(f"[RETRY] Message too large ({len(message)} chars), truncating to 10000 chars")
                 truncated_message = message[:10000] + "\n\n... (truncated - full result saved in task record)"
                 truncated_data = {
                     "cr_name": title,
@@ -691,16 +697,16 @@ JSON output:"""
                 try:
                     response = requests.post(url, headers=headers, json=truncated_data, timeout=10)
                     response.raise_for_status()
-                    print(f"[MESSAGE] Saved (truncated): {message[:80]}...")
+                    _log(f"[MESSAGE] Saved (truncated): {message[:80]}...")
                     return True
                 except requests.exceptions.HTTPError as e2:
                     error_detail2 = e2.response.text if hasattr(e2.response, 'text') else str(e2)
-                    print(f"[ERROR] Even truncated message failed (HTTP {e2.response.status_code}): {error_detail2[:500]}")
+                    _log(f"[ERROR] Even truncated message failed (HTTP {e2.response.status_code}): {error_detail2[:500]}")
             return False
         except Exception as e:
             # Handle non-HTTP errors (network, timeout, etc.)
-            print(f"[ERROR] Non-HTTP error saving message: {type(e).__name__}: {e}")
-            print(f"[ERROR] Message size: {len(message)} chars")
+            _log(f"[ERROR] Non-HTTP error saving message: {type(e).__name__}: {e}")
+            _log(f"[ERROR] Message size: {len(message)} chars")
             return False
 
     def fetch_task_activities(self, task_id: str, max_messages: int = 50) -> list:
@@ -726,7 +732,7 @@ JSON output:"""
             messages = response.json().get("value", [])
             return [m.get("cr_name", "")[:120] for m in messages if m.get("cr_name")]
         except Exception as e:
-            print(f"[WARN] Could not fetch task activities: {e}")
+            _log(f"[WARN] Could not fetch task activities: {e}")
             return []
 
     def build_session_summary(self, task_id: str, terminal_status: str,
@@ -804,16 +810,16 @@ JSON output:"""
         summary_file = session_folder / "session_summary.json"
         try:
             summary_file.write_text(summary_json_str, encoding="utf-8")
-            print(f"[SUMMARY] Wrote session_summary.json ({len(summary_json_str)} bytes) to {summary_file}")
+            _log(f"[SUMMARY] Wrote session_summary.json ({len(summary_json_str)} bytes) to {summary_file}")
         except Exception as e:
-            print(f"[ERROR] Could not write session_summary.json: {e}")
+            _log(f"[ERROR] Could not write session_summary.json: {e}")
 
         # 2. Write to Dataverse column (graceful if column doesn't exist)
         try:
             self.update_task(task_id, session_summary=summary_json_str)
-            print(f"[SUMMARY] Wrote session summary to DV column crb3b_sessionsummary")
+            _log(f"[SUMMARY] Wrote session summary to DV column crb3b_sessionsummary")
         except Exception as e:
-            print(f"[WARN] Could not write session summary to DV: {e}")
+            _log(f"[WARN] Could not write session summary to DV: {e}")
 
         return summary
 
@@ -836,18 +842,18 @@ JSON output:"""
             prompt_file = session_folder / "TASK_PROMPT.md"
             content = f"# Full Task Prompt\n\n{raw_prompt or ''}"
             prompt_file.write_text(content, encoding="utf-8")
-            print(f"[FILES] Wrote TASK_PROMPT.md ({len(content)} chars) to {prompt_file}")
+            _log(f"[FILES] Wrote TASK_PROMPT.md ({len(content)} chars) to {prompt_file}")
         except Exception as e:
-            print(f"[ERROR] Could not write TASK_PROMPT.md: {e}")
+            _log(f"[ERROR] Could not write TASK_PROMPT.md: {e}")
 
         # --- SUCCESS_CRITERIA.md ---
         try:
             criteria_file = session_folder / "SUCCESS_CRITERIA.md"
             criteria_content = f"# Success Criteria\n\n{success_criteria or ''}"
             criteria_file.write_text(criteria_content, encoding="utf-8")
-            print(f"[FILES] Wrote SUCCESS_CRITERIA.md ({len(criteria_content)} chars) to {criteria_file}")
+            _log(f"[FILES] Wrote SUCCESS_CRITERIA.md ({len(criteria_content)} chars) to {criteria_file}")
         except Exception as e:
-            print(f"[ERROR] Could not write SUCCESS_CRITERIA.md: {e}")
+            _log(f"[ERROR] Could not write SUCCESS_CRITERIA.md: {e}")
 
     def capture_git_history(self, session_folder: Path, work_dir: Path = None):
         """Capture git commit history and write GIT_HISTORY.md to the session folder.
@@ -873,7 +879,7 @@ JSON output:"""
             )
 
             if result.returncode != 0:
-                print(f"[WARN] git log failed (rc={result.returncode}): {result.stderr}")
+                _log(f"[WARN] git log failed (rc={result.returncode}): {result.stderr}")
                 git_log_text = f"(git log failed: {result.stderr.strip()})"
             else:
                 git_log_text = result.stdout.strip() or "(no commits)"
@@ -881,11 +887,11 @@ JSON output:"""
             history_file = session_folder / "GIT_HISTORY.md"
             content = f"# Git Commit History\n\n```\n{git_log_text}\n```\n"
             history_file.write_text(content, encoding="utf-8")
-            print(f"[FILES] Wrote GIT_HISTORY.md ({len(content)} chars) to {history_file}")
+            _log(f"[FILES] Wrote GIT_HISTORY.md ({len(content)} chars) to {history_file}")
         except subprocess.TimeoutExpired:
-            print("[WARN] git log timed out")
+            _log("[WARN] git log timed out")
         except Exception as e:
-            print(f"[ERROR] Could not capture git history: {e}")
+            _log(f"[ERROR] Could not capture git history: {e}")
 
     def write_result_and_transcript_files(self, session_folder: Path,
                                            result_text: str = "",
@@ -905,17 +911,17 @@ JSON output:"""
         try:
             result_file = session_folder / "result.md"
             result_file.write_text(result_text or "", encoding="utf-8")
-            print(f"[FILES] Wrote result.md ({len(result_text or '')} chars) to {result_file}")
+            _log(f"[FILES] Wrote result.md ({len(result_text or '')} chars) to {result_file}")
         except Exception as e:
-            print(f"[ERROR] Could not write result.md: {e}")
+            _log(f"[ERROR] Could not write result.md: {e}")
 
         # --- transcript.md ---
         try:
             transcript_file = session_folder / "transcript.md"
             transcript_file.write_text(transcript or "", encoding="utf-8")
-            print(f"[FILES] Wrote transcript.md ({len(transcript or '')} chars) to {transcript_file}")
+            _log(f"[FILES] Wrote transcript.md ({len(transcript or '')} chars) to {transcript_file}")
         except Exception as e:
-            print(f"[ERROR] Could not write transcript.md: {e}")
+            _log(f"[ERROR] Could not write transcript.md: {e}")
 
     def write_session_log(self, summary: dict, session_folder: Path,
                           result_text: str = "", folder_url: str = ""):
@@ -1062,10 +1068,10 @@ JSON output:"""
             log_content = "\n".join(lines)
             log_file = session_folder / "SESSION_LOG.md"
             log_file.write_text(log_content, encoding="utf-8")
-            print(f"[SESSION LOG] Wrote SESSION_LOG.md ({len(log_content)} bytes) to {log_file}")
+            _log(f"[SESSION LOG] Wrote SESSION_LOG.md ({len(log_content)} bytes) to {log_file}")
 
         except Exception as e:
-            print(f"[ERROR] Could not write SESSION_LOG.md: {e}")
+            _log(f"[ERROR] Could not write SESSION_LOG.md: {e}")
 
     def execute_with_autonomous_agent(self, task_prompt: str, task_id: str,
                                       current_transcript: str, parsed_prompt_data: dict = None):
@@ -1077,12 +1083,12 @@ JSON output:"""
             task_id: Task ID for Dataverse updates
             current_transcript: Current JSONL transcript
         """
-        print(f"[AUTONOMOUS AGENT] Starting Worker/Verifier loop...")
+        _log(f"[AUTONOMOUS AGENT] Starting Worker/Verifier loop...")
         task_start_time = time.time()
 
         # Use LLM to parse the unstructured prompt (or reuse if already parsed)
         if parsed_prompt_data:
-            print("[LLM PARSER] Using previously parsed prompt data")
+            _log("[LLM PARSER] Using previously parsed prompt data")
             parsed = parsed_prompt_data
         else:
             parsed = self.parse_prompt_with_llm(task_prompt)
@@ -1182,7 +1188,7 @@ JSON output:"""
                     folder_url=folder_url if folder_url else "",
                 )
             except Exception as e:
-                print(f"[ERROR] Failed to write session summary: {e}")
+                _log(f"[ERROR] Failed to write session summary: {e}")
 
             # Write result.md and transcript.md to session folder
             try:
@@ -1192,13 +1198,13 @@ JSON output:"""
                     transcript=transcript,
                 )
             except Exception as e:
-                print(f"[ERROR] Failed to write result/transcript files: {e}")
+                _log(f"[ERROR] Failed to write result/transcript files: {e}")
 
             # Capture git commit history (T048)
             try:
                 self.capture_git_history(session_folder)
             except Exception as e:
-                print(f"[ERROR] Failed to capture git history: {e}")
+                _log(f"[ERROR] Failed to capture git history: {e}")
 
         try:
             # Worker/Verifier loop
@@ -1213,7 +1219,7 @@ JSON output:"""
                     _finalize_summary("canceled", cancel_msg)
                     return False, cancel_msg, transcript, accumulated_stats
 
-                print(f"\n[ITERATION {iteration}]")
+                _log(f"\n[ITERATION {iteration}]")
 
                 # Update Dataverse
                 transcript = self.append_to_transcript(
@@ -1264,7 +1270,7 @@ JSON output:"""
                         return False, cancel_msg, transcript, accumulated_stats
 
                     # Verification phase
-                    print(f"\n[VERIFICATION]")
+                    _log(f"\n[VERIFICATION]")
 
                     transcript = self.append_to_transcript(
                         transcript,
@@ -1290,10 +1296,10 @@ JSON output:"""
 
                     if approved:
                         # Task completed successfully!
-                        print(f"\n[SUCCESS] Task approved by verifier")
+                        _log(f"\n[SUCCESS] Task approved by verifier")
 
                         # Create summary
-                        print(f"\n[SUMMARIZER] Creating final summary...")
+                        _log(f"\n[SUMMARIZER] Creating final summary...")
                         self.send_to_webhook("Creating summary of results...")
 
                         summary, summarizer_stats = agent.create_summary(on_event=streaming_event)
@@ -1318,7 +1324,7 @@ JSON output:"""
 
                     else:
                         # Verification failed, loop back to worker
-                        print(f"\n[RETRY] Verification failed, providing feedback to worker")
+                        _log(f"\n[RETRY] Verification failed, providing feedback to worker")
 
                         self.send_to_webhook(
                             f"Verification failed (iteration {iteration}). Retrying with feedback..."
@@ -1335,7 +1341,7 @@ JSON output:"""
 
         except Exception as e:
             error_msg = f"Error during autonomous execution: {e}"
-            print(f"[ERROR] {error_msg}")
+            _log(f"[ERROR] {error_msg}")
 
             transcript = self.append_to_transcript(
                 transcript,
@@ -1359,14 +1365,14 @@ JSON output:"""
         prompt = task.get("cr_prompt", "")
         transcript = task.get("cr_transcript", "")
 
-        print(f"\n{'='*80}")
-        print(f"[TASK] Processing: {task_name}")
-        print(f"[ID] {task_id}")
-        print(f"{'='*80}")
+        _log(f"\n{'='*80}")
+        _log(f"[TASK] Processing: {task_name}")
+        _log(f"[ID] {task_id}")
+        _log(f"{'='*80}")
 
         # Atomically claim the task using ETag (prevents double-pickup)
         if not self.claim_task(task):
-            print(f"[SKIP] Could not claim task {task_id}, moving on")
+            _log(f"[SKIP] Could not claim task {task_id}, moving on")
             return False
 
         self.current_task_id = task_id  # Track for message correlation
@@ -1444,7 +1450,7 @@ Full details saved in Dataverse (Task ID: {task_id}){git_info}"""
 
             self.send_to_webhook(completion_msg)
 
-            print(f"[TASK] Completed: {task_name}\n")
+            _log(f"[TASK] Completed: {task_name}\n")
             self.current_task_id = None
             return True
         else:
@@ -1466,7 +1472,7 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
 
             self.send_to_webhook(failure_msg)
 
-            print(f"[TASK] Failed: {task_name}\n")
+            _log(f"[TASK] Failed: {task_name}\n")
             self.current_task_id = None
             return False
 
@@ -1476,25 +1482,25 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
             sys.stdout.reconfigure(encoding='utf-8')
             sys.stderr.reconfigure(encoding='utf-8')
 
-        print("="*80)
-        print("INTEGRATED TASK WORKER (with Autonomous Agent)")
-        print("="*80)
-        print(f"Dataverse: {DATAVERSE_URL}")
-        print(f"Table: {TABLE}")
-        print(f"Dev box: {MACHINE_NAME}")
-        print(f"Autonomous Agent Dir: {self.work_base_dir}")
-        print("="*80)
+        _log("="*80)
+        _log("INTEGRATED TASK WORKER (with Autonomous Agent)")
+        _log("="*80)
+        _log(f"Dataverse: {DATAVERSE_URL}")
+        _log(f"Table: {TABLE}")
+        _log(f"Dev box: {MACHINE_NAME}")
+        _log(f"Autonomous Agent Dir: {self.work_base_dir}")
+        _log("="*80)
 
         # Get current user
         if not self.current_user_id:
-            print("Identifying user...")
+            _log("Identifying user...")
             if not self.get_current_user():
-                print("[FATAL] Could not identify user")
+                _log("[FATAL] Could not identify user")
                 return
 
-        print(f"Worker started for user: {self.current_user_id}")
-        print(f"Current version: {self._my_version}")
-        print("\n[POLLING] Monitoring for pending tasks...\n")
+        _log(f"Worker started for user: {self.current_user_id}")
+        _log(f"Current version: {self._my_version}")
+        _log("\n[POLLING] Monitoring for pending tasks...\n")
 
         # Send startup notification
         self.send_to_webhook(f"Worker started (v{self._my_version}) on {MACHINE_NAME}")
@@ -1506,7 +1512,7 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                     try:
                         tasks = self.poll_pending_tasks()
                     except Exception as e:
-                        print(f"[ERROR] Error polling for tasks: {e}")
+                        _log(f"[ERROR] Error polling for tasks: {e}")
                         try:
                             self.send_to_webhook(f"Error polling for tasks: {e}")
                         except Exception:
@@ -1515,17 +1521,17 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                         continue
 
                     if tasks:
-                        print(f"[FOUND] {len(tasks)} pending task(s)")
+                        _log(f"[FOUND] {len(tasks)} pending task(s)")
 
                         for task in tasks:
                             # Check if a new release is available
                             if should_exit(self._my_version):
-                                print(f"[UPDATE] New release detected. Exiting to restart with new version.")
+                                _log(f"[UPDATE] New release detected. Exiting to restart with new version.")
                                 sys.exit(0)
                             try:
                                 self.process_task(task)
                             except Exception as e:
-                                print(f"[ERROR] Unhandled exception processing task: {e}")
+                                _log(f"[ERROR] Unhandled exception processing task: {e}")
                                 self._cleanup_in_progress_task(f"Unhandled error: {e}")
                                 try:
                                     self.send_to_webhook(f"Task failed with unhandled error: {e}")
@@ -1534,14 +1540,14 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                     else:
                         # IDLE - Check if a new release is available
                         if should_exit(self._my_version):
-                            print(f"[UPDATE] New release detected. Exiting to restart with new version.")
+                            _log(f"[UPDATE] New release detected. Exiting to restart with new version.")
                             sys.exit(0)
 
                     # Poll every 10 seconds (autonomous agent takes longer)
                     time.sleep(10)
 
                 except Exception as e:
-                    print(f"\n[ERROR] Unexpected error in worker loop: {e}")
+                    _log(f"\n[ERROR] Unexpected error in worker loop: {e}")
                     self._cleanup_in_progress_task(f"Worker loop error: {e}")
                     try:
                         self.send_to_webhook(f"Worker error (recovering): {e}")
@@ -1551,16 +1557,16 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                     continue
 
         except KeyboardInterrupt:
-            print("\n\n[INTERRUPT] Stopping worker...")
+            _log("\n\n[INTERRUPT] Stopping worker...")
             self._cleanup_in_progress_task("Worker interrupted by user")
             self.send_to_webhook("Task worker stopped")
 
-        print("[SHUTDOWN] Worker stopped")
+        _log("[SHUTDOWN] Worker stopped")
 
     def _cleanup_in_progress_task(self, reason: str):
         """Mark the current in-progress task as failed so it doesn't stay stuck in RUNNING."""
         if self.current_task_id:
-            print(f"[CLEANUP] Marking task {self.current_task_id} as failed: {reason}")
+            _log(f"[CLEANUP] Marking task {self.current_task_id} as failed: {reason}")
             self.update_task(
                 self.current_task_id,
                 status=STATUS_FAILED,

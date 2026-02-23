@@ -11,6 +11,12 @@ os.environ.setdefault('PYTHONUNBUFFERED', '1')
 os.environ.setdefault('DEVBOX_HOSTNAME', platform.node())
 
 INSTANCE_ID = uuid.uuid4().hex[:8]
+
+
+def _log(msg: str):
+    """Print with timestamp prefix."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}")
 DV_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynamics.com")
 DV_API = f"{DV_URL}/api/data/v9.2"
 CONV_TBL = os.environ.get("CONVERSATIONS_TABLE", "cr_shraga_conversations")
@@ -63,16 +69,16 @@ class TaskManager:
                         sid = val if isinstance(val, str) else val.get("session_id", "")
                         if sid:
                             prev[mcs_id] = {"prev_session_id": sid, "session_id": None}
-                    print(f"[SESSIONS] Loaded {len(prev)} previous session(s)")
+                    _log(f"[SESSIONS] Loaded {len(prev)} previous session(s)")
                     return prev
-        except Exception as e: print(f"[WARN] Failed to load sessions: {e}")
+        except Exception as e: _log(f"[WARN] Failed to load sessions: {e}")
         return {}
 
     def _save_sessions(self):
         try:
             # Save in the new format: { mcs_id: { session_id, prev_session_id } }
             self._sessions_path.write_text(json.dumps(self._sessions, indent=2), encoding="utf-8")
-        except Exception as e: print(f"[WARN] Failed to save sessions: {e}")
+        except Exception as e: _log(f"[WARN] Failed to save sessions: {e}")
 
     def _get_recent_messages(self, mcs_conversation_id: str, count: int = 10) -> str:
         """Fetch recent messages from DV for this conversation to provide context."""
@@ -94,7 +100,7 @@ class TaskManager:
                 lines.append(f"{direction}: {msg}")
             return "\n".join(lines)
         except Exception as e:
-            print(f"[WARN] Could not fetch recent messages: {e}")
+            _log(f"[WARN] Could not fetch recent messages: {e}")
             return ""
 
     def _set_onboarding_completed(self):
@@ -102,7 +108,7 @@ class TaskManager:
         try:
             script = Path(__file__).parent.parent / "scripts" / "update_user_state.py"
             if not script.exists():
-                print(f"[WARN] update_user_state.py not found at {script}")
+                _log(f"[WARN] update_user_state.py not found at {script}")
                 return
             result = subprocess.run(
                 [sys.executable, str(script), "--email", self.user_email,
@@ -110,17 +116,17 @@ class TaskManager:
                 capture_output=True, text=True, timeout=30
             )
             if result.returncode == 0:
-                print(f"[ONBOARD] Set onboardingstep=completed for {self.user_email}")
+                _log(f"[ONBOARD] Set onboardingstep=completed for {self.user_email}")
             else:
-                print(f"[WARN] Failed to set onboarding: {result.stderr[:200]}")
+                _log(f"[WARN] Failed to set onboarding: {result.stderr[:200]}")
         except Exception as e:
-            print(f"[WARN] Could not set onboarding state: {e}")
+            _log(f"[WARN] Could not set onboarding state: {e}")
 
     def _forget_session(self, mcs_id: str):
         if mcs_id in self._sessions:
             entry = self._sessions.pop(mcs_id)
             sid = entry.get("session_id", "") if isinstance(entry, dict) else str(entry)
-            print(f"[SESSIONS] Forgot session {sid[:8]}... for {mcs_id[:20]}...")
+            _log(f"[SESSIONS] Forgot session {sid[:8]}... for {mcs_id[:20]}...")
             self._save_sessions()
 
     def get_token(self) -> str | None:
@@ -131,7 +137,7 @@ class TaskManager:
             self._token_cache = t.token
             self._token_expires = datetime.fromtimestamp(t.expires_on, tz=timezone.utc) - timedelta(minutes=5)
             return self._token_cache
-        except Exception as e: print(f"[ERROR] Getting token: {e}"); return None
+        except Exception as e: _log(f"[ERROR] Getting token: {e}"); return None
 
     def _headers(self, content_type=None, etag=None):
         tok = self.get_token()
@@ -150,23 +156,23 @@ class TaskManager:
                 f" and cr_direction eq '{DIR_IN}' and cr_status eq '{ST_UNCLAIMED}'"
                 f"&$orderby=createdon asc&$top=10", headers=hdr, timeout=REQ_TMO)
             r.raise_for_status(); m = r.json().get("value", [])
-            if m: print(f"[POLL] Found {len(m)} unclaimed message(s) for {self.user_email}")
+            if m: _log(f"[POLL] Found {len(m)} unclaimed message(s) for {self.user_email}")
             return m
-        except requests.exceptions.Timeout: print("[WARN] poll_unclaimed timed out"); return []
-        except Exception as e: print(f"[ERROR] poll_unclaimed: {e}"); return []
+        except requests.exceptions.Timeout: _log("[WARN] poll_unclaimed timed out"); return []
+        except Exception as e: _log(f"[ERROR] poll_unclaimed: {e}"); return []
 
     def claim_message(self, msg: dict) -> bool:
         rid, etag = msg.get("cr_shraga_conversationid"), msg.get("@odata.etag")
-        if not rid or not etag: print("[WARN] Cannot claim message -- missing id or etag"); return False
+        if not rid or not etag: _log("[WARN] Cannot claim message -- missing id or etag"); return False
         hdr = self._headers(content_type="application/json", etag=etag)
         if not hdr: return False
         try:
             r = requests.patch(f"{DV_API}/{CONV_TBL}({rid})", headers=hdr, timeout=REQ_TMO,
                 json={"cr_status": ST_CLAIMED, "cr_claimed_by": f"{self.manager_id}:{INSTANCE_ID}"})
-            if r.status_code == 412: print(f"[INFO] Message {rid} already claimed"); return False
-            r.raise_for_status(); print(f"[CLAIM] Claimed {rid[:8]} successfully"); return True
-        except requests.exceptions.Timeout: print(f"[WARN] claim_message timed out"); return False
-        except Exception as e: print(f"[ERROR] claim_message: {e}"); return False
+            if r.status_code == 412: _log(f"[INFO] Message {rid} already claimed"); return False
+            r.raise_for_status(); _log(f"[CLAIM] Claimed {rid[:8]} successfully"); return True
+        except requests.exceptions.Timeout: _log(f"[WARN] claim_message timed out"); return False
+        except Exception as e: _log(f"[ERROR] claim_message: {e}"); return False
 
     def mark_processed(self, row_id: str):
         hdr = self._headers(content_type="application/json")
@@ -174,13 +180,13 @@ class TaskManager:
         try:
             requests.patch(f"{DV_API}/{CONV_TBL}({row_id})", headers=hdr,
                 json={"cr_status": ST_PROCESSED}, timeout=REQ_TMO)
-            print(f"[DV] Marked {row_id[:8]} as Processed")
-        except Exception as e: print(f"[WARN] mark_processed failed: {e}")
+            _log(f"[DV] Marked {row_id[:8]} as Processed")
+        except Exception as e: _log(f"[WARN] mark_processed failed: {e}")
 
     def send_response(self, in_reply_to: str, mcs_conversation_id: str, text: str,
                       followup_expected: bool = False):
         hdr = self._headers(content_type="application/json")
-        if not hdr: print("[ERROR] Cannot send response -- no auth token"); return None
+        if not hdr: _log("[ERROR] Cannot send response -- no auth token"); return None
         try:
             body = {"cr_name": text[:100], "cr_useremail": self.user_email,
                     "cr_mcs_conversation_id": mcs_conversation_id, "cr_message": text,
@@ -189,9 +195,9 @@ class TaskManager:
                     "cr_followup_expected": "true" if followup_expected else ""}
             r = requests.post(f"{DV_API}/{CONV_TBL}", headers=hdr, json=body, timeout=REQ_TMO)
             r.raise_for_status()
-            print(f'[DV] Wrote outbound response (reply_to={in_reply_to[:8]}): "{text[:60]}..."')
+            _log(f'[DV] Wrote outbound response (reply_to={in_reply_to[:8]}): "{text[:60]}..."')
             return {"cr_shraga_conversationid": "created"} if r.status_code == 204 else r.json()
-        except Exception as e: print(f"[ERROR] send_response: {e}"); return None
+        except Exception as e: _log(f"[ERROR] send_response: {e}"); return None
 
     def _dv_batch_patch(self, table, filter_q, patch_body, label, top=50):
         """Query rows matching filter_q, PATCH each with patch_body. Returns count patched."""
@@ -201,7 +207,7 @@ class TaskManager:
             r = requests.get(f"{DV_API}/{table}?$filter={filter_q}&$top={top}",
                              headers=hdr, timeout=REQ_TMO)
             r.raise_for_status(); rows = r.json().get("value", [])
-        except Exception as e: print(f"[{label}] Error querying: {e}"); return 0
+        except Exception as e: _log(f"[{label}] Error querying: {e}"); return 0
         if not rows: return 0
         pk = "cr_shraga_conversationid" if table == CONV_TBL else "cr_shraga_taskid"
         count = 0
@@ -215,9 +221,9 @@ class TaskManager:
                                json=patch_body, timeout=REQ_TMO).raise_for_status()
                 count += 1
                 name = row.get("cr_name", rid[:8])
-                print(f"[{label}] Patched '{name}' ({rid[:8]}...)")
-            except Exception as e: print(f"[{label}] Error patching {rid}: {e}")
-        if count: print(f"[{label}] Patched {count} row(s)")
+                _log(f"[{label}] Patched '{name}' ({rid[:8]}...)")
+            except Exception as e: _log(f"[{label}] Error patching {rid}: {e}")
+        if count: _log(f"[{label}] Patched {count} row(s)")
         return count
 
     def cleanup_stale_outbound(self, max_age_minutes: int = 10):
@@ -250,22 +256,22 @@ class TaskManager:
         try:
             stdout, stderr = proc.communicate(timeout=300)
         except subprocess.TimeoutExpired:
-            print("[WARN] Claude CLI timed out -- killing process")
+            _log("[WARN] Claude CLI timed out -- killing process")
             proc.kill()
             proc.communicate()  # reap
             return None, ""
         if proc.returncode != 0:
-            print(f"[WARN] Claude CLI failed (rc={proc.returncode}): {stderr[:300]}"); return None, ""
+            _log(f"[WARN] Claude CLI failed (rc={proc.returncode}): {stderr[:300]}"); return None, ""
         raw = stdout.strip()
         if not raw: return None, ""
         try: data = json.loads(raw)
         except json.JSONDecodeError: return raw, ""
         if data.get("is_error"):
-            print(f"[WARN] Claude error: {data.get('result','')[:200]}"); return None, ""
+            _log(f"[WARN] Claude error: {data.get('result','')[:200]}"); return None, ""
         result = data.get("result", "")
         # Guard: if Claude output raw JSON tool_calls, it's a malformed response - retry without session
         if result and result.strip().startswith('{"tool_calls"'):
-            print(f"[WARN] Claude returned raw tool_calls JSON instead of natural language - discarding")
+            _log(f"[WARN] Claude returned raw tool_calls JSON instead of natural language - discarding")
             return None, data.get("session_id", "")
         return result, data.get("session_id", "")
 
@@ -274,7 +280,7 @@ class TaskManager:
         mcs = msg.get("cr_mcs_conversation_id", "")
         txt = msg.get("cr_message", "").strip()
         if not txt: self.mark_processed(rid); return
-        print(f"[MSG] Processing: {txt[:80]}...")
+        _log(f"[MSG] Processing: {txt[:80]}...")
 
         session_entry = self._sessions.get(mcs, {}) if mcs else {}
         if isinstance(session_entry, str):
@@ -289,7 +295,7 @@ class TaskManager:
                 # Within-run resume -- same model, same prompt
                 resp, new_sid = self._call_claude(txt, session_id=sid)
                 if resp is None:
-                    print(f"[SESSIONS] Resume failed for {sid[:8]}..., starting fresh")
+                    _log(f"[SESSIONS] Resume failed for {sid[:8]}..., starting fresh")
                     sid = None  # Fall through to new session below
 
             if not sid:
@@ -315,21 +321,21 @@ class TaskManager:
                     "prev_session_id": prev_sid
                 }
                 self._save_sessions()
-                if not sid: print(f"[SESSIONS] New session {new_sid[:8]}... for {mcs[:20]}...")
+                if not sid: _log(f"[SESSIONS] New session {new_sid[:8]}... for {mcs[:20]}...")
 
-        except subprocess.TimeoutExpired: print("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE
-        except FileNotFoundError: print("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE
-        except Exception as e: print(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE
+        except subprocess.TimeoutExpired: _log("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE
+        except FileNotFoundError: _log("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE
+        except Exception as e: _log(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE
         self.send_response(in_reply_to=rid, mcs_conversation_id=mcs, text=resp)
         self.mark_processed(rid)
-        print(f"[MSG] Responded: {resp[:80]}...")
+        _log(f"[MSG] Responded: {resp[:80]}...")
 
     def run(self):
         if sys.platform == "win32":
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-        print(f"[START] PM for {self.user_email} | instance={INSTANCE_ID} | pid={os.getpid()}")
-        print(f"[CONFIG] DV: {DV_URL} | Poll: {POLL_SEC}s")
+        _log(f"[START] PM for {self.user_email} | instance={INSTANCE_ID} | pid={os.getpid()}")
+        _log(f"[CONFIG] DV: {DV_URL} | Poll: {POLL_SEC}s")
         self._set_onboarding_completed()
         self.cleanup_stale_outbound()
         last_cleanup = time.time()
@@ -341,19 +347,19 @@ class TaskManager:
                         try: self.process_message(m)
                         except Exception as e:
                             rid = m.get("cr_shraga_conversationid", "?")
-                            print(f"[ERROR] Processing {rid}: {e}")
+                            _log(f"[ERROR] Processing {rid}: {e}")
                             try: self.send_response(rid, m.get("cr_mcs_conversation_id",""), FALLBACK_MESSAGE); self.mark_processed(rid)
                             except Exception: pass
                 if time.time() - last_sweep > 300: self.sweep_stale_tasks(); last_sweep = time.time()
                 if time.time() - last_cleanup > 1800: self.cleanup_stale_outbound(); last_cleanup = time.time()
                 # Check if a new release is available
                 if should_exit(self._my_version):
-                    print(f"[UPDATE] New release detected. Exiting to restart with new version.")
+                    _log(f"[UPDATE] New release detected. Exiting to restart with new version.")
                     sys.exit(0)
                 time.sleep(POLL_SEC)
-            except KeyboardInterrupt: print("\n[STOP] Shutting down."); break
-            except Exception as e: print(f"[ERROR] Main loop: {e}"); time.sleep(POLL_SEC * 2)
+            except KeyboardInterrupt: _log("\n[STOP] Shutting down."); break
+            except Exception as e: _log(f"[ERROR] Main loop: {e}"); time.sleep(POLL_SEC * 2)
 def main():
-    if not USER_EMAIL: print("ERROR: USER_EMAIL required."); sys.exit(1)
+    if not USER_EMAIL: _log("ERROR: USER_EMAIL required."); sys.exit(1)
     TaskManager(USER_EMAIL, working_dir=WORKING_DIR).run()
 if __name__ == "__main__": main()
