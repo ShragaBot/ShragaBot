@@ -169,12 +169,12 @@ class TestRemoteDevBoxAuth:
         assert "Shraga-Authenticate" in msg
         assert "done" in msg.lower()
 
-    def test_build_setup_script_message(self):
-        """The setup script message includes the PS1 script."""
+    def test_get_setup_script(self):
+        """The setup script method returns the PS1 script content."""
         auth = RemoteDevBoxAuth()
-        msg = auth.build_setup_script_message()
-        assert "pip install" in msg
-        assert "shraga-worker" in msg
+        script = auth.get_setup_script()
+        assert "pip install" in script
+        assert "shraga-worker" in script
 
     def test_connection_url_cached_after_first_call(self):
         """Once resolved, the connection URL is cached."""
@@ -210,12 +210,11 @@ class TestTeamsClaudeAuth:
             connection_url="https://devbox.microsoft.com/connect?devbox=shraga-test",
         )
         result = auth.request_authentication()
-        assert result is True
+        assert result["method"] == "rdp"
+        assert "devbox.microsoft.com" in result["connection_url"]
         assert auth.used_rdp_auth is True
-        # Message should contain the RDP URL
-        msg = send_fn.call_args[0][1]
-        assert "devbox.microsoft.com" in msg
-        assert "claude /login" in msg
+        # No hardcoded message sent -- caller composes the message
+        send_fn.assert_not_called()
 
     def test_request_auth_uses_rdp_via_manager(self):
         """When devbox_manager is provided, RDP auth resolves the URL."""
@@ -230,10 +229,10 @@ class TestTeamsClaudeAuth:
             devbox_manager=mock_mgr,
         )
         result = auth.request_authentication()
-        assert result is True
+        assert result["method"] == "rdp"
+        assert "devbox.microsoft.com" in result["connection_url"]
         assert auth.used_rdp_auth is True
-        msg = send_fn.call_args[0][1]
-        assert "devbox.microsoft.com" in msg
+        send_fn.assert_not_called()
 
     @patch.object(ClaudeAuthManager, "start_auth", return_value="https://auth.example.com")
     def test_request_auth_falls_back_to_device_code_without_rdp_info(self, mock_start):
@@ -241,21 +240,21 @@ class TestTeamsClaudeAuth:
         send_fn = MagicMock()
         auth = TeamsClaudeAuth(send_fn, "user-123")
         result = auth.request_authentication()
-        assert result is True
+        assert result["method"] == "device_code"
+        assert result["auth_url"] == "https://auth.example.com"
         # used_rdp_auth should be False since we fell back to device code
         assert auth.used_rdp_auth is False
-        msg = send_fn.call_args[0][1]
-        assert "https://auth.example.com" in msg
+        send_fn.assert_not_called()
 
     @patch.object(ClaudeAuthManager, "start_auth", side_effect=Exception("Network error"))
     def test_request_auth_total_failure(self, mock_start):
-        """Without RDP info and device-code failure, returns False."""
+        """Without RDP info and device-code failure, returns failed dict."""
         send_fn = MagicMock()
         auth = TeamsClaudeAuth(send_fn, "user-123")
         result = auth.request_authentication()
-        assert result is False
-        msg = send_fn.call_args[0][1]
-        assert "Failed" in msg
+        assert result["method"] == "failed"
+        # No hardcoded error message sent -- caller handles failure
+        send_fn.assert_not_called()
 
     @patch.object(ClaudeAuthManager, "submit_code", return_value=True)
     def test_handle_user_code_success(self, mock_submit):
@@ -264,8 +263,8 @@ class TestTeamsClaudeAuth:
         result = auth.handle_user_code("  ABC-123  ")
         assert result is True
         mock_submit.assert_called_once_with("ABC-123")
-        msg = send_fn.call_args[0][1]
-        assert "Complete" in msg
+        # No hardcoded message sent -- caller composes the message
+        send_fn.assert_not_called()
 
     @patch.object(ClaudeAuthManager, "submit_code", return_value=False)
     def test_handle_user_code_failure(self, mock_submit):
@@ -273,15 +272,15 @@ class TestTeamsClaudeAuth:
         auth = TeamsClaudeAuth(send_fn, "user-123")
         result = auth.handle_user_code("BAD-CODE")
         assert result is False
-        msg = send_fn.call_args[0][1]
-        assert "Failed" in msg
+        # No hardcoded message sent -- caller composes the message
+        send_fn.assert_not_called()
 
     def test_handle_user_done(self):
-        """handle_user_done returns a confirmation message."""
+        """handle_user_done returns True to indicate acknowledgement."""
         send_fn = MagicMock()
         auth = TeamsClaudeAuth(send_fn, "user-123")
-        msg = auth.handle_user_done()
-        assert "setup" in msg.lower() or "ready" in msg.lower()
+        result = auth.handle_user_done()
+        assert result is True
 
     def test_fell_back_to_rdp_is_alias_for_used_rdp_auth(self):
         """The fell_back_to_rdp property is a backward-compat alias."""
@@ -290,7 +289,8 @@ class TestTeamsClaudeAuth:
             send_fn, "user-123",
             connection_url="https://example.com",
         )
-        auth.request_authentication()
+        result = auth.request_authentication()
+        assert result["method"] == "rdp"
         assert auth.fell_back_to_rdp == auth.used_rdp_auth
 
 

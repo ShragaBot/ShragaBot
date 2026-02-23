@@ -287,13 +287,13 @@ class RemoteDevBoxAuth:
         """
         return build_auth_instructions(connection_url)
 
-    def build_setup_script_message(self) -> str:
-        """Build a standalone message containing just the setup script."""
-        return (
-            "**Dev Box Setup Script**\n\n"
-            "Run this in PowerShell on your dev box:\n"
-            f"```powershell\n{DEVBOX_SETUP_SCRIPT}\n```"
-        )
+    def get_setup_script(self) -> str:
+        """Return the PowerShell setup script content.
+
+        The caller is responsible for formatting/presenting the script
+        to the user (e.g. wrapping in markdown code blocks).
+        """
+        return DEVBOX_SETUP_SCRIPT
 
 
 class TeamsClaudeAuth:
@@ -344,7 +344,7 @@ class TeamsClaudeAuth:
         self.auth_manager = ClaudeAuthManager()
         self._used_rdp_auth = False
 
-    def request_authentication(self) -> bool:
+    def request_authentication(self) -> dict:
         """
         Request user to authenticate Claude Code via Teams.
 
@@ -358,13 +358,16 @@ class TeamsClaudeAuth:
            locally on the GM -- generally not what we want).
 
         Returns:
-            True when authentication instructions were sent, False on
-            total failure.
+            A dict with:
+            - ``"method"``: ``"rdp"``, ``"device_code"``, or ``"failed"``
+            - ``"auth_url"``: the device-code URL (only when method is
+              ``"device_code"``)
+            - ``"connection_url"``: the RDP URL (only when method is ``"rdp"``)
         """
         # --- 1. Try RDP-based auth on the target dev box (preferred) --------
         rdp_result = self._initiate_rdp_auth()
         if rdp_result:
-            return True
+            return {"method": "rdp", "connection_url": rdp_result}
 
         # --- 2. Legacy device-code fallback (runs on GM -- not ideal) -------
         logger.warning(
@@ -375,41 +378,23 @@ class TeamsClaudeAuth:
             auth_url = self._try_device_code_flow()
 
             if auth_url is not None:
-                message = (
-                    "**Claude Code Authentication Required**\n\n"
-                    "Please authenticate Claude Code to enable your Dev Box worker:\n\n"
-                    "**Steps:**\n"
-                    f"1. Click this link (opens on your device): {auth_url}\n"
-                    "2. Sign in with your Anthropic account\n"
-                    "3. Copy the authorization code shown in the browser\n"
-                    "4. Reply with the code in Teams\n\n"
-                    "**Example:** If the browser shows \"Your code is: ABC-123-XYZ\", "
-                    "reply with:\n```\nABC-123-XYZ\n```\n\n"
-                    "Waiting for your code..."
-                )
-                self.send_message(self.user_id, message)
-                logger.info("Waiting for user to send code via Teams...")
-                return True
+                logger.info("Device code flow started, auth URL obtained.")
+                return {"method": "device_code", "auth_url": auth_url}
 
         except (TimeoutError, Exception) as exc:
             logger.warning("Device code flow failed: %s", exc)
 
         # --- 3. Total failure ------------------------------------------------
-        error = (
-            "**Authentication Failed**\n\n"
-            "I could not initiate authentication. Please contact your admin."
-        )
-        self.send_message(self.user_id, error)
-        return False
+        return {"method": "failed"}
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _initiate_rdp_auth(self) -> bool:
-        """Send the user a web RDP link to authenticate on the dev box.
+    def _initiate_rdp_auth(self) -> Optional[str]:
+        """Resolve the web RDP connection URL for the target dev box.
 
-        Returns True if the message was sent successfully, False if we
+        Returns the connection URL string on success, or ``None`` if we
         don't have enough information (no connection URL, no devbox info).
         """
         remote_auth = RemoteDevBoxAuth(
@@ -424,13 +409,11 @@ class TeamsClaudeAuth:
             )
         except Exception as exc:
             logger.warning("Could not resolve RDP connection URL: %s", exc)
-            return False
+            return None
 
-        message = remote_auth.build_auth_message(url)
-        self.send_message(self.user_id, message)
         self._used_rdp_auth = True
-        logger.info("Sent RDP auth instructions (url=%s)", url)
-        return True
+        logger.info("Resolved RDP connection URL: %s", url)
+        return url
 
     def _try_device_code_flow(self) -> Optional[str]:
         """Run ``claude /login`` *locally* and return the auth URL, or *None*.
@@ -449,54 +432,31 @@ class TeamsClaudeAuth:
 
     def handle_user_code(self, code: str) -> bool:
         """
-        Handle the authorization code sent by user via Teams
+        Handle the authorization code sent by user via Teams.
+
+        Submits the code to the Claude CLI and returns the result.
+        The caller (manager) is responsible for composing and sending
+        the appropriate user-facing message.
 
         Args:
             code: Authorization code from user
 
         Returns:
-            True if authentication successful
+            True if authentication successful, False otherwise.
         """
         # Clean up the code (remove whitespace, common formatting)
         code = code.strip()
 
         # Submit code to Claude CLI
-        success = self.auth_manager.submit_code(code)
+        return self.auth_manager.submit_code(code)
 
-        if success:
-            message = """
-**Authentication Complete!**
-
-Your Dev Box worker is now authenticated with Claude Code.
-Your pending task will start execution automatically.
-
-Ready to process tasks!
-"""
-        else:
-            message = """
-**Authentication Failed**
-
-The code you provided was invalid or expired.
-
-Please try again:
-1. Make sure you copied the exact code from the browser
-2. Check that the code hasn't expired
-3. Reply with the code (without any extra text)
-"""
-
-        self.send_message(self.user_id, message)
-        return success
-
-    def handle_user_done(self) -> str:
+    def handle_user_done(self) -> bool:
         """Handle the user confirming they completed RDP-based auth.
 
-        Returns a response message to send back to the user.
+        Returns True to indicate acknowledgement. The caller (manager) is
+        responsible for composing and sending the appropriate response.
         """
-        return (
-            "Thanks for completing the setup! Your dev box is now configured "
-            "and Claude Code is authenticated. Your personal assistant is "
-            "ready -- you can start creating tasks."
-        )
+        return True
 
     @property
     def used_rdp_auth(self) -> bool:
@@ -515,46 +475,3 @@ def get_setup_script() -> str:
     return DEVBOX_SETUP_SCRIPT
 
 
-# Example usage in orchestrator
-def example_orchestrator_flow():
-    """
-    Example of how this would be used in the orchestrator.
-
-    Demonstrates the RDP-first auth flow that targets the new dev box.
-    """
-
-    # Mock Teams send function
-    def send_teams_message(user_id: str, message: str):
-        print(f"\n[TEAMS MESSAGE TO {user_id}]")
-        print(message)
-        print("[END MESSAGE]\n")
-
-    # Initialize with RDP parameters
-    user_id = "user@microsoft.com"
-    teams_auth = TeamsClaudeAuth(
-        send_message_func=send_teams_message,
-        user_id=user_id,
-        devbox_name="shraga-box-01",
-        user_azure_ad_id="b08e39b4-2ac6-4465-a35e-48322efb0f98",
-        connection_url="https://devbox.microsoft.com/connect?devbox=shraga-box-01",
-    )
-
-    # Request authentication (sends RDP link targeting the dev box)
-    print("Starting authentication flow...")
-    success = teams_auth.request_authentication()
-
-    if teams_auth.used_rdp_auth:
-        print("\n[Auth via RDP -- user completes auth on dev box]")
-    elif success:
-        # Legacy device-code path
-        print("\n[User sends code via Teams]")
-        user_code = input("Enter the code you received: ")
-        teams_auth.handle_user_code(user_code)
-    else:
-        print("\n[Authentication flow failed completely]")
-
-
-if __name__ == "__main__":
-    print("Claude Code Teams Authentication - Test")
-    print("=" * 60)
-    example_orchestrator_flow()
