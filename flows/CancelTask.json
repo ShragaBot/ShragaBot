@@ -231,10 +231,18 @@
           "type": "string",
           "x-ms-content-hint": "TEXT",
           "x-ms-dynamically-added": true
+        },
+        "text_1": {
+          "description": "Email of the user requesting cancellation",
+          "title": "userEmail",
+          "type": "string",
+          "x-ms-content-hint": "TEXT",
+          "x-ms-dynamically-added": true
         }
       },
       "required": [
-        "text"
+        "text",
+        "text_1"
       ]
     },
     "state": "Started",
@@ -254,7 +262,7 @@
     },
     "installedConnectionReferences": {},
     "createdTime": "2026-02-15T07:22:21.5730526Z",
-    "lastModifiedTime": "2026-02-23T13:09:34.5924026Z",
+    "lastModifiedTime": "2026-02-23T20:42:24.4630059Z",
     "flowSuspensionReason": "None",
     "environment": {
       "name": "8660590d-33ac-ecd8-aef3-e4dd0d6071f4",
@@ -283,12 +291,23 @@
           "type": "If"
         },
         {
+          "type": "If"
+        },
+        {
+          "type": "Response",
+          "kind": "Skills"
+        },
+        {
           "type": "OpenApiConnection",
           "swaggerOperationId": "UpdateRecord"
         },
         {
           "type": "Response",
           "kind": "Skills"
+        },
+        {
+          "type": "OpenApiConnection",
+          "swaggerOperationId": "UpdateRecord"
         },
         {
           "type": "Response",

@@ -71,9 +71,38 @@ Start-ScheduledTask -TaskName ShragaUpdater
 Get-Content $env:TEMP\shraga-worker.log -Tail 50
 ```
 
+## Deploying Power Automate Flows
+
+All 7 Power Automate flows are managed by `deploy_flows.py` (in the session folder). This is the single source of truth for flow definitions.
+
+```bash
+# Deploy all 7 flows
+python Q:/sessions/shragaTest01/deploy_flows.py all
+
+# Deploy specific flows
+python Q:/sessions/shragaTest01/deploy_flows.py TaskRunner TaskCompleted
+
+# After deploying, commit the updated flow JSONs
+cd Q:/repos/shraga-worker && git add flows/ && git commit -m "Deploy flow updates" && git push
+```
+
+**NEVER patch flows directly via the Flow API.** Always update `deploy_flows.py` or the `flows/*.json` templates, then run the script.
+
+Flows managed:
+| Flow | Has Cards | Description |
+|------|-----------|-------------|
+| TaskRunner | Yes | Posts Queued card on task submit |
+| TaskCompleted | Yes | Updates card to Completed |
+| TaskFailed | Yes | Updates card to Failed |
+| TaskProgressUpdater | Yes | Updates Running card with activity log |
+| TaskCanceled | Yes | Updates card to Killed |
+| CancelTask | No | Cancels a task (Pending→Canceled, Running→Canceling) |
+| SendMessage | No | MCS skill flow for bot messaging |
+
 ## Do NOT
 
 - Manually create `release/v*` branches (use the workflow)
+- Patch Power Automate flows directly via API (use deploy_flows.py)
 - Use `--add-dir` with Claude CLI
 - Push to any remote other than `ShragaBot/ShragaBot`
 - Skip tests before pushing
