@@ -492,6 +492,14 @@ class DataverseClient:
 
     # -- Convenience methods -----------------------------------------------
 
+    @staticmethod
+    def sanitize_odata(value: str) -> str:
+        """Escape a string for safe use in OData single-quoted literals.
+
+        Doubles any embedded single quotes to prevent OData injection.
+        """
+        return value.replace("'", "''")
+
     def find_rows(
         self,
         table: str,
@@ -506,9 +514,10 @@ class DataverseClient:
         A convenience wrapper around :meth:`get_rows` for the common
         ``$filter=column eq 'value'`` pattern.
         """
+        safe_value = self.sanitize_odata(value)
         return self.get_rows(
             table,
-            filter=f"{column} eq '{value}'",
+            filter=f"{column} eq '{safe_value}'",
             select=select,
             top=top,
         )

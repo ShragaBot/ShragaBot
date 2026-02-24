@@ -337,12 +337,22 @@ class TaskManager:
         except subprocess.TimeoutExpired: _log("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE
         except FileNotFoundError: _log("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE
         except Exception as e: _log(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE
-        # Detect task creation: PM responds with "Submitted! ID: <uuid>" when creating a task.
-        # Previous heuristic required "task" in response, but Claude often omits that word.
-        # "submitted" + "id:" reliably detects the pattern without false positives on
-        # status messages like "Still Submitted" or "It's Submitted (10)".
-        resp_lower = resp.lower()
-        task_created = "submitted" in resp_lower and "id:" in resp_lower
+        # Detect task creation via signal file from create_task.py (deterministic).
+        # Falls back to heuristic if signal file not found.
+        task_created = False
+        signal_file = os.path.join(os.environ.get("SHRAGA_SIGNAL_DIR", os.environ.get("TEMP", "/tmp")), "shraga_task_created.json")
+        try:
+            if os.path.exists(signal_file):
+                os.remove(signal_file)
+                task_created = True
+                _log("[FOLLOWUP] Task creation detected via signal file")
+        except OSError:
+            pass
+        if not task_created:
+            resp_lower = resp.lower()
+            task_created = "submitted" in resp_lower and "id:" in resp_lower
+            if task_created:
+                _log("[FOLLOWUP] Task creation detected via heuristic (fallback)")
         self.send_response(in_reply_to=rid, mcs_conversation_id=mcs, text=resp,
                            followup_expected=task_created)
         self.mark_processed(rid)
