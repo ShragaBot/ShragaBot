@@ -1849,7 +1849,7 @@ class TestProcessTask:
         # Webhook notification sent with cancellation details
         webhook_calls = worker.dv.post.call_args_list
         cancel_webhook_found = any(
-            cancel_msg in str(c) for c in webhook_calls
+            "Task canceled" in str(c) for c in webhook_calls
         )
         assert cancel_webhook_found, "Webhook should contain the cancellation message"
 

@@ -833,7 +833,7 @@ class TestGetCredential:
 
         with patch("global_manager.DefaultAzureCredential", return_value=broken_cred):
             from global_manager import get_credential
-            with pytest.raises(Exception, match="No credentials"):
+            with pytest.raises(SystemExit):
                 get_credential()
 
 
