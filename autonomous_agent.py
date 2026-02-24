@@ -840,7 +840,7 @@ Write SUMMARY.md with your summary, then output a brief confirmation message.
             sys.exit(1)
         except Exception as e:
             print(f"\n\n[X] Error: {e}")
-            _log_to_file(f"[ERROR] {e}")
+            _log_to_file(f"[CRITICAL] {e}")
             traceback.print_exc()
             sys.exit(1)
 

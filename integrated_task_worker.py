@@ -205,12 +205,12 @@ class IntegratedTaskWorker:
         try:
             return self.dv.get_token()
         except TimeoutError:
-            _log("[FATAL] get_token() timed out after 30s -- Azure credential hung. Exiting.")
-            _log("[HINT] Run: az login")
+            _log("[CRITICAL] get_token() timed out after 30s -- Azure credential hung. Exiting.")
+            _log("[CRITICAL] HINT: Run 'az login' on this dev box.")
             sys.exit(1)
         except Exception as e:
-            _log(f"[FATAL] Getting token failed: {e} -- Exiting.")
-            _log("[HINT] Run: az login")
+            _log(f"[CRITICAL] Getting token failed: {e} -- Exiting.")
+            _log("[CRITICAL] HINT: Run 'az login' on this dev box.")
             sys.exit(1)
 
     def get_current_user(self):
@@ -1677,9 +1677,9 @@ if __name__ == "__main__":
         # Capture as much context as possible for post-mortem debugging.
         import traceback
         tb = traceback.format_exc()
-        _log(f"[FATAL] Worker process dying: {type(e).__name__}: {e}")
-        _log(f"[FATAL] Traceback:\n{tb}")
-        _log(f"[FATAL] Version: {getattr(worker, '_my_version', 'unknown') if 'worker' in dir() else 'unknown'}")
-        _log(f"[FATAL] Current task: {getattr(worker, 'current_task_id', 'none') if 'worker' in dir() else 'unknown'}")
-        _log(f"[FATAL] Machine: {MACHINE_NAME}")
+        _log(f"[CRITICAL] Worker process dying: {type(e).__name__}: {e}")
+        _log(f"[CRITICAL] Traceback:\n{tb}")
+        _log(f"[CRITICAL] Version: {getattr(worker, '_my_version', 'unknown') if 'worker' in dir() else 'unknown'}")
+        _log(f"[CRITICAL] Current task: {getattr(worker, 'current_task_id', 'none') if 'worker' in dir() else 'unknown'}")
+        _log(f"[CRITICAL] Machine: {MACHINE_NAME}")
         sys.exit(1)

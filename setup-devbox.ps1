@@ -333,9 +333,9 @@ $pyExe = Find-Python
 if ($pyExe -and (Test-Path $WORKING_DIR)) {
     # Ensure pip is available (some installs like choco don't include it)
     & $pyExe -m ensurepip --upgrade 2>&1 | Out-Null
-    & $pyExe -m pip install --quiet --upgrade requests azure-identity azure-core watchdog 2>&1 | Out-Null
+    & $pyExe -m pip install --quiet --upgrade -r (Join-Path $WORKING_DIR "requirements.txt") 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-OK "Dependencies installed" }
-    else { Write-Warning2 "Some dependencies may have failed. Run: $pyExe -m pip install requests azure-identity azure-core watchdog" }
+    else { Write-Warning2 "Some dependencies may have failed. Run: $pyExe -m pip install -r $WORKING_DIR\requirements.txt" }
 } elseif (-not $pyExe) {
     Write-Warning2 "Python not found -- skipping"
 } else {

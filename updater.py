@@ -172,7 +172,7 @@ def deploy_release(version: str) -> bool:
     )
     pip_result = subprocess.run(
         [py, "-m", "pip", "install", "--quiet", "--upgrade",
-         "requests", "azure-identity", "azure-core", "watchdog"],
+         "-r", str(release_dir / "requirements.txt")],
         capture_output=True, text=True, timeout=120,
         cwd=str(release_dir)
     )
@@ -191,6 +191,33 @@ def update_version_file(version: str):
     _log(f"[UPDATE] current_version.txt updated to: {version}")
 
 
+def cleanup_old_releases(keep_count=10):
+    """Remove old release folders, keeping current + last N releases."""
+    if not RELEASES_DIR.exists():
+        return
+    # List all vN folders, parse version numbers
+    versions = []
+    for d in RELEASES_DIR.iterdir():
+        if d.is_dir() and d.name.startswith('v'):
+            try:
+                num = int(d.name[1:])
+                versions.append((num, d))
+            except ValueError:
+                continue
+    if len(versions) <= keep_count + 1:
+        return  # Nothing to clean
+    # Sort by version number descending, keep top keep_count+1 (current + N previous)
+    versions.sort(key=lambda x: x[0], reverse=True)
+    to_delete = versions[keep_count + 1:]
+    for num, folder in to_delete:
+        try:
+            import shutil
+            shutil.rmtree(str(folder), ignore_errors=True)
+            _log(f"[CLEANUP] Removed old release: {folder.name}")
+        except Exception as e:
+            _log(f"[WARN] Could not remove {folder.name}: {e}")
+
+
 def main():
     _log("[UPDATER] Checking for new releases...")
 
@@ -207,6 +234,7 @@ def main():
 
     if deploy_release(latest):
         update_version_file(latest)
+        cleanup_old_releases()
         _log(f"[UPDATER] Update complete. Services will restart with {latest}.")
     else:
         _log(f"[ERROR] Failed to deploy {latest}")
