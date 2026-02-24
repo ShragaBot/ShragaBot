@@ -97,13 +97,14 @@ Write-Host "  Shraga Dev Box Setup" -ForegroundColor Cyan
 Write-Host "================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  This script will:" -ForegroundColor White
-Write-Host "    1. Install tools (Git, Python, Claude Code)" -ForegroundColor White
+Write-Host "    1. Install tools (Git, Python, Node.js, Claude Code)" -ForegroundColor White
 Write-Host "    2. Clone the Shraga code repository" -ForegroundColor White
 Write-Host "    3. Install Python dependencies" -ForegroundColor White
 Write-Host "    4. Configure sleep/hibernation prevention" -ForegroundColor White
 Write-Host "    5. Sign you into Azure (browser opens)" -ForegroundColor White
 Write-Host "    6. Sign you into Claude Code (window opens)" -ForegroundColor White
-Write-Host "    7. Start Shraga services" -ForegroundColor White
+Write-Host "    7. Set up FE repo npm auth (for frontend tasks)" -ForegroundColor White
+Write-Host "    8. Start Shraga services" -ForegroundColor White
 Write-Host ""
 Write-Host "  Log file: $LOG_FILE" -ForegroundColor Gray
 Write-Host ""
@@ -168,6 +169,38 @@ if ($pyExe) {
     }
     if ($pyExe) { Write-OK "Python installed: $pyExe" }
     else { Write-Fail "Python install failed. Install from: https://python.org/downloads" }
+}
+
+# -- Node.js (needed for FE repo tasks) --
+$nvmDir = Join-Path $env:APPDATA "nvm"
+$nvmExe = Join-Path $nvmDir "nvm.exe"
+if (Get-Command node -ErrorAction SilentlyContinue) {
+    Write-OK "Node.js already installed: $(node --version)"
+} elseif (Test-Path $nvmExe) {
+    Write-Info "nvm found, installing Node 20..."
+    & $nvmExe install 20 2>&1 | Out-Null
+    & $nvmExe use 20 2>&1 | Out-Null
+    Refresh-Path
+    if (Get-Command node -ErrorAction SilentlyContinue) { Write-OK "Node.js installed via nvm: $(node --version)" }
+    else { Write-Warning2 "Node.js install via nvm failed. Run: nvm install 20 && nvm use 20" }
+} else {
+    # Direct download -- no winget/nvm needed
+    Write-Info "Installing Node.js 20 LTS... (direct download)"
+    $nodeZip = Join-Path $env:TEMP "node-v20.18.3-win-x64.zip"
+    $nodeDir = Join-Path $env:LOCALAPPDATA "nodejs"
+    Invoke-WebRequest -Uri "https://nodejs.org/dist/v20.18.3/node-v20.18.3-win-x64.zip" -OutFile $nodeZip -ErrorAction SilentlyContinue
+    if (Test-Path $nodeZip) {
+        if (Test-Path $nodeDir) { Remove-Item -Recurse -Force $nodeDir -ErrorAction SilentlyContinue }
+        Expand-Archive -Path $nodeZip -DestinationPath $env:LOCALAPPDATA -Force
+        Rename-Item (Join-Path $env:LOCALAPPDATA "node-v20.18.3-win-x64") $nodeDir -ErrorAction SilentlyContinue
+        Ensure-InPath $nodeDir
+        Remove-Item $nodeZip -Force -ErrorAction SilentlyContinue
+        Refresh-Path
+        if (Get-Command node -ErrorAction SilentlyContinue) { Write-OK "Node.js installed: $(node --version)" }
+        else { Write-Warning2 "Node.js install failed. Install manually from https://nodejs.org" }
+    } else {
+        Write-Warning2 "Node.js download failed. Install manually from https://nodejs.org"
+    }
 }
 
 # -- Claude Code --
@@ -417,9 +450,58 @@ if (-not $claudePath) {
 }
 
 # =========================================================================
-# Step 7: Set Env Vars + Register Services + Create Desktop Shortcut
+# Step 7: FE Repo npm Auth (for frontend tasks)
 # =========================================================================
-Write-Step "7/7" "Starting Shraga Services"
+Write-Step "7/8" "Setting up FE repo npm auth"
+
+$feRepoRoot = "Q:\src\power-platform-ux"
+if (-not (Test-Path $feRepoRoot)) {
+    Write-Info "FE repo not found at $feRepoRoot -- skipping npm auth"
+    Write-Info "Workers can still handle non-FE tasks"
+} elseif (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Write-Warning2 "npm not available -- skipping FE repo auth. Install Node.js first."
+} else {
+    # Check if npm auth is already configured (try a dry-run npm view against the private feed)
+    $npmrcPath = Join-Path $feRepoRoot "common\config\rush\.npmrc"
+    $userNpmrc = Join-Path $env:USERPROFILE ".npmrc"
+    $authConfigured = $false
+    if (Test-Path $userNpmrc) {
+        $npmrcContent = Get-Content $userNpmrc -Raw -ErrorAction SilentlyContinue
+        if ($npmrcContent -match "pkgs.dev.azure.com.*_password") { $authConfigured = $true }
+    }
+
+    if ($authConfigured) {
+        Write-OK "npm Azure DevOps auth already configured"
+    } else {
+        Write-Info "Authenticating npm for Azure DevOps feeds..."
+        Write-Info "A browser popup may appear -- sign in with your Microsoft account."
+        try {
+            # Install vsts-npm-auth globally and run directly against the rush .npmrc.
+            # This avoids the chicken-and-egg problem where 'npm run renew' needs
+            # node_modules (from rush update) which needs npm auth to download.
+            # -F forces re-auth, -E 259200 sets token expiry to 180 days.
+            if (-not (Get-Command vsts-npm-auth -ErrorAction SilentlyContinue)) {
+                Write-Info "Installing vsts-npm-auth..."
+                npm install -g vsts-npm-auth 2>&1 | Out-Null
+            }
+            vsts-npm-auth -config $npmrcPath -F -E 259200 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-OK "npm Azure DevOps auth configured (valid ~180 days)"
+            } else {
+                Write-Warning2 "npm auth failed. Workers won't be able to build FE code."
+                Write-Info "Fix manually: npm install -g vsts-npm-auth && vsts-npm-auth -config $npmrcPath -F"
+            }
+        } catch {
+            Write-Warning2 "npm auth setup error: $_"
+            Write-Info "Fix manually: npm install -g vsts-npm-auth && vsts-npm-auth -config $npmrcPath -F"
+        }
+    }
+}
+
+# =========================================================================
+# Step 8: Set Env Vars + Register Services + Create Desktop Shortcut
+# =========================================================================
+Write-Step "8/8" "Starting Shraga Services"
 
 # -- Set environment variables --
 $envOk = $true
@@ -520,7 +602,7 @@ if (Test-Path $updaterWrapperPath) {
 # =========================================================================
 # Register box in Dataverse (crb3b_shragaboxes)
 # =========================================================================
-Write-Step "8" "Registering box in Dataverse..."
+Write-Step "9" "Registering box in Dataverse..."
 if ($azLoginSuccess -and -not [string]::IsNullOrWhiteSpace($userEmail)) {
     try {
         $dvToken = (az account get-access-token --resource "https://org3e79cdb1.crm3.dynamics.com" --query "accessToken" -o tsv 2>$null)
@@ -575,6 +657,10 @@ if ($azLoginSuccess -and -not [string]::IsNullOrWhiteSpace($userEmail)) {
 $workerRunning = (Get-ScheduledTask -TaskName "ShragaWorker" -ErrorAction SilentlyContinue).State -eq "Running"
 $pmRunning = if ($WorkerOnly) { $true } else { (Get-ScheduledTask -TaskName "ShragaPM" -ErrorAction SilentlyContinue).State -eq "Running" }
 
+$npmAuthOk = $false
+$userNpmrc = Join-Path $env:USERPROFILE ".npmrc"
+if ((Test-Path $userNpmrc) -and ((Get-Content $userNpmrc -Raw -ErrorAction SilentlyContinue) -match "pkgs.dev.azure.com.*_password")) { $npmAuthOk = $true }
+
 $allGood = $workerRunning -and $pmRunning -and $azLoginSuccess -and $claudeLoginSuccess
 $bannerColor = if ($allGood) { "Green" } else { "Yellow" }
 $bannerText = if ($allGood) { "Setup Complete!" } else { "Setup Finished (some items need attention)" }
@@ -586,6 +672,7 @@ Write-Host "================================================" -ForegroundColor $
 Write-Host ""
 Write-Host "  Azure:       $userEmail" -ForegroundColor $(if ($azLoginSuccess) { "Green" } else { "Yellow" })
 Write-Host "  Claude Code: $(if ($claudeLoginSuccess) { 'Authenticated' } else { 'Needs: claude auth login' })" -ForegroundColor $(if ($claudeLoginSuccess) { "Green" } else { "Yellow" })
+Write-Host "  npm auth:    $(if ($npmAuthOk) { 'Configured (FE tasks OK)' } else { 'Not configured (FE tasks will fail)' })" -ForegroundColor $(if ($npmAuthOk) { "Green" } else { "Yellow" })
 Write-Host "  Worker:      $(if ($workerRunning) { 'Running' } else { 'Not running' })" -ForegroundColor $(if ($workerRunning) { "Green" } else { "Yellow" })
 if ($WorkerOnly) {
     Write-Host "  PM:          Skipped (WorkerOnly mode)" -ForegroundColor Gray
