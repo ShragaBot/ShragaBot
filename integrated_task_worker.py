@@ -140,6 +140,10 @@ class IntegratedTaskWorker:
         self.current_task_id = None  # Set during task processing for message correlation
         self.work_base_dir = Path(os.environ.get("WORK_BASE_DIR", str(Path(__file__).parent)))
 
+        # Crash cleanup metadata (set during task execution, used by _cleanup_in_progress_task)
+        self._current_session_folder = None
+        self._current_transcript = ""
+
         # Azure authentication
         self.credential = DefaultAzureCredential()
         self.dv = DataverseClient(dataverse_url=DATAVERSE_URL, credential=self.credential, log_fn=_log)
@@ -1218,6 +1222,9 @@ JSON output:"""
         # Create OneDrive session folder for this task
         task_name = task_description[:50] if task_description else "unnamed_task"
         session_folder = self.create_session_folder(task_name, task_id)
+        self._current_session_folder = session_folder
+        self._current_task_id = task_id
+        self._current_transcript = current_transcript
 
         # Write full task prompt and success criteria to session folder (T048)
         self.write_task_prompt_file(session_folder, task_prompt, success_criteria)
@@ -1252,6 +1259,7 @@ JSON output:"""
             status_message="Worker/Verifier loop started",
             transcript=transcript
         )
+        self._current_transcript = transcript
 
         self.send_to_webhook(f"Starting Worker/Verifier loop\nProject: {project_folder}")
 
@@ -1386,6 +1394,7 @@ JSON output:"""
                     output
                 )
                 self.update_task(task_id, transcript=transcript)
+                self._current_transcript = transcript
                 _log(f"[PHASE] Transcript updated in Dataverse")
 
                 if status == "done":
@@ -1423,6 +1432,7 @@ JSON output:"""
                         feedback if not approved else "APPROVED"
                     )
                     self.update_task(task_id, transcript=transcript)
+                    self._current_transcript = transcript
 
                     if approved:
                         # Task completed successfully!
@@ -1443,6 +1453,7 @@ JSON output:"""
                             "SUMMARY CREATED"
                         )
                         self.update_task(task_id, transcript=transcript)
+                        self._current_transcript = transcript
 
                         # Build concise bullet-style result with OneDrive links
                         result_folder_url = folder_url if folder_url else str(session_folder)
@@ -1605,6 +1616,8 @@ Full details saved in Dataverse (Task ID: {task_id}){git_info}"""
 
             _log(f"[TASK] Completed: {task_name}\n")
             self.current_task_id = None
+            self._current_session_folder = None
+            self._current_transcript = ""
             return True
 
         elif terminal_status == "canceled":
@@ -1624,6 +1637,8 @@ Full details saved in Dataverse (Task ID: {task_id}){git_info}"""
 
             _log(f"[TASK] Canceled: {task_name}\n")
             self.current_task_id = None
+            self._current_session_folder = None
+            self._current_transcript = ""
             return False
 
         else:  # "failed"
@@ -1650,6 +1665,8 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
 
             _log(f"[TASK] Failed: {task_name}\n")
             self.current_task_id = None
+            self._current_session_folder = None
+            self._current_transcript = ""
             return False
 
     def run(self):
@@ -1762,22 +1779,81 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
         _log("[SHUTDOWN] Worker stopped")
 
     def _cleanup_in_progress_task(self, reason: str):
-        """Mark the current in-progress task as failed so it doesn't stay stuck in RUNNING."""
+        """Mark the current in-progress task as failed so it doesn't stay stuck in RUNNING.
+
+        Also writes crash metadata to the session folder's results/ subdirectory
+        if the session folder exists and is valid.
+        """
         if self.current_task_id:
+            import traceback
+            tb = traceback.format_exc()
+            full_error = f"{reason}\n\nTraceback:\n{tb}" if tb and "NoneType" not in tb else reason
+
             _log(f"[CLEANUP] Marking task {self.current_task_id} as failed: {reason}")
+            _log(f"[CLEANUP] Full error details:\n{full_error}")
+
             self.update_task(
                 self.current_task_id,
                 status=STATUS_FAILED,
                 status_message=f"Worker shutdown: {reason}",
-                result=f"Error: {reason}"
+                result=f"Error: {full_error[:5000]}"
             )
+
+            # Write crash metadata to session folder if available
+            sf = self._current_session_folder
+            if sf and isinstance(sf, Path) and sf.is_dir():
+                try:
+                    results_dir = sf / "results"
+                    results_dir.mkdir(exist_ok=True)
+
+                    # result.md
+                    (results_dir / "result.md").write_text(
+                        f"# Crash Result\n\n{full_error}", encoding="utf-8"
+                    )
+
+                    # session_summary.json (partial - whatever we have)
+                    crash_summary = {
+                        "task_id": self.current_task_id,
+                        "terminal_status": "killed",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "error": full_error[:2000],
+                        "dev_box": MACHINE_NAME,
+                        "worker_version": self._my_version,
+                    }
+                    (results_dir / "session_summary.json").write_text(
+                        json.dumps(crash_summary, indent=2, default=str), encoding="utf-8"
+                    )
+
+                    # transcript.md (whatever accumulated)
+                    (results_dir / "transcript.md").write_text(
+                        self._current_transcript or "", encoding="utf-8"
+                    )
+
+                    # outcome.json
+                    outcome = {
+                        "terminal_status": "killed",
+                        "reason": full_error[:2000],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "task_id": self.current_task_id,
+                    }
+                    (results_dir / "outcome.json").write_text(
+                        json.dumps(outcome, indent=2, default=str), encoding="utf-8"
+                    )
+
+                    _log(f"[CLEANUP] Wrote crash metadata to {results_dir}")
+                except Exception as e:
+                    _log(f"[CLEANUP] Could not write crash metadata: {e}")
+
             self.current_task_id = None
+            self._current_session_folder = None
+            self._current_transcript = ""
 
     def _cleanup_orphaned_tasks(self):
         """On startup, find tasks stuck in Running on this dev box and fail them.
 
         This handles the case where the Worker process crashed or was killed
         mid-task. Without this, orphaned tasks stay in Running forever.
+        Also writes crash metadata to the session folder if workingdir is available.
         """
         url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}"
         params = {
@@ -1785,7 +1861,7 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                 f"cr_status eq {_STATUS_INT[STATUS_RUNNING]}"
                 f" and crb3b_devbox eq '{MACHINE_NAME}'"
             ),
-            "$select": "cr_shraga_taskid,cr_name",
+            "$select": "cr_shraga_taskid,cr_name,crb3b_workingdir",
         }
 
         try:
@@ -1795,16 +1871,43 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
             _log(f"[WARN] Could not check for orphaned tasks: {e}")
             return
 
+        error_msg = "Worker process died while executing this task. The task was left in Running state and has been marked as failed on restart."
+
         for task in orphans:
             tid = task.get("cr_shraga_taskid")
             tname = task.get("cr_name", "Unknown")
+            workingdir = task.get("crb3b_workingdir", "")
             _log(f"[CLEANUP] Orphaned task found: {tname} ({tid}) -- marking as failed")
             self.update_task(
                 tid,
                 status=STATUS_FAILED,
                 status_message="Worker crashed or restarted -- task was orphaned",
-                result="Error: Worker process died while executing this task. The task was left in Running state and has been marked as failed on restart."
+                result=f"Error: {error_msg}"
             )
+
+            # Write crash metadata to session folder if it exists
+            if workingdir:
+                wd_path = Path(workingdir)
+                if wd_path.is_dir():
+                    try:
+                        results_dir = wd_path / "results"
+                        results_dir.mkdir(exist_ok=True)
+                        outcome = {
+                            "terminal_status": "killed",
+                            "reason": error_msg,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "task_id": tid,
+                        }
+                        (results_dir / "outcome.json").write_text(
+                            json.dumps(outcome, indent=2, default=str), encoding="utf-8"
+                        )
+                        (results_dir / "result.md").write_text(
+                            f"# Orphaned Task Crash\n\n{error_msg}", encoding="utf-8"
+                        )
+                        _log(f"[CLEANUP] Wrote crash metadata for orphan {tid[:8]} to {results_dir}")
+                    except Exception as e:
+                        _log(f"[CLEANUP] Could not write orphan crash metadata: {e}")
+
             try:
                 self.send_to_webhook(f"Orphaned task cleaned up on restart: {tname} ({tid[:8]})")
             except Exception:
