@@ -156,7 +156,6 @@ class Orchestrator:
         try:
             url = f"{DATAVERSE_URL}/api/data/v9.2/WhoAmI"
             response = self.dv.get(url)
-            response.raise_for_status()
             user_data = response.json()
             user_id = user_data.get("UserId")
             self.admin_user_id = user_id
@@ -274,7 +273,6 @@ class Orchestrator:
 
             url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}?$filter={filter_query}"
             response = self.dv.get(url)
-            response.raise_for_status()
 
             data = response.json()
             return data.get("value", [])
@@ -326,7 +324,6 @@ class Orchestrator:
                 mirror_data,
                 extra_headers={"Prefer": "return=representation"},
             )
-            response.raise_for_status()
 
             # Extract mirror task ID from response
             created_task = response.json()
