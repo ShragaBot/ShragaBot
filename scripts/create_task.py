@@ -25,7 +25,7 @@ from dv_helpers import DataverseClient
 TASKS_TABLE = "cr_shraga_tasks"
 STATUS_SUBMITTED = 10
 CARD_POLL_INTERVAL = 3  # seconds
-CARD_POLL_TIMEOUT = 90  # seconds
+CARD_POLL_TIMEOUT = 60  # seconds (must be less than SendMessage flow's 90s timeout)
 
 
 def generate_short_description(prompt: str, max_length: int = 100) -> str:
