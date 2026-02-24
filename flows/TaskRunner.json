@@ -51,7 +51,7 @@
             "parameters": {
               "entityName": "cr_shraga_tasks",
               "recordId": "@triggerOutputs()?['body/cr_shraga_taskid']",
-              "$select": "cr_shraga_taskid,cr_prompt,cr_status,crb3b_useremail,crb3b_runningmessageid,crb3b_onedriveurl,crb3b_shortdescription,crb3b_mcsconversationid"
+              "$select": "cr_shraga_taskid,cr_prompt,cr_status,crb3b_useremail,crb3b_runningmessageid,crb3b_onedriveurl,crb3b_shortdescription,crb3b_mcsconversationid,crb3b_inboundrowid"
             },
             "host": {
               "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
@@ -202,6 +202,13 @@
                       "items": [
                         {
                           "type": "TextBlock",
+                          "text": "Task: {taskIdShort}",
+                          "size": "Small",
+                          "isSubtle": true,
+                          "spacing": "None"
+                        },
+                        {
+                          "type": "TextBlock",
                           "text": "Submitted: {startedAt}",
                           "size": "Default",
                           "isSubtle": true
@@ -288,7 +295,7 @@
                   ]
                 },
                 "type": "Compose",
-                "inputs": "@json(concat(substring(string(outputs('Compose_CardResolved')), 0, sub(length(string(outputs('Compose_CardResolved'))), 2)), if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat(',{\"type\":\"TextBlock\",\"text\":\"Session folder: ', outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'], '\",\"size\":\"Small\",\"isSubtle\":true,\"spacing\":\"Small\"}')), ']}'))"
+                "inputs": "@json(concat(substring(outputs('Compose_CardResolved'), 0, sub(length(outputs('Compose_CardResolved')), 2)), if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat(',{\"type\":\"TextBlock\",\"text\":\"Session folder: ', outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'], '\",\"size\":\"Small\",\"isSubtle\":true,\"spacing\":\"Small\"}')), ']}'))"
               },
               "Create_Followup_Message": {
                 "runAfter": {
@@ -306,7 +313,7 @@
                     "item/cr_message": "@{concat('Your task is queued! Track progress here: ', outputs('Post_card_in_a_chat_or_channel')?['body/messageLink'])}",
                     "item/cr_direction": "Outbound",
                     "item/cr_status": "Unclaimed",
-                    "item/cr_in_reply_to": "",
+                    "item/cr_in_reply_to": "@coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_inboundrowid'], '')",
                     "item/cr_followup_expected": ""
                   },
                   "host": {
