@@ -309,6 +309,17 @@ class TaskManager:
         if sys.platform == "win32":
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        # Fail fast if credentials are broken
+        try:
+            self.dv.get_token()
+        except TimeoutError:
+            _log("[CRITICAL] get_token() timed out after 30s -- Azure credential hung. Exiting.")
+            _log("[CRITICAL] HINT: Run 'az login' on this dev box.")
+            sys.exit(1)
+        except Exception as e:
+            _log(f"[CRITICAL] Getting token failed: {e} -- Exiting.")
+            _log("[CRITICAL] HINT: Run 'az login' on this dev box.")
+            sys.exit(1)
         _log(f"[START] PM for {self.user_email} | instance={INSTANCE_ID} | pid={os.getpid()}")
         _log(f"[CONFIG] DV: {DV_URL} | Poll: {POLL_SEC}s")
         self._set_onboarding_completed()
@@ -333,6 +344,6 @@ class TaskManager:
             except KeyboardInterrupt: _log("\n[STOP] Shutting down."); break
             except Exception as e: _log(f"[ERROR] Main loop: {e}"); time.sleep(POLL_SEC * 2)
 def main():
-    if not USER_EMAIL: _log("ERROR: USER_EMAIL required."); sys.exit(1)
+    if not USER_EMAIL: _log("[CRITICAL] USER_EMAIL required."); sys.exit(1)
     TaskManager(USER_EMAIL, working_dir=WORKING_DIR).run()
 if __name__ == "__main__": main()

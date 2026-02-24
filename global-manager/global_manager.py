@@ -109,8 +109,12 @@ def get_credential():
             description="initial credential.get_token()"
         )
     except TimeoutError:
-        _log("[FATAL] Initial credential.get_token() timed out after 30s. Exiting.")
-        _log("[HINT] Run: az login")
+        _log("[CRITICAL] Initial credential.get_token() timed out after 30s. Exiting.")
+        _log("[CRITICAL] HINT: Run 'az login'")
+        sys.exit(1)
+    except Exception as e:
+        _log(f"[CRITICAL] Initial credential.get_token() failed: {e} -- Exiting.")
+        _log("[CRITICAL] HINT: Run 'az login'")
         sys.exit(1)
     _log("[AUTH] Using existing Azure credentials")
     return cred
