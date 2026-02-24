@@ -882,6 +882,51 @@ JSON output:"""
         except Exception as e:
             _log(f"[ERROR] Could not capture git history: {e}")
 
+    def copy_claude_trajectory_files(self, session_folder: Path, phases: list):
+        """Copy Claude session JSONL trajectory files into the session folder.
+
+        For each phase that has a session_id, finds the corresponding JSONL
+        file in ~/.claude/projects/{encoded-cwd}/ and copies it to
+        session_folder/trajectories/{phase_name}_{session_id}.jsonl.
+
+        Args:
+            session_folder: Path to the OneDrive session folder.
+            phases: List of phase dicts (from _record_phase), each with
+                    'phase', 'session_id', etc.
+        """
+        trajectories_dir = session_folder / "trajectories"
+        try:
+            trajectories_dir.mkdir(exist_ok=True)
+        except Exception as e:
+            _log(f"[WARN] Could not create trajectories dir: {e}")
+            return
+
+        # Encode cwd for Claude's project path:
+        # \ and / replaced by -, : replaced by --, spaces replaced by -
+        cwd_str = str(session_folder)
+        encoded_cwd = cwd_str.replace("\\", "-").replace("/", "-").replace(":", "--").replace(" ", "-")
+
+        claude_projects_dir = Path.home() / ".claude" / "projects" / encoded_cwd
+
+        for phase in phases:
+            session_id = phase.get("session_id", "")
+            phase_name = phase.get("phase", "unknown")
+            if not session_id:
+                continue
+
+            src = claude_projects_dir / f"{session_id}.jsonl"
+            dst = trajectories_dir / f"{phase_name}_{session_id}.jsonl"
+
+            if not src.exists():
+                _log(f"[WARN] Trajectory file not found: {src}")
+                continue
+
+            try:
+                shutil.copy2(str(src), str(dst))
+                _log(f"[TRAJECTORIES] Copied {phase_name} trajectory: {dst.name}")
+            except Exception as e:
+                _log(f"[WARN] Could not copy trajectory for {phase_name}: {e}")
+
     def write_result_and_transcript_files(self, session_folder: Path,
                                            result_text: str = "",
                                            transcript: str = ""):
@@ -1154,6 +1199,7 @@ JSON output:"""
                 "cost_usd": round(phase_stats.get("cost_usd", 0.0), 6),
                 "duration_ms": phase_stats.get("duration_ms", 0),
                 "turns": phase_stats.get("num_turns", 0),
+                "session_id": phase_stats.get("session_id", ""),
             })
             if phase_stats.get("session_id"):
                 last_session_id = phase_stats["session_id"]
@@ -1194,6 +1240,12 @@ JSON output:"""
                 self.capture_git_history(session_folder)
             except Exception as e:
                 _log(f"[ERROR] Failed to capture git history: {e}")
+
+            # Copy Claude trajectory files
+            try:
+                self.copy_claude_trajectory_files(session_folder, phases)
+            except Exception as e:
+                _log(f"[ERROR] Failed to copy trajectory files: {e}")
 
         try:
             # Worker/Verifier loop
