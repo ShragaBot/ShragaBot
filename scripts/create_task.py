@@ -42,7 +42,7 @@ def generate_short_description(prompt: str, max_length: int = 100) -> str:
     # Truncate with ellipsis
     if len(first_line) > max_length:
         return first_line[: max_length - 3].rstrip() + "..."
-    return first_line
+    return first_line or "Untitled task"
 
 
 def create_task(

@@ -49,9 +49,10 @@ STATUS_NAMES = {
 }
 
 
-def cancel_task(task_id: str) -> dict:
+def cancel_task(task_id: str, email: str | None = None) -> dict:
     """Cancel a task by ID using ETag-based optimistic concurrency.
 
+    If email is provided, verifies the task belongs to that user.
     Returns a dict with the result: task_id, previous_status, new_status, message.
     """
     dv = DataverseClient()
@@ -59,7 +60,7 @@ def cancel_task(task_id: str) -> dict:
         task = dv.get_row(
             TASKS_TABLE,
             task_id,
-            select="cr_shraga_taskid,cr_status,crb3b_shortdescription",
+            select="cr_shraga_taskid,cr_status,crb3b_shortdescription,crb3b_useremail",
         )
     except http_requests.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 404:
@@ -69,6 +70,16 @@ def cancel_task(task_id: str) -> dict:
                 "message": "Task not found.",
             }
         raise
+
+    # Verify email ownership if provided
+    if email:
+        task_email = task.get("crb3b_useremail", "")
+        if task_email and task_email.lower() != email.lower():
+            return {
+                "task_id": task_id,
+                "cancelable": False,
+                "message": "Task belongs to a different user.",
+            }
 
     current_status = task.get("cr_status")
     etag = task.get("@odata.etag")
@@ -168,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             task_id = args.task_id
 
-        result = cancel_task(task_id)
+        result = cancel_task(task_id, email=args.email)
     except Exception as exc:
         print(json.dumps({"error": str(exc)}, indent=2), file=sys.stderr)
         return 2
