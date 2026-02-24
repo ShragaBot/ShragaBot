@@ -1206,7 +1206,7 @@ JSON output:"""
                     cancel_msg = "Task canceled by user"
                     self.send_to_webhook(cancel_msg)
                     _finalize_summary("canceled", cancel_msg)
-                    return False, cancel_msg, transcript, accumulated_stats
+                    return "canceled", cancel_msg, transcript, accumulated_stats
 
                 _log(f"\n[ITERATION {iteration}]")
 
@@ -1245,7 +1245,7 @@ JSON output:"""
                         cancel_msg = "Task canceled by user (before verification)"
                         self.send_to_webhook(cancel_msg)
                         _finalize_summary("canceled", cancel_msg)
-                        return False, cancel_msg, transcript, accumulated_stats
+                        return "canceled", cancel_msg, transcript, accumulated_stats
 
                     # Verification phase
                     _log(f"\n[VERIFICATION]")
@@ -1301,7 +1301,7 @@ JSON output:"""
                         # Write session summary for completed state
                         _finalize_summary("completed", final_result)
 
-                        return True, final_result, transcript, accumulated_stats
+                        return "completed", final_result, transcript, accumulated_stats
 
                     else:
                         # Verification failed, loop back to worker
@@ -1318,7 +1318,7 @@ JSON output:"""
             # Max iterations reached
             max_iter_msg = f"Max iterations ({iteration-1}) reached without approval"
             _finalize_summary("failed", max_iter_msg)
-            return False, max_iter_msg, transcript, accumulated_stats
+            return "failed", max_iter_msg, transcript, accumulated_stats
 
         except Exception as e:
             error_msg = f"Error during autonomous execution: {e}"
@@ -1333,7 +1333,7 @@ JSON output:"""
             # Write summary for error/failed terminal state
             _finalize_summary("failed", error_msg)
 
-            return False, error_msg, transcript, accumulated_stats
+            return "failed", error_msg, transcript, accumulated_stats
 
     def process_task(self, task: dict):
         """Process a single task using autonomous agent.
@@ -1392,7 +1392,7 @@ Worker/Verifier loop initiated..."""
         self.send_to_webhook(start_msg)
 
         # Execute with autonomous agent (pass parsed prompt to avoid reparsing)
-        success, result, final_transcript, session_stats = self.execute_with_autonomous_agent(
+        terminal_status, result, final_transcript, session_stats = self.execute_with_autonomous_agent(
             prompt,
             task_id,
             transcript,
@@ -1421,8 +1421,8 @@ Worker/Verifier loop initiated..."""
             secs = int(total_sec % 60)
             _duration_str = f"{mins}m {secs:02d}s" if mins > 0 else f"{secs}s"
 
-        # Update final status
-        if success:
+        # Update final status based on terminal_status (three-way branch)
+        if terminal_status == "completed":
             # Commit results to Git for audit trail
             commit_sha = self.commit_task_results(task_id, self.work_base_dir)
 
@@ -1456,7 +1456,27 @@ Full details saved in Dataverse (Task ID: {task_id}){git_info}"""
             _log(f"[TASK] Completed: {task_name}\n")
             self.current_task_id = None
             return True
-        else:
+
+        elif terminal_status == "canceled":
+            # Canceled: use STATUS_CANCELED, no "Error:" prefix
+            self.update_task(
+                task_id,
+                status=STATUS_CANCELED,
+                status_message="Task canceled",
+                result=result,
+                transcript=final_transcript,
+                session_cost=_cost_str,
+                session_tokens=_tokens_str,
+                session_duration=_duration_str
+            )
+
+            self.send_to_webhook(f"Task canceled: {task_name}")
+
+            _log(f"[TASK] Canceled: {task_name}\n")
+            self.current_task_id = None
+            return False
+
+        else:  # "failed"
             self.update_task(
                 task_id,
                 status=STATUS_FAILED,
