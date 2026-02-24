@@ -140,6 +140,10 @@ class IntegratedTaskWorker:
         self.current_task_id = None  # Set during task processing for message correlation
         self.work_base_dir = Path(os.environ.get("WORK_BASE_DIR", str(Path(__file__).parent)))
 
+        # Crash cleanup metadata (set during task execution, used by _cleanup_in_progress_task)
+        self._current_session_folder = None
+        self._current_transcript = ""
+
         # Azure authentication
         self.credential = DefaultAzureCredential()
         self.dv = DataverseClient(dataverse_url=DATAVERSE_URL, credential=self.credential, log_fn=_log)
@@ -882,6 +886,51 @@ JSON output:"""
         except Exception as e:
             _log(f"[ERROR] Could not capture git history: {e}")
 
+    def copy_claude_trajectory_files(self, session_folder: Path, phases: list):
+        """Copy Claude session JSONL trajectory files into the session folder.
+
+        For each phase that has a session_id, finds the corresponding JSONL
+        file in ~/.claude/projects/{encoded-cwd}/ and copies it to
+        session_folder/trajectories/{phase_name}_{session_id}.jsonl.
+
+        Args:
+            session_folder: Path to the OneDrive session folder.
+            phases: List of phase dicts (from _record_phase), each with
+                    'phase', 'session_id', etc.
+        """
+        trajectories_dir = session_folder / "trajectories"
+        try:
+            trajectories_dir.mkdir(exist_ok=True)
+        except Exception as e:
+            _log(f"[WARN] Could not create trajectories dir: {e}")
+            return
+
+        # Encode cwd for Claude's project path:
+        # \ and / replaced by -, : replaced by --, spaces replaced by -
+        cwd_str = str(session_folder)
+        encoded_cwd = cwd_str.replace("\\", "-").replace("/", "-").replace(":", "--").replace(" ", "-")
+
+        claude_projects_dir = Path.home() / ".claude" / "projects" / encoded_cwd
+
+        for phase in phases:
+            session_id = phase.get("session_id", "")
+            phase_name = phase.get("phase", "unknown")
+            if not session_id:
+                continue
+
+            src = claude_projects_dir / f"{session_id}.jsonl"
+            dst = trajectories_dir / f"{phase_name}_{session_id}.jsonl"
+
+            if not src.exists():
+                _log(f"[WARN] Trajectory file not found: {src}")
+                continue
+
+            try:
+                shutil.copy2(str(src), str(dst))
+                _log(f"[TRAJECTORIES] Copied {phase_name} trajectory: {dst.name}")
+            except Exception as e:
+                _log(f"[WARN] Could not copy trajectory for {phase_name}: {e}")
+
     def write_result_and_transcript_files(self, session_folder: Path,
                                            result_text: str = "",
                                            transcript: str = ""):
@@ -911,6 +960,91 @@ JSON output:"""
             _log(f"[FILES] Wrote transcript.md ({len(transcript or '')} chars) to {transcript_file}")
         except Exception as e:
             _log(f"[ERROR] Could not write transcript.md: {e}")
+
+    def write_outcome_file(self, results_dir: Path, terminal_status: str,
+                           reason: str, task_id: str,
+                           accumulated_stats: dict, phases: list):
+        """Write outcome.json with terminal state details to results/.
+
+        Args:
+            results_dir: Path to the results/ subdirectory.
+            terminal_status: One of 'completed', 'canceled', 'failed', 'killed'.
+            reason: Human-readable reason/error message.
+            task_id: Dataverse task ID.
+            accumulated_stats: Merged stats from all phases.
+            phases: List of phase dicts.
+        """
+        outcome = {
+            "terminal_status": terminal_status,
+            "reason": reason[:2000] if reason else "",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "task_id": task_id,
+            "cost_usd": round(accumulated_stats.get("total_cost_usd", 0.0), 6),
+            "duration_ms": accumulated_stats.get("total_duration_ms", 0),
+            "phases_completed": len(phases),
+        }
+
+        # On failure/killed: include full error details
+        if terminal_status in ("failed", "killed"):
+            outcome["error_details"] = reason
+
+        try:
+            outcome_file = results_dir / "outcome.json"
+            outcome_file.write_text(json.dumps(outcome, indent=2, default=str), encoding="utf-8")
+            _log(f"[FILES] Wrote outcome.json to {outcome_file}")
+        except Exception as e:
+            _log(f"[ERROR] Could not write outcome.json: {e}")
+
+    def move_files_to_results_dir(self, session_folder: Path, terminal_status: str,
+                                  reason: str, task_id: str,
+                                  accumulated_stats: dict, phases: list):
+        """Create results/ subfolder and move terminal files into it.
+
+        Moves: result.md, transcript.md, session_summary.json, SESSION_LOG.md,
+        GIT_HISTORY.md. Copies SUMMARY.md and VERDICT.json only if they exist
+        (completed tasks only). Writes outcome.json.
+
+        Args:
+            session_folder: Path to the OneDrive session folder.
+            terminal_status: Terminal status string.
+            reason: Result/error text.
+            task_id: Dataverse task ID.
+            accumulated_stats: Merged stats from all phases.
+            phases: List of phase dicts.
+        """
+        results_dir = session_folder / "results"
+        try:
+            results_dir.mkdir(exist_ok=True)
+        except Exception as e:
+            _log(f"[ERROR] Could not create results/ dir: {e}")
+            return
+
+        # Move terminal files
+        files_to_move = [
+            "result.md", "transcript.md", "session_summary.json",
+            "SESSION_LOG.md", "GIT_HISTORY.md",
+        ]
+        for fname in files_to_move:
+            src = session_folder / fname
+            if src.exists():
+                try:
+                    shutil.move(str(src), str(results_dir / fname))
+                except Exception as e:
+                    _log(f"[WARN] Could not move {fname} to results/: {e}")
+
+        # Copy SUMMARY.md and VERDICT.json if they exist (completed tasks only)
+        files_to_copy = ["SUMMARY.md", "VERDICT.json"]
+        for fname in files_to_copy:
+            src = session_folder / fname
+            if src.exists():
+                try:
+                    shutil.copy2(str(src), str(results_dir / fname))
+                except Exception as e:
+                    _log(f"[WARN] Could not copy {fname} to results/: {e}")
+
+        # Write outcome.json
+        self.write_outcome_file(results_dir, terminal_status, reason,
+                                task_id, accumulated_stats, phases)
 
     def write_session_log(self, summary: dict, session_folder: Path,
                           result_text: str = "", folder_url: str = ""):
@@ -1088,6 +1222,9 @@ JSON output:"""
         # Create OneDrive session folder for this task
         task_name = task_description[:50] if task_description else "unnamed_task"
         session_folder = self.create_session_folder(task_name, task_id)
+        self._current_session_folder = session_folder
+        self._current_task_id = task_id
+        self._current_transcript = current_transcript
 
         # Write full task prompt and success criteria to session folder (T048)
         self.write_task_prompt_file(session_folder, task_prompt, success_criteria)
@@ -1122,6 +1259,7 @@ JSON output:"""
             status_message="Worker/Verifier loop started",
             transcript=transcript
         )
+        self._current_transcript = transcript
 
         self.send_to_webhook(f"Starting Worker/Verifier loop\nProject: {project_folder}")
 
@@ -1154,6 +1292,7 @@ JSON output:"""
                 "cost_usd": round(phase_stats.get("cost_usd", 0.0), 6),
                 "duration_ms": phase_stats.get("duration_ms", 0),
                 "turns": phase_stats.get("num_turns", 0),
+                "session_id": phase_stats.get("session_id", ""),
             })
             if phase_stats.get("session_id"):
                 last_session_id = phase_stats["session_id"]
@@ -1194,6 +1333,25 @@ JSON output:"""
                 self.capture_git_history(session_folder)
             except Exception as e:
                 _log(f"[ERROR] Failed to capture git history: {e}")
+
+            # Copy Claude trajectory files
+            try:
+                self.copy_claude_trajectory_files(session_folder, phases)
+            except Exception as e:
+                _log(f"[ERROR] Failed to copy trajectory files: {e}")
+
+            # Move terminal files into results/ subfolder and write outcome.json
+            try:
+                self.move_files_to_results_dir(
+                    session_folder=session_folder,
+                    terminal_status=terminal_status,
+                    reason=result_text,
+                    task_id=task_id,
+                    accumulated_stats=accumulated_stats,
+                    phases=phases,
+                )
+            except Exception as e:
+                _log(f"[ERROR] Failed to move files to results/: {e}")
 
         try:
             # Worker/Verifier loop
@@ -1236,6 +1394,7 @@ JSON output:"""
                     output
                 )
                 self.update_task(task_id, transcript=transcript)
+                self._current_transcript = transcript
                 _log(f"[PHASE] Transcript updated in Dataverse")
 
                 if status == "done":
@@ -1273,6 +1432,7 @@ JSON output:"""
                         feedback if not approved else "APPROVED"
                     )
                     self.update_task(task_id, transcript=transcript)
+                    self._current_transcript = transcript
 
                     if approved:
                         # Task completed successfully!
@@ -1293,6 +1453,7 @@ JSON output:"""
                             "SUMMARY CREATED"
                         )
                         self.update_task(task_id, transcript=transcript)
+                        self._current_transcript = transcript
 
                         # Build concise bullet-style result with OneDrive links
                         result_folder_url = folder_url if folder_url else str(session_folder)
@@ -1421,7 +1582,8 @@ Worker/Verifier loop initiated..."""
             secs = int(total_sec % 60)
             _duration_str = f"{mins}m {secs:02d}s" if mins > 0 else f"{secs}s"
 
-        # Update final status (three-way: completed / canceled / failed)
+        # Update final status based on terminal_status (three-way branch)
+        task_result = False
         if terminal_status == "completed":
             # Commit results to Git for audit trail
             commit_sha = self.commit_task_results(task_id, self.work_base_dir)
@@ -1454,14 +1616,14 @@ Full details saved in Dataverse (Task ID: {task_id}){git_info}"""
             self.send_to_webhook(completion_msg)
 
             _log(f"[TASK] Completed: {task_name}\n")
-            self.current_task_id = None
-            return True
+            task_result = True
 
         elif terminal_status == "canceled":
+            # Canceled: use STATUS_CANCELED, no "Error:" prefix
             self.update_task(
                 task_id,
                 status=STATUS_CANCELED,
-                status_message="Task canceled by user",
+                status_message="Task canceled",
                 result=result,
                 transcript=final_transcript,
                 session_cost=_cost_str,
@@ -1469,20 +1631,11 @@ Full details saved in Dataverse (Task ID: {task_id}){git_info}"""
                 session_duration=_duration_str
             )
 
-            cancel_msg = f"""Task canceled: {task_name}
-
-{result}
-
-Full transcript saved in Dataverse (Task ID: {task_id})"""
-
-            self.send_to_webhook(cancel_msg)
+            self.send_to_webhook(f"Task canceled: {task_name}")
 
             _log(f"[TASK] Canceled: {task_name}\n")
-            self.current_task_id = None
-            return False
 
-        else:
-            # terminal_status == "failed" or any unknown status
+        else:  # "failed"
             self.update_task(
                 task_id,
                 status=STATUS_FAILED,
@@ -1505,8 +1658,71 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
             self.send_to_webhook(failure_msg)
 
             _log(f"[TASK] Failed: {task_name}\n")
-            self.current_task_id = None
-            return False
+
+        # Run cleanup agent for ALL terminal states (after all DV updates)
+        session_folder_for_cleanup = self._current_session_folder
+        if session_folder_for_cleanup and isinstance(session_folder_for_cleanup, Path):
+            self.run_cleanup_agent(session_folder_for_cleanup)
+
+        self.current_task_id = None
+        self._current_session_folder = None
+        self._current_transcript = ""
+        return task_result
+
+    def run_cleanup_agent(self, session_folder: Path):
+        """Run a cleanup agent to revert all changes made during a task.
+
+        Uses the Claude CLI to analyze trajectory files in the session folder
+        and revert any changes the task made outside the session folder (git
+        modifications, temp files, pip installs, etc.).
+
+        Args:
+            session_folder: Path to the OneDrive session folder (contains
+                           trajectories/ with per-phase JSONL files).
+        """
+        _log(f"[CLEANUP AGENT] Starting cleanup for {session_folder}")
+
+        trajectories_dir = session_folder / "trajectories"
+        trajectory_listing = ""
+        if trajectories_dir.is_dir():
+            try:
+                files = list(trajectories_dir.glob("*.jsonl"))
+                trajectory_listing = "\n".join(f"  - {f.name}" for f in files)
+            except Exception:
+                trajectory_listing = "(could not list trajectory files)"
+
+        cleanup_prompt = f"""You are a cleanup agent. Your job is to identify and revert ALL changes
+made by a previous task, restoring the dev box to its pre-task state.
+
+SESSION FOLDER (do NOT delete this): {session_folder}
+
+TRAJECTORY FILES (Claude session logs, analyze for what was changed):
+{trajectories_dir}
+{trajectory_listing if trajectory_listing else "(no trajectory files found)"}
+
+INSTRUCTIONS:
+1. Read the trajectory files to understand what the task did
+2. Identify ALL changes made during the task:
+   - Git: uncommitted changes, new branches, modified tracked files
+   - Files: temp files, config changes, new files OUTSIDE the session folder
+   - Packages: pip/npm/etc. packages installed during the task
+   - Environment: env var changes, service modifications
+3. REVERT everything EXCEPT the session folder itself:
+   - Git: reset any uncommitted changes in the work repo, remove untracked files (outside session folder)
+   - Files: remove any temp files created outside session folder
+   - Packages: uninstall any packages that were installed during the task
+4. Do NOT delete or modify anything inside {session_folder}
+5. Be conservative - if unsure whether something was from this task, leave it
+
+Report what you reverted at the end.
+"""
+
+        try:
+            agent = AgentCLI()
+            agent.call_claude(cleanup_prompt, session_folder, timeout=300, stream=False)
+            _log(f"[CLEANUP AGENT] Cleanup completed for {session_folder}")
+        except Exception as e:
+            _log(f"[CLEANUP AGENT] Cleanup failed (non-fatal): {e}")
 
     def run(self):
         """Main worker loop"""
@@ -1618,22 +1834,81 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
         _log("[SHUTDOWN] Worker stopped")
 
     def _cleanup_in_progress_task(self, reason: str):
-        """Mark the current in-progress task as failed so it doesn't stay stuck in RUNNING."""
+        """Mark the current in-progress task as failed so it doesn't stay stuck in RUNNING.
+
+        Also writes crash metadata to the session folder's results/ subdirectory
+        if the session folder exists and is valid.
+        """
         if self.current_task_id:
+            import traceback
+            tb = traceback.format_exc()
+            full_error = f"{reason}\n\nTraceback:\n{tb}" if tb and "NoneType" not in tb else reason
+
             _log(f"[CLEANUP] Marking task {self.current_task_id} as failed: {reason}")
+            _log(f"[CLEANUP] Full error details:\n{full_error}")
+
             self.update_task(
                 self.current_task_id,
                 status=STATUS_FAILED,
                 status_message=f"Worker shutdown: {reason}",
-                result=f"Error: {reason}"
+                result=f"Error: {full_error[:5000]}"
             )
+
+            # Write crash metadata to session folder if available
+            sf = self._current_session_folder
+            if sf and isinstance(sf, Path) and sf.is_dir():
+                try:
+                    results_dir = sf / "results"
+                    results_dir.mkdir(exist_ok=True)
+
+                    # result.md
+                    (results_dir / "result.md").write_text(
+                        f"# Crash Result\n\n{full_error}", encoding="utf-8"
+                    )
+
+                    # session_summary.json (partial - whatever we have)
+                    crash_summary = {
+                        "task_id": self.current_task_id,
+                        "terminal_status": "killed",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "error": full_error[:2000],
+                        "dev_box": MACHINE_NAME,
+                        "worker_version": self._my_version,
+                    }
+                    (results_dir / "session_summary.json").write_text(
+                        json.dumps(crash_summary, indent=2, default=str), encoding="utf-8"
+                    )
+
+                    # transcript.md (whatever accumulated)
+                    (results_dir / "transcript.md").write_text(
+                        self._current_transcript or "", encoding="utf-8"
+                    )
+
+                    # outcome.json
+                    outcome = {
+                        "terminal_status": "killed",
+                        "reason": full_error[:2000],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "task_id": self.current_task_id,
+                    }
+                    (results_dir / "outcome.json").write_text(
+                        json.dumps(outcome, indent=2, default=str), encoding="utf-8"
+                    )
+
+                    _log(f"[CLEANUP] Wrote crash metadata to {results_dir}")
+                except Exception as e:
+                    _log(f"[CLEANUP] Could not write crash metadata: {e}")
+
             self.current_task_id = None
+            self._current_session_folder = None
+            self._current_transcript = ""
 
     def _cleanup_orphaned_tasks(self):
         """On startup, find tasks stuck in Running on this dev box and fail them.
 
         This handles the case where the Worker process crashed or was killed
         mid-task. Without this, orphaned tasks stay in Running forever.
+        Also writes crash metadata to the session folder if workingdir is available.
         """
         url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}"
         params = {
@@ -1641,7 +1916,7 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                 f"cr_status eq {_STATUS_INT[STATUS_RUNNING]}"
                 f" and crb3b_devbox eq '{MACHINE_NAME}'"
             ),
-            "$select": "cr_shraga_taskid,cr_name",
+            "$select": "cr_shraga_taskid,cr_name,crb3b_workingdir",
         }
 
         try:
@@ -1651,16 +1926,43 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
             _log(f"[WARN] Could not check for orphaned tasks: {e}")
             return
 
+        error_msg = "Worker process died while executing this task. The task was left in Running state and has been marked as failed on restart."
+
         for task in orphans:
             tid = task.get("cr_shraga_taskid")
             tname = task.get("cr_name", "Unknown")
+            workingdir = task.get("crb3b_workingdir", "")
             _log(f"[CLEANUP] Orphaned task found: {tname} ({tid}) -- marking as failed")
             self.update_task(
                 tid,
                 status=STATUS_FAILED,
                 status_message="Worker crashed or restarted -- task was orphaned",
-                result="Error: Worker process died while executing this task. The task was left in Running state and has been marked as failed on restart."
+                result=f"Error: {error_msg}"
             )
+
+            # Write crash metadata to session folder if it exists
+            if workingdir:
+                wd_path = Path(workingdir)
+                if wd_path.is_dir():
+                    try:
+                        results_dir = wd_path / "results"
+                        results_dir.mkdir(exist_ok=True)
+                        outcome = {
+                            "terminal_status": "killed",
+                            "reason": error_msg,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "task_id": tid,
+                        }
+                        (results_dir / "outcome.json").write_text(
+                            json.dumps(outcome, indent=2, default=str), encoding="utf-8"
+                        )
+                        (results_dir / "result.md").write_text(
+                            f"# Orphaned Task Crash\n\n{error_msg}", encoding="utf-8"
+                        )
+                        _log(f"[CLEANUP] Wrote crash metadata for orphan {tid[:8]} to {results_dir}")
+                    except Exception as e:
+                        _log(f"[CLEANUP] Could not write orphan crash metadata: {e}")
+
             try:
                 self.send_to_webhook(f"Orphaned task cleaned up on restart: {tname} ({tid[:8]})")
             except Exception:
