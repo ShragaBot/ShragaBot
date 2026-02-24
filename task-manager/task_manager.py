@@ -337,8 +337,12 @@ class TaskManager:
         except subprocess.TimeoutExpired: _log("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE
         except FileNotFoundError: _log("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE
         except Exception as e: _log(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE
-        # If response mentions a task ID, expect a follow-up (card link from TaskRunner)
-        task_created = "task" in resp.lower() and ("submitted" in resp.lower() or "created" in resp.lower() or "id:" in resp.lower())
+        # Detect task creation: PM responds with "Submitted! ID: <uuid>" when creating a task.
+        # Previous heuristic required "task" in response, but Claude often omits that word.
+        # "submitted" + "id:" reliably detects the pattern without false positives on
+        # status messages like "Still Submitted" or "It's Submitted (10)".
+        resp_lower = resp.lower()
+        task_created = "submitted" in resp_lower and "id:" in resp_lower
         self.send_response(in_reply_to=rid, mcs_conversation_id=mcs, text=resp,
                            followup_expected=task_created)
         self.mark_processed(rid)

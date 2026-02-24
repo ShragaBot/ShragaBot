@@ -927,6 +927,140 @@ class TestFullFlow:
         assert entry["session_id"] == "flow-session-123"
 
 
+# -- Follow-up Detection Tests -- T045 ----------------------------------------
+
+class TestFollowupDetection:
+    """Tests for the task_created / followup_expected detection heuristic.
+
+    When the PM creates a task, Claude responds with "Submitted! ID: <uuid>".
+    The PM must detect this and set cr_followup_expected='true' so the MCS topic
+    loops back and calls SendMessage again to deliver the card link message.
+    """
+
+    @patch("task_manager.subprocess.Popen")
+    @patch("task_manager.requests.post")
+    @patch("task_manager.requests.patch")
+    def test_submitted_with_id_sets_followup_true(self, mock_patch, mock_post, mock_popen, manager):
+        """PM response 'Submitted! ID: <uuid>' must set cr_followup_expected='true'."""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({
+                "result": "Submitted! ID: 5bd5cda3-4a11-f111-8341-002248d570fd\n\nWorker will handle it.",
+                "session_id": "sess-fu-1",
+                "is_error": False,
+            })
+        )
+        mock_post.return_value = FakeResponse(json_data={})
+        mock_patch.return_value = FakeResponse(status_code=204)
+
+        manager.process_message(SAMPLE_INBOUND_MSG)
+
+        body = mock_post.call_args[1]["json"]
+        assert body["cr_followup_expected"] == "true", \
+            "PM must set followup_expected=true when response contains 'Submitted! ID:'"
+
+    @patch("task_manager.subprocess.Popen")
+    @patch("task_manager.requests.post")
+    @patch("task_manager.requests.patch")
+    def test_submitted_id_lowercase_sets_followup(self, mock_patch, mock_post, mock_popen, manager):
+        """Detection is case-insensitive."""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({
+                "result": "submitted! id: abc12345-1234-1234-1234-123456789abc",
+                "session_id": "sess-fu-2",
+                "is_error": False,
+            })
+        )
+        mock_post.return_value = FakeResponse(json_data={})
+        mock_patch.return_value = FakeResponse(status_code=204)
+
+        manager.process_message(SAMPLE_INBOUND_MSG)
+
+        body = mock_post.call_args[1]["json"]
+        assert body["cr_followup_expected"] == "true"
+
+    @patch("task_manager.subprocess.Popen")
+    @patch("task_manager.requests.post")
+    @patch("task_manager.requests.patch")
+    def test_status_check_does_not_trigger_followup(self, mock_patch, mock_post, mock_popen, manager):
+        """Status messages mentioning 'Submitted' without 'ID:' must NOT trigger followup."""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({
+                "result": "Still Submitted -- waiting for a Worker to pick it up.",
+                "session_id": "sess-fu-3",
+                "is_error": False,
+            })
+        )
+        mock_post.return_value = FakeResponse(json_data={})
+        mock_patch.return_value = FakeResponse(status_code=204)
+
+        manager.process_message(SAMPLE_INBOUND_MSG)
+
+        body = mock_post.call_args[1]["json"]
+        assert body["cr_followup_expected"] == "", \
+            "Status messages must not trigger followup"
+
+    @patch("task_manager.subprocess.Popen")
+    @patch("task_manager.requests.post")
+    @patch("task_manager.requests.patch")
+    def test_cancel_submitted_does_not_trigger_followup(self, mock_patch, mock_post, mock_popen, manager):
+        """Cancel messages about Submitted state must NOT trigger followup."""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({
+                "result": "It's Submitted (10) -- can't cancel that state directly.",
+                "session_id": "sess-fu-4",
+                "is_error": False,
+            })
+        )
+        mock_post.return_value = FakeResponse(json_data={})
+        mock_patch.return_value = FakeResponse(status_code=204)
+
+        manager.process_message(SAMPLE_INBOUND_MSG)
+
+        body = mock_post.call_args[1]["json"]
+        assert body["cr_followup_expected"] == ""
+
+    @patch("task_manager.subprocess.Popen")
+    @patch("task_manager.requests.post")
+    @patch("task_manager.requests.patch")
+    def test_general_response_does_not_trigger_followup(self, mock_patch, mock_post, mock_popen, manager):
+        """Non-task responses must NOT trigger followup."""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({
+                "result": "Not my department! I'm your dev task manager.",
+                "session_id": "sess-fu-5",
+                "is_error": False,
+            })
+        )
+        mock_post.return_value = FakeResponse(json_data={})
+        mock_patch.return_value = FakeResponse(status_code=204)
+
+        manager.process_message(SAMPLE_INBOUND_MSG)
+
+        body = mock_post.call_args[1]["json"]
+        assert body["cr_followup_expected"] == ""
+
+    @patch("task_manager.subprocess.Popen")
+    @patch("task_manager.requests.post")
+    @patch("task_manager.requests.patch")
+    def test_task_list_with_ids_does_not_trigger_followup(self, mock_patch, mock_post, mock_popen, manager):
+        """Task listing with short IDs must NOT trigger followup."""
+        mock_popen.return_value = _make_popen_mock(
+            stdout=json.dumps({
+                "result": "Here are your recent tasks:\n\n- Feb 23 22:29 Completed: Write bash script (ID: 19b754c5)",
+                "session_id": "sess-fu-6",
+                "is_error": False,
+            })
+        )
+        mock_post.return_value = FakeResponse(json_data={})
+        mock_patch.return_value = FakeResponse(status_code=204)
+
+        manager.process_message(SAMPLE_INBOUND_MSG)
+
+        body = mock_post.call_args[1]["json"]
+        # This has "id:" but not "submitted", so should NOT trigger
+        assert body["cr_followup_expected"] == ""
+
+
 # -- PM Session Persistence Tests (Post-Refactor) -- T044 ---------------------
 
 class TestLoadSessions:
