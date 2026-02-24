@@ -4,7 +4,6 @@ Integrated Task Worker - Combines Dataverse polling with autonomous agent execut
 Polls Dataverse for tasks → Executes using Worker/Verifier loop → Updates Dataverse
 """
 import platform
-import requests
 import socket
 import subprocess
 import time
@@ -14,12 +13,11 @@ import shutil
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from azure.identity import DefaultAzureCredential
-from azure.core.credentials import AccessToken
 
 # Import the autonomous agent system (from same directory as this file)
 sys.path.insert(0, str(Path(__file__).parent))
 from autonomous_agent import AgentCLI, extract_phase_stats, merge_phase_stats
-from timeout_utils import call_with_timeout
+from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
 
 import os
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
@@ -62,7 +60,6 @@ TABLE = os.environ.get("TABLE_NAME", "cr_shraga_tasks")  # MCS table with soluti
 STATE_FILE = ".integrated_worker_state.json"
 
 WEBHOOK_USER = os.environ.get("WEBHOOK_USER", "")
-REQUEST_TIMEOUT = 30  # seconds for HTTP requests to Dataverse
 from version_check import get_my_version, should_exit
 
 MACHINE_NAME = platform.node()  # This dev box's hostname
@@ -145,8 +142,7 @@ class IntegratedTaskWorker:
 
         # Azure authentication
         self.credential = DefaultAzureCredential()
-        self._token_cache = None
-        self._token_expires = None
+        self.dv = DataverseClient(dataverse_url=DATAVERSE_URL, credential=self.credential, log_fn=_log)
 
         # Version check for immutable releases
         self.repo_path = Path(__file__).parent
@@ -201,69 +197,32 @@ class IntegratedTaskWorker:
             }, f, indent=2)
 
     def get_token(self):
-        """Get OAuth token using DefaultAzureCredential (secure, cached)"""
+        """Get OAuth token using DefaultAzureCredential (secure, cached).
+
+        Thin wrapper around DataverseClient.get_token() that catches
+        TimeoutError/Exception and calls sys.exit(1) for fatal failures.
+        """
         try:
-            # Return cached token if still valid
-            if self._token_cache and self._token_expires:
-                if datetime.now(timezone.utc) < self._token_expires:
-                    return self._token_cache
-
-            try:
-                token = call_with_timeout(
-                    lambda: self.credential.get_token(f"{DATAVERSE_URL}/.default"),
-                    timeout_sec=30,
-                    description="credential.get_token()"
-                )
-            except TimeoutError:
-                _log("[FATAL] get_token() timed out after 30s -- Azure credential hung. Exiting.")
-                _log("[HINT] Run: az login")
-                sys.exit(1)
-
-            # Cache token (expire 5 minutes early to be safe)
-            self._token_cache = token.token
-            self._token_expires = datetime.fromtimestamp(token.expires_on, tz=timezone.utc) - timedelta(minutes=5)
-
-            return self._token_cache
+            return self.dv.get_token()
+        except TimeoutError:
+            _log("[FATAL] get_token() timed out after 30s -- Azure credential hung. Exiting.")
+            _log("[HINT] Run: az login")
+            sys.exit(1)
         except Exception as e:
             _log(f"[FATAL] Getting token failed: {e} -- Exiting.")
             _log("[HINT] Run: az login")
             sys.exit(1)
 
-    def _get_headers(self, content_type=None, etag=None):
-        """Build OData headers with auth token. Returns None if token unavailable."""
-        token = self.get_token()
-        if not token:
-            return None
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0"
-        }
-        if content_type:
-            headers["Content-Type"] = content_type
-        if etag:
-            headers["If-Match"] = etag
-        return headers
-
     def get_current_user(self):
         """Get current user ID"""
-        headers = self._get_headers()
-        if not headers:
-            return None
-
         try:
             url = f"{DATAVERSE_URL}/api/data/v9.2/WhoAmI"
-            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
+            response = self.dv.get(url)
             user_data = response.json()
             user_id = user_data.get("UserId")
             self.current_user_id = user_id
             self.save_state()
             return user_id
-        except requests.exceptions.Timeout:
-            _log(f"[ERROR] WhoAmI request timed out")
-            return None
         except Exception as e:
             _log(f"[ERROR] Getting current user: {e}")
             return None
@@ -325,10 +284,6 @@ class IntegratedTaskWorker:
         if not self.current_user_id:
             self.get_current_user()
 
-        headers = self._get_headers()
-        if not headers:
-            return []
-
         url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}"
 
         # Filter for Pending tasks with no devbox assigned (open competition).
@@ -346,13 +301,9 @@ class IntegratedTaskWorker:
         }
 
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
+            response = self.dv.get(url, params=params)
             data = response.json()
             return data.get("value", [])
-        except requests.exceptions.Timeout:
-            _log(f"[ERROR] Polling tasks timed out")
-            return []
         except Exception as e:
             _log(f"[ERROR] Polling tasks: {e}")
             return []
@@ -370,13 +321,6 @@ class IntegratedTaskWorker:
             _log(f"[WARN] Cannot claim task -- missing id or etag")
             return False
 
-        headers = self._get_headers(
-            content_type="application/json",
-            etag=etag,
-        )
-        if not headers:
-            return False
-
         try:
             url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}({task_id})"
             body = {
@@ -384,16 +328,12 @@ class IntegratedTaskWorker:
                 "cr_statusmessage": f"Claimed by {MACHINE_NAME}",
                 "crb3b_devbox": MACHINE_NAME,
             }
-            response = requests.patch(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
-            if response.status_code == 412:
-                # Someone else claimed it first (optimistic concurrency conflict)
-                _log(f"[INFO] Task {task_id} already claimed by another worker")
-                return False
-            response.raise_for_status()
+            self.dv.patch(url, body, etag=etag)
             _log(f"[CLAIM] Successfully claimed task {task_id}")
             return True
-        except requests.exceptions.Timeout:
-            _log(f"[WARN] claim_task timed out for {task_id}")
+        except ETagConflictError:
+            # Someone else claimed it first (optimistic concurrency conflict)
+            _log(f"[INFO] Task {task_id} already claimed by another worker")
             return False
         except Exception as e:
             _log(f"[ERROR] claim_task: {e}")
@@ -407,15 +347,12 @@ class IntegratedTaskWorker:
         """
         if not task_id:
             return False
-        headers = self._get_headers()
-        if not headers:
-            return False
         try:
             url = (
                 f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}({task_id})"
                 f"?$select=cr_status"
             )
-            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            resp = self.dv.get(url)
             if resp.status_code == 200:
                 status = resp.json().get("cr_status")
                 cancel_values = {
@@ -437,10 +374,6 @@ class IntegratedTaskWorker:
                     session_cost: str = None, session_tokens: str = None,
                     session_duration: str = None):
         """Update task in Dataverse"""
-        headers = self._get_headers(content_type="application/json")
-        if not headers:
-            return False
-
         url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}({task_id})"
 
         data = {}
@@ -468,15 +401,11 @@ class IntegratedTaskWorker:
             data["crb3b_sessionduration"] = session_duration
 
         try:
-            response = requests.patch(url, headers=headers, json=data, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
+            self.dv.patch(url, data)
             return True
-        except requests.exceptions.Timeout:
-            _log(f"[ERROR] Task update timed out")
-            return False
-        except Exception as e:
+        except DataverseError as e:
             # If optional DV columns don't exist yet, retry without them
-            error_str = str(e).lower()
+            error_str = (e.response_text or "").lower()
             optional_columns = ["crb3b_sessionsummary", "crb3b_shortdescription",
                                 "crb3b_sessioncost", "crb3b_sessiontokens", "crb3b_sessionduration"]
             removed_any = False
@@ -488,12 +417,14 @@ class IntegratedTaskWorker:
                         removed_any = True
             if removed_any and data:
                 try:
-                    response = requests.patch(url, headers=headers, json=data, timeout=REQUEST_TIMEOUT)
-                    response.raise_for_status()
+                    self.dv.patch(url, data)
                     return True
                 except Exception as retry_e:
                     _log(f"[ERROR] Retry without optional columns also failed: {retry_e}")
                     return False
+            _log(f"[ERROR] Updating task: {e}")
+            return False
+        except Exception as e:
             _log(f"[ERROR] Updating task: {e}")
             return False
 
@@ -696,14 +627,11 @@ JSON output:"""
 
     def _send_heartbeat(self):
         """Update box heartbeat in crb3b_shragaboxes table."""
-        headers = self._get_headers(content_type="application/json")
-        if not headers:
-            return
         # Find box by hostname
         url = (f"{DATAVERSE_URL}/api/data/v9.2/crb3b_shragaboxes"
                f"?$filter=crb3b_hostname eq '{MACHINE_NAME}'&$select=crb3b_shragaboxid&$top=1")
         try:
-            r = requests.get(url, headers=headers, timeout=15)
+            r = self.dv.get(url, timeout=15)
             if r.status_code != 200:
                 return
             rows = r.json().get("value", [])
@@ -711,9 +639,8 @@ JSON output:"""
                 return
             box_id = rows[0]["crb3b_shragaboxid"]
             patch_url = f"{DATAVERSE_URL}/api/data/v9.2/crb3b_shragaboxes({box_id})"
-            from datetime import datetime, timezone
             now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            requests.patch(patch_url, headers=headers, json={
+            self.dv.patch(patch_url, {
                 "crb3b_lastheartbeat": now_utc,
                 "crb3b_boxstatus": "active",
                 "crb3b_version": self._my_version or "unknown"
@@ -723,10 +650,6 @@ JSON output:"""
 
     def send_to_webhook(self, message: str):
         """Send notification message to Dataverse table"""
-        headers = self._get_headers(content_type="application/json")
-        if not headers:
-            return False
-
         url = f"{DATAVERSE_URL}/api/data/v9.2/cr_shragamessages"
 
         # Create message record
@@ -747,18 +670,16 @@ JSON output:"""
             data["crb3b_taskid"] = self.current_task_id
 
         try:
-            response = requests.post(url, headers=headers, json=data, timeout=10)
-            response.raise_for_status()
+            self.dv.post(url, data, timeout=10)
             _log(f"[MESSAGE] Saved: {message[:80]}...")
             return True
-        except requests.exceptions.HTTPError as e:
+        except DataverseError as e:
             # Capture detailed error information
-            error_detail = e.response.text if hasattr(e.response, 'text') else str(e)
-            _log(f"[ERROR] Saving message (HTTP {e.response.status_code}): {error_detail[:500]}")
+            _log(f"[ERROR] Saving message (HTTP {e.status_code}): {(e.response_text or '')[:500]}")
             _log(f"[ERROR] Message size: {len(message)} chars, Title: {title[:100]}")
 
             # If message is too large, try truncating content
-            if e.response.status_code == 400 and len(message) > 10000:
+            if e.status_code == 400 and len(message) > 10000:
                 _log(f"[RETRY] Message too large ({len(message)} chars), truncating to 10000 chars")
                 truncated_message = message[:10000] + "\n\n... (truncated - full result saved in task record)"
                 truncated_data = {
@@ -770,13 +691,11 @@ JSON output:"""
                 if self.current_task_id:
                     truncated_data["crb3b_taskid"] = self.current_task_id
                 try:
-                    response = requests.post(url, headers=headers, json=truncated_data, timeout=10)
-                    response.raise_for_status()
+                    self.dv.post(url, truncated_data, timeout=10)
                     _log(f"[MESSAGE] Saved (truncated): {message[:80]}...")
                     return True
-                except requests.exceptions.HTTPError as e2:
-                    error_detail2 = e2.response.text if hasattr(e2.response, 'text') else str(e2)
-                    _log(f"[ERROR] Even truncated message failed (HTTP {e2.response.status_code}): {error_detail2[:500]}")
+                except DataverseError as e2:
+                    _log(f"[ERROR] Even truncated message failed (HTTP {e2.status_code}): {(e2.response_text or '')[:500]}")
             return False
         except Exception as e:
             # Handle non-HTTP errors (network, timeout, etc.)
@@ -789,10 +708,6 @@ JSON output:"""
 
         Returns a list of short activity strings, most recent last.
         """
-        headers = self._get_headers()
-        if not headers:
-            return []
-
         url = f"{DATAVERSE_URL}/api/data/v9.2/cr_shragamessages"
         params = {
             "$filter": f"crb3b_taskid eq '{task_id}'",
@@ -802,8 +717,7 @@ JSON output:"""
         }
 
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
+            response = self.dv.get(url, params=params)
             messages = response.json().get("value", [])
             return [m.get("cr_name", "")[:120] for m in messages if m.get("cr_name")]
         except Exception as e:
@@ -1695,10 +1609,6 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
         This handles the case where the Worker process crashed or was killed
         mid-task. Without this, orphaned tasks stay in Running forever.
         """
-        headers = self._get_headers()
-        if not headers:
-            return
-
         url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}"
         params = {
             "$filter": (
@@ -1709,8 +1619,7 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
         }
 
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
+            response = self.dv.get(url, params=params)
             orphans = response.json().get("value", [])
         except Exception as e:
             _log(f"[WARN] Could not check for orphaned tasks: {e}")

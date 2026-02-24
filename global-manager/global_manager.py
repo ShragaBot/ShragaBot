@@ -23,7 +23,6 @@ Code is completely unavailable:
 """
 import logging
 from logging.handlers import RotatingFileHandler
-import requests
 import json
 import time
 import os
@@ -33,10 +32,10 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from azure.identity import DefaultAzureCredential
-from azure.core.credentials import AccessToken
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from timeout_utils import call_with_timeout
+from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 
@@ -239,8 +238,11 @@ class GlobalManager:
     def __init__(self, sessions_file: Path | None = None):
         self.manager_id = "global"
         self.credential = get_credential()
-        self._token_cache = None
-        self._token_expires = None
+        self.dv = DataverseClient(
+            credential=self.credential,
+            dataverse_url=DATAVERSE_URL,
+            log_fn=_log,
+        )
         self._known_users: set[str] = set()
         self.session_manager = SessionManager(sessions_file=sessions_file)
         # System prompt file path (passed via --system-prompt-file)
@@ -251,80 +253,31 @@ class GlobalManager:
         else:
             _log(f"[WARN] No system prompt found at {prompt_file}")
 
-    # ── Auth ──────────────────────────────────────────────────────────
-
-    def get_token(self) -> str | None:
-        try:
-            if self._token_cache and self._token_expires:
-                if datetime.now(timezone.utc) < self._token_expires:
-                    return self._token_cache
-            try:
-                token: AccessToken = call_with_timeout(
-                    lambda: self.credential.get_token(f"{DATAVERSE_URL}/.default"),
-                    timeout_sec=30,
-                    description="credential.get_token()"
-                )
-            except TimeoutError:
-                _log("[FATAL] get_token() timed out after 30s -- Azure credential hung. Exiting.")
-                sys.exit(1)
-            self._token_cache = token.token
-            self._token_expires = (
-                datetime.fromtimestamp(token.expires_on, tz=timezone.utc)
-                - timedelta(minutes=5)
-            )
-            return self._token_cache
-        except Exception as e:
-            _log(f"[ERROR] Getting token: {e}")
-            return None
-
-    def _headers(self, content_type=None, etag=None):
-        token = self.get_token()
-        if not token:
-            return None
-        h = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0",
-        }
-        if content_type:
-            h["Content-Type"] = content_type
-        if etag:
-            h["If-Match"] = etag
-        return h
-
     # ── User Lookup (for differential claiming delay) ─────────────────
 
     def _is_known_user(self, user_email: str) -> bool:
         """Check if a user exists in the DV users table (for claim delay logic)."""
         if user_email in self._known_users:
             return True
-        headers = self._headers()
-        if not headers:
-            return False
         try:
             url = (
                 f"{DATAVERSE_API}/{USERS_TABLE}"
                 f"?$filter=crb3b_useremail eq '{user_email}'"
                 f"&$top=1&$select=crb3b_shragauserid"
             )
-            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
+            resp = self.dv.get(url, timeout=REQUEST_TIMEOUT)
             rows = resp.json().get("value", [])
             if rows:
                 self._known_users.add(user_email)
                 return True
             return False
-        except Exception:
+        except (DataverseError, DataverseRetryExhausted):
             return False
 
     # ── Conversations ─────────────────────────────────────────────────
 
     def poll_stale_unclaimed(self) -> list[dict]:
         """Poll for unclaimed inbound messages with differential delay."""
-        headers = self._headers()
-        if not headers:
-            return []
         try:
             cutoff = datetime.now(timezone.utc) - timedelta(seconds=CLAIM_DELAY_NEW_USER)
             cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -336,8 +289,7 @@ class GlobalManager:
                 f"&$orderby=createdon asc"
                 f"&$top=10"
             )
-            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
+            resp = self.dv.get(url, timeout=REQUEST_TIMEOUT)
             all_unclaimed = resp.json().get("value", [])
 
             if not all_unclaimed:
@@ -362,10 +314,10 @@ class GlobalManager:
                         claimable.append(msg)
 
             return claimable
-        except requests.exceptions.Timeout:
-            _log("[WARN] poll_stale_unclaimed timed out")
+        except DataverseRetryExhausted as e:
+            _log(f"[WARN] poll_stale_unclaimed: retry exhausted: {e}")
             return []
-        except Exception as e:
+        except DataverseError as e:
             _log(f"[ERROR] poll_stale_unclaimed: {e}")
             return []
 
@@ -374,44 +326,33 @@ class GlobalManager:
         etag = msg.get("@odata.etag")
         if not row_id or not etag:
             return False
-        headers = self._headers(content_type="application/json", etag=etag)
-        if not headers:
-            return False
         try:
             url = f"{DATAVERSE_API}/{CONVERSATIONS_TABLE}({row_id})"
             body = {
                 "cr_status": STATUS_CLAIMED,
                 "cr_claimed_by": f"{self.manager_id}:{INSTANCE_ID}",
             }
-            resp = requests.patch(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
-            if resp.status_code == 412:
-                return False
-            resp.raise_for_status()
+            self.dv.patch(url, data=body, etag=etag, timeout=REQUEST_TIMEOUT)
             return True
-        except Exception as e:
+        except ETagConflictError:
+            return False
+        except (DataverseError, DataverseRetryExhausted) as e:
             _log(f"[ERROR] claim_message: {e}")
             return False
 
     def mark_processed(self, row_id: str):
-        headers = self._headers(content_type="application/json")
-        if not headers:
-            return
         try:
             url = f"{DATAVERSE_API}/{CONVERSATIONS_TABLE}({row_id})"
-            requests.patch(
-                url, headers=headers,
-                json={"cr_status": STATUS_PROCESSED},
+            self.dv.patch(
+                url, data={"cr_status": STATUS_PROCESSED},
                 timeout=REQUEST_TIMEOUT,
             )
             _log(f"[DV] Marked {row_id[:8]} as Processed")
-        except Exception as e:
+        except (DataverseError, DataverseRetryExhausted) as e:
             _log(f"[WARN] mark_processed failed: {e}")
 
     def send_response(self, in_reply_to: str, mcs_conversation_id: str,
                       user_email: str, text: str, followup_expected: bool = False):
-        headers = self._headers(content_type="application/json")
-        if not headers:
-            return None
         try:
             body = {
                 "cr_name": text[:100],
@@ -424,13 +365,12 @@ class GlobalManager:
                 "cr_followup_expected": "true" if followup_expected else "",
             }
             url = f"{DATAVERSE_API}/{CONVERSATIONS_TABLE}"
-            resp = requests.post(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
+            resp = self.dv.post(url, data=body, timeout=REQUEST_TIMEOUT)
             _log(f"[DV] Wrote outbound response to {user_email} (reply_to={in_reply_to[:8]}): \"{text[:60]}...\"")
             if resp.status_code == 204 or not resp.content:
                 return True
             return resp.json()
-        except Exception as e:
+        except (DataverseError, DataverseRetryExhausted) as e:
             _log(f"[ERROR] send_response: {e}")
             return None
 

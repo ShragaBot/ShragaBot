@@ -10,7 +10,6 @@ Responsibilities:
 6. Sync progress between admin and user tasks
 """
 
-import requests
 import subprocess
 import time
 import json
@@ -20,9 +19,8 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 from azure.identity import DefaultAzureCredential
-from azure.core.credentials import AccessToken
 import os
-from timeout_utils import call_with_timeout
+from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
 
 # Import Dev Box manager
 try:
@@ -61,7 +59,6 @@ PROVISION_THRESHOLD = int(os.environ.get("PROVISION_THRESHOLD", "5"))
 GIT_BRANCH = os.environ.get("GIT_BRANCH", "users/sagik/shraga-worker")
 
 # API timeouts (seconds)
-REQUEST_TIMEOUT = 30
 GIT_TIMEOUT = 60
 
 
@@ -69,10 +66,12 @@ class Orchestrator:
     """Main orchestrator for Shraga system"""
 
     def __init__(self):
-        # Azure authentication (uses az login or managed identity)
-        self.credential = DefaultAzureCredential()
-        self._token_cache = None
-        self._token_expires = None
+        # Dataverse client (handles auth, retry, token caching)
+        self.dv = DataverseClient(
+            dataverse_url=DATAVERSE_URL,
+            credential=DefaultAzureCredential(),
+            log_fn=print,
+        )
 
         # Dev Box manager (optional)
         self.devbox_manager = None
@@ -141,29 +140,12 @@ class Orchestrator:
             print(f"[ERROR] Saving state: {e}")
 
     def get_token(self) -> Optional[str]:
-        """Get Dataverse OAuth token using DefaultAzureCredential"""
+        """Get Dataverse OAuth token (thin wrapper around DataverseClient)."""
         try:
-            # Return cached token if still valid
-            if self._token_cache and self._token_expires:
-                if datetime.now(tz=timezone.utc) < self._token_expires:
-                    return self._token_cache
-
-            # Get new token
-            try:
-                token: AccessToken = call_with_timeout(
-                    lambda: self.credential.get_token(f"{DATAVERSE_URL}/.default"),
-                    timeout_sec=30,
-                    description="credential.get_token()"
-                )
-            except TimeoutError:
-                print("[ERROR] get_token() timed out after 30s -- Azure credential hung")
-                return None
-
-            # Cache token (expire 5 minutes early)
-            self._token_cache = token.token
-            self._token_expires = datetime.fromtimestamp(token.expires_on, tz=timezone.utc) - timedelta(minutes=5)
-
-            return self._token_cache
+            return self.dv.get_token()
+        except TimeoutError:
+            print("[ERROR] get_token() timed out after 30s -- Azure credential hung")
+            return None
         except Exception as e:
             print(f"[ERROR] Getting token: {e}")
             print("[HINT] Make sure you've run: az login")
@@ -171,28 +153,17 @@ class Orchestrator:
 
     def get_current_user(self) -> Optional[str]:
         """Get admin user ID"""
-        token = self.get_token()
-        if not token:
-            return None
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0"
-        }
-
         try:
             url = f"{DATAVERSE_URL}/api/data/v9.2/WhoAmI"
-            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response = self.dv.get(url)
             response.raise_for_status()
             user_data = response.json()
             user_id = user_data.get("UserId")
             self.admin_user_id = user_id
             self.save_state()
             return user_id
-        except requests.exceptions.Timeout:
-            print(f"[ERROR] WhoAmI request timed out")
+        except (DataverseError, DataverseRetryExhausted) as e:
+            print(f"[ERROR] Getting current user: {e}")
             return None
         except Exception as e:
             print(f"[ERROR] Getting current user: {e}")
@@ -289,17 +260,6 @@ class Orchestrator:
 
         Query: Pending tasks without mirror, not owned by admin
         """
-        token = self.get_token()
-        if not token:
-            return []
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0"
-        }
-
         try:
             # Query for user tasks that need mirroring
             filter_query = (
@@ -313,14 +273,14 @@ class Orchestrator:
                 filter_query += f" and _ownerid_value ne '{self.admin_user_id}'"
 
             url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}?$filter={filter_query}"
-            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response = self.dv.get(url)
             response.raise_for_status()
 
             data = response.json()
             return data.get("value", [])
 
-        except requests.exceptions.Timeout:
-            print(f"[ERROR] Task discovery timed out")
+        except (DataverseError, DataverseRetryExhausted) as e:
+            print(f"[ERROR] Discovering user tasks: {e}")
             return []
         except Exception as e:
             print(f"[ERROR] Discovering user tasks: {e}")
@@ -333,19 +293,6 @@ class Orchestrator:
         Returns:
             Mirror task ID if successful, None otherwise
         """
-        token = self.get_token()
-        if not token:
-            return None
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0",
-            "Prefer": "return=representation"  # Return created entity
-        }
-
         user_task_id = user_task.get("cr_shraga_taskid")
 
         if not user_task_id:
@@ -374,11 +321,10 @@ class Orchestrator:
 
         try:
             url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}"
-            response = requests.post(
+            response = self.dv.post(
                 url,
-                headers=headers,
-                json=mirror_data,
-                timeout=REQUEST_TIMEOUT
+                mirror_data,
+                extra_headers={"Prefer": "return=representation"},
             )
             response.raise_for_status()
 
@@ -396,13 +342,8 @@ class Orchestrator:
                 print(f"[ERROR] Could not extract mirror task ID")
                 return None
 
-            # Link user task to mirror (with retry)
-            link_success = False
-            for attempt in range(3):
-                if self.update_task(user_task_id, mirror_task_id=mirror_task_id):
-                    link_success = True
-                    break
-                time.sleep(1)  # Wait before retry
+            # Link user task to mirror (dv client handles retry internally)
+            link_success = self.update_task(user_task_id, mirror_task_id=mirror_task_id)
 
             if not link_success:
                 print(f"[WARN] Created mirror {mirror_task_id[:8]} but failed to link user task")
@@ -412,30 +353,18 @@ class Orchestrator:
 
             return mirror_task_id
 
-        except requests.exceptions.Timeout:
-            print(f"[ERROR] Mirror creation timed out")
+        except (DataverseError, DataverseRetryExhausted) as e:
+            print(f"[ERROR] Creating admin mirror: {e}")
             return None
         except Exception as e:
             print(f"[ERROR] Creating admin mirror: {e}")
             return None
 
     def update_task(self, task_id: str, **fields) -> bool:
-        """Update task fields in Dataverse with retry logic"""
+        """Update task fields in Dataverse"""
         if not task_id:
             print(f"[ERROR] update_task called with empty task_id")
             return False
-
-        token = self.get_token()
-        if not token:
-            return False
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0"
-        }
 
         # Map friendly field names to Dataverse names
         dataverse_fields = {
@@ -448,8 +377,7 @@ class Orchestrator:
         data = {}
         for key, value in fields.items():
             dv_field = dataverse_fields.get(key, key)
-            if value is not None:  # Skip None values
-                # Convert status string labels to integer picklist values
+            if value is not None:
                 if dv_field == "cr_status" and isinstance(value, str):
                     data[dv_field] = _STATUS_INT.get(value, value)
                 else:
@@ -460,20 +388,10 @@ class Orchestrator:
             return False
 
         try:
-            url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}({task_id})"
-            response = requests.patch(
-                url,
-                headers=headers,
-                json=data,
-                timeout=REQUEST_TIMEOUT
-            )
-            response.raise_for_status()
+            url = self.dv.row_url(TABLE, task_id)
+            self.dv.patch(url, data)
             return True
-
-        except requests.exceptions.Timeout:
-            print(f"[ERROR] Task update timed out")
-            return False
-        except Exception as e:
+        except (DataverseError, DataverseRetryExhausted) as e:
             print(f"[ERROR] Updating task: {e}")
             return False
 

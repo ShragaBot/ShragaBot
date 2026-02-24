@@ -1,6 +1,6 @@
 """PM thin wrapper: DV I/O + session persistence + stale detection.
 Claude Code handles all task management autonomously via CLAUDE.md."""
-import platform, requests, json, time, os, sys, subprocess, uuid
+import platform, json, time, os, sys, subprocess, uuid
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 from azure.identity import DefaultAzureCredential
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from version_check import get_my_version, should_exit
-from timeout_utils import call_with_timeout
+from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 os.environ.setdefault('DEVBOX_HOSTNAME', platform.node())
@@ -63,7 +63,7 @@ class TaskManager:
         self.manager_id = f"personal:{user_email}"
         self.working_dir = working_dir or WORKING_DIR
         self.credential = DefaultAzureCredential()
-        self._token_cache = self._token_expires = None
+        self.dv = DataverseClient(dataverse_url=DV_URL, credential=self.credential, log_fn=_log)
         self._sessions_path = self._resolve_sessions_path()
         self._sessions: dict[str, str] = self._load_sessions()
         # System prompt file path (passed via --system-prompt-file)
@@ -104,15 +104,12 @@ class TaskManager:
 
     def _get_recent_messages(self, mcs_conversation_id: str, count: int = 10) -> str:
         """Fetch recent messages from DV for this conversation to provide context."""
-        hdr = self._headers()
-        if not hdr: return ""
         try:
-            r = requests.get(
+            r = self.dv.get(
                 f"{DV_API}/{CONV_TBL}?$filter=cr_mcs_conversation_id eq '{mcs_conversation_id}'"
                 f" and cr_status eq '{ST_PROCESSED}'"
                 f"&$orderby=createdon desc&$top={count}",
-                headers=hdr, timeout=REQ_TMO)
-            r.raise_for_status()
+                timeout=REQ_TMO)
             rows = r.json().get("value", [])
             if not rows: return ""
             lines = []
@@ -151,92 +148,51 @@ class TaskManager:
             _log(f"[SESSIONS] Forgot session {sid[:8]}... for {mcs_id[:20]}...")
             self._save_sessions()
 
-    def get_token(self) -> str | None:
-        try:
-            if self._token_cache and self._token_expires and datetime.now(timezone.utc) < self._token_expires:
-                return self._token_cache
-            t = call_with_timeout(
-                lambda: self.credential.get_token(f"{DV_URL}/.default"),
-                timeout_sec=30,
-                description="credential.get_token()"
-            )
-            self._token_cache = t.token
-            self._token_expires = datetime.fromtimestamp(t.expires_on, tz=timezone.utc) - timedelta(minutes=5)
-            return self._token_cache
-        except TimeoutError:
-            _log("[FATAL] get_token() timed out after 30s -- Azure credential hung. Exiting.")
-            _log("[HINT] Run: az login")
-            sys.exit(1)
-        except Exception as e:
-            _log(f"[FATAL] Getting token failed: {e} -- Exiting.")
-            sys.exit(1)
-
-    def _headers(self, content_type=None, etag=None):
-        tok = self.get_token()
-        if not tok: return None
-        h = {"Authorization": f"Bearer {tok}", "Accept": "application/json",
-             "OData-MaxVersion": "4.0", "OData-Version": "4.0"}
-        if content_type: h["Content-Type"] = content_type
-        if etag: h["If-Match"] = etag
-        return h
-
     def poll_unclaimed(self) -> list[dict]:
-        hdr = self._headers()
-        if not hdr: return []
         try:
-            r = requests.get(f"{DV_API}/{CONV_TBL}?$filter=cr_useremail eq '{self.user_email}'"
+            r = self.dv.get(f"{DV_API}/{CONV_TBL}?$filter=cr_useremail eq '{self.user_email}'"
                 f" and cr_direction eq '{DIR_IN}' and cr_status eq '{ST_UNCLAIMED}'"
-                f"&$orderby=createdon asc&$top=10", headers=hdr, timeout=REQ_TMO)
-            r.raise_for_status(); m = r.json().get("value", [])
+                f"&$orderby=createdon asc&$top=10", timeout=REQ_TMO)
+            m = r.json().get("value", [])
             if m: _log(f"[POLL] Found {len(m)} unclaimed message(s) for {self.user_email}")
             return m
-        except requests.exceptions.Timeout: _log("[WARN] poll_unclaimed timed out"); return []
         except Exception as e: _log(f"[ERROR] poll_unclaimed: {e}"); return []
 
     def claim_message(self, msg: dict) -> bool:
         rid, etag = msg.get("cr_shraga_conversationid"), msg.get("@odata.etag")
         if not rid or not etag: _log("[WARN] Cannot claim message -- missing id or etag"); return False
-        hdr = self._headers(content_type="application/json", etag=etag)
-        if not hdr: return False
         try:
-            r = requests.patch(f"{DV_API}/{CONV_TBL}({rid})", headers=hdr, timeout=REQ_TMO,
-                json={"cr_status": ST_CLAIMED, "cr_claimed_by": f"{self.manager_id}:{INSTANCE_ID}"})
-            if r.status_code == 412: _log(f"[INFO] Message {rid} already claimed"); return False
-            r.raise_for_status(); _log(f"[CLAIM] Claimed {rid[:8]} successfully"); return True
-        except requests.exceptions.Timeout: _log(f"[WARN] claim_message timed out"); return False
+            self.dv.patch(f"{DV_API}/{CONV_TBL}({rid})",
+                data={"cr_status": ST_CLAIMED, "cr_claimed_by": f"{self.manager_id}:{INSTANCE_ID}"},
+                etag=etag, timeout=REQ_TMO)
+            _log(f"[CLAIM] Claimed {rid[:8]} successfully"); return True
+        except ETagConflictError: _log(f"[INFO] Message {rid} already claimed"); return False
         except Exception as e: _log(f"[ERROR] claim_message: {e}"); return False
 
     def mark_processed(self, row_id: str):
-        hdr = self._headers(content_type="application/json")
-        if not hdr: return
         try:
-            requests.patch(f"{DV_API}/{CONV_TBL}({row_id})", headers=hdr,
-                json={"cr_status": ST_PROCESSED}, timeout=REQ_TMO)
+            self.dv.patch(f"{DV_API}/{CONV_TBL}({row_id})",
+                data={"cr_status": ST_PROCESSED}, timeout=REQ_TMO)
             _log(f"[DV] Marked {row_id[:8]} as Processed")
         except Exception as e: _log(f"[WARN] mark_processed failed: {e}")
 
     def send_response(self, in_reply_to: str, mcs_conversation_id: str, text: str):
-        hdr = self._headers(content_type="application/json")
-        if not hdr: _log("[ERROR] Cannot send response -- no auth token"); return None
         try:
             body = {"cr_name": text[:100], "cr_useremail": self.user_email,
                     "cr_mcs_conversation_id": mcs_conversation_id, "cr_message": text,
                     "cr_direction": DIR_OUT, "cr_status": ST_UNCLAIMED,
                     "cr_in_reply_to": in_reply_to}
-            r = requests.post(f"{DV_API}/{CONV_TBL}", headers=hdr, json=body, timeout=REQ_TMO)
-            r.raise_for_status()
+            r = self.dv.post(f"{DV_API}/{CONV_TBL}", data=body, timeout=REQ_TMO)
             _log(f'[DV] Wrote outbound response (reply_to={in_reply_to[:8]}): "{text[:60]}..."')
             return {"cr_shraga_conversationid": "created"} if r.status_code == 204 else r.json()
         except Exception as e: _log(f"[ERROR] send_response: {e}"); return None
 
     def _dv_batch_patch(self, table, filter_q, patch_body, label, top=50):
         """Query rows matching filter_q, PATCH each with patch_body. Returns count patched."""
-        hdr = self._headers()
-        if not hdr: return 0
         try:
-            r = requests.get(f"{DV_API}/{table}?$filter={filter_q}&$top={top}",
-                             headers=hdr, timeout=REQ_TMO)
-            r.raise_for_status(); rows = r.json().get("value", [])
+            r = self.dv.get(f"{DV_API}/{table}?$filter={filter_q}&$top={top}",
+                            timeout=REQ_TMO)
+            rows = r.json().get("value", [])
         except Exception as e: _log(f"[{label}] Error querying: {e}"); return 0
         if not rows: return 0
         pk = "cr_shraga_conversationid" if table == CONV_TBL else "cr_shraga_taskid"
@@ -245,10 +201,8 @@ class TaskManager:
             rid = row.get(pk)
             if not rid: continue
             try:
-                ph = self._headers(content_type="application/json")
-                if not ph: continue
-                requests.patch(f"{DV_API}/{table}({rid})", headers=ph,
-                               json=patch_body, timeout=REQ_TMO).raise_for_status()
+                self.dv.patch(f"{DV_API}/{table}({rid})",
+                              data=patch_body, timeout=REQ_TMO)
                 count += 1
                 name = row.get("cr_name", rid[:8])
                 _log(f"[{label}] Patched '{name}' ({rid[:8]}...)")
