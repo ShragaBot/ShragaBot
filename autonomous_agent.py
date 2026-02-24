@@ -392,6 +392,10 @@ Return one of:
                                         print(f"\n[*] Using tool: {tool_name}", flush=True)
                                         _log_to_file(f"Using tool: {tool_name}")
 
+                                        tool_input = item.get('input', {})
+                                        if tool_input:
+                                            _log_to_file(f"  tool_input: {json.dumps(tool_input, default=str)[:2000]}")
+
                                         # Callback for tool usage event - DISABLED (user wants only thoughts)
                                         # if on_event:
                                         #     on_event('tool_use', {
