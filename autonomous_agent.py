@@ -446,6 +446,7 @@ Return one of:
                             elif chunk_type == 'result':
                                 # Final result found!
                                 full_result = chunk
+                                _log_to_file("Result chunk received from CLI stream")
                                 break
 
                             elif chunk_type == 'system':
@@ -457,6 +458,7 @@ Return one of:
 
                 # Check if process finished
                 if process.poll() is not None:
+                    _log_to_file(f"CLI process exited with returncode={process.returncode}")
                     # Read remaining output
                     remaining = process.stdout.read()
                     if remaining:
@@ -467,12 +469,15 @@ Return one of:
                                     chunk = json.loads(line)
                                     if chunk.get('type') == 'result':
                                         full_result = chunk
+                                        _log_to_file("Result chunk found in remaining output")
                                 except json.JSONDecodeError:
                                     pass
+                    if full_result is None:
+                        _log_to_file(f"[WARN] CLI exited without result chunk. stdout_lines={len(stdout_data)}")
                     break
 
             print("\n\n--- AGENT COMPLETED ---\n")
-            _log_to_file("AGENT COMPLETED")
+            _log_to_file(f"AGENT COMPLETED | full_result={'found' if full_result else 'MISSING'} | returncode={process.returncode} | stdout_lines={len(stdout_data)}")
 
             # Ensure the subprocess is fully terminated before reading stderr.
             # Without this, process.stderr.read() can block forever if orphaned
@@ -483,6 +488,7 @@ Return one of:
                 _log_to_file("[WARN] Claude CLI process did not exit within 30s, killing")
                 process.kill()
                 process.wait(timeout=10)
+            _log_to_file(f"Process fully terminated | returncode={process.returncode}")
 
             # Parse final result if not found in stream
             if full_result is None and stdout_data:
