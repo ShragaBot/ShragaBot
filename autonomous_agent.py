@@ -446,7 +446,6 @@ Return one of:
                             elif chunk_type == 'result':
                                 # Final result found!
                                 full_result = chunk
-                                _log_to_file("Result chunk received from CLI stream")
                                 break
 
                             elif chunk_type == 'system':
@@ -458,7 +457,6 @@ Return one of:
 
                 # Check if process finished
                 if process.poll() is not None:
-                    _log_to_file(f"CLI process exited with returncode={process.returncode}")
                     # Read remaining output
                     remaining = process.stdout.read()
                     if remaining:
@@ -469,26 +467,12 @@ Return one of:
                                     chunk = json.loads(line)
                                     if chunk.get('type') == 'result':
                                         full_result = chunk
-                                        _log_to_file("Result chunk found in remaining output")
                                 except json.JSONDecodeError:
                                     pass
-                    if full_result is None:
-                        _log_to_file(f"[WARN] CLI exited without result chunk. stdout_lines={len(stdout_data)}")
                     break
 
             print("\n\n--- AGENT COMPLETED ---\n")
-            _log_to_file(f"AGENT COMPLETED | full_result={'found' if full_result else 'MISSING'} | returncode={process.returncode} | stdout_lines={len(stdout_data)}")
-
-            # Ensure the subprocess is fully terminated before reading stderr.
-            # Without this, process.stderr.read() can block forever if orphaned
-            # child processes (PowerShell, npm, Node.js) still hold the pipe open.
-            try:
-                process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                _log_to_file("[WARN] Claude CLI process did not exit within 30s, killing")
-                process.kill()
-                process.wait(timeout=10)
-            _log_to_file(f"Process fully terminated | returncode={process.returncode}")
+            _log_to_file("AGENT COMPLETED")
 
             # Parse final result if not found in stream
             if full_result is None and stdout_data:
@@ -504,26 +488,16 @@ Return one of:
 
             if full_result is None:
                 # Log diagnostic info before raising
-                stderr = ""
-                try:
-                    stderr = process.stderr.read() if process.stderr else ""
-                except Exception:
-                    pass
+                stderr = process.stderr.read() if process.stderr else ""
                 print(f"[!] Stream parsing failed. Return code: {process.returncode}")
                 print(f"[!] Stderr: {stderr[:1000]}" if stderr else "[!] No stderr output")
                 print(f"[!] Stdout lines collected: {len(stdout_data)}")
                 if stdout_data:
                     print(f"[!] Last stdout line: {stdout_data[-1][:500]}")
-                err_msg = f"Could not parse final result from stream. returncode={process.returncode}, lines={len(stdout_data)}, stderr={stderr[:200]}"
-                _log_to_file(f"[ERROR] {err_msg}")
-                raise Exception(err_msg)
+                raise Exception(f"Could not parse final result from stream. returncode={process.returncode}, lines={len(stdout_data)}, stderr={stderr[:200]}")
 
             if process.returncode != 0:
-                stderr = ""
-                try:
-                    stderr = process.stderr.read() if process.stderr else ""
-                except Exception:
-                    pass
+                stderr = process.stderr.read()
                 if stderr:
                     print(f"[!] Stderr: {stderr}")
 
