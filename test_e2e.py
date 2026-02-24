@@ -61,11 +61,7 @@ def _import_modules(monkeypatch, tmp_path):
 class TestE2EOrchestratorPipeline:
 
     @patch("orchestrator.time.sleep")
-    @patch("orchestrator.requests.patch")
-    @patch("orchestrator.requests.post")
-    @patch("orchestrator.requests.get")
-    def test_discover_mirror_assign(self, mock_get, mock_post, mock_patch, mock_sleep,
-                                     monkeypatch, tmp_path):
+    def test_discover_mirror_assign(self, mock_sleep, monkeypatch, tmp_path):
         """Full orchestrator pipeline: discover -> mirror -> assign"""
         orch_mod, _, _ = _import_modules(monkeypatch, tmp_path)
 
@@ -79,50 +75,46 @@ class TestE2EOrchestratorPipeline:
             "_ownerid_value": "user-aaa-bbb",
         }
 
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        orch = orch_mod.Orchestrator()
+        orch.dv = MagicMock()
+        orch.dv.get.return_value = MagicMock(
             json=lambda: {"value": [user_task]}
         )
-        mock_post.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        orch.dv.post.return_value = MagicMock(
             json=lambda: {"cr_shraga_taskid": "mirror-001"},
             headers={}
         )
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
-
-        orch = orch_mod.Orchestrator()
+        orch.dv.patch.return_value = MagicMock()
         orch.admin_user_id = "admin-xyz"
         orch.shared_workers = ["worker-1", "worker-2"]
 
         orch.process_new_tasks()
 
         # Mirror was created
-        assert mock_post.called
-        post_data = mock_post.call_args[1]["json"]
+        assert orch.dv.post.called
+        # dv.post(url, mirror_data, extra_headers=...) -- data is positional arg [1]
+        post_data = orch.dv.post.call_args[0][1]
         assert post_data["cr_ismirror"] is True
         assert post_data["cr_mirroroftaskid"] == "user-task-001"
 
         # Task was assigned (PATCH for link + PATCH for assignment)
-        assert mock_patch.call_count >= 2
+        assert orch.dv.patch.call_count >= 2
 
     @patch("orchestrator.time.sleep")
-    @patch("orchestrator.requests.get")
-    def test_no_tasks_discovered(self, mock_get, mock_sleep, monkeypatch, tmp_path):
+    def test_no_tasks_discovered(self, mock_sleep, monkeypatch, tmp_path):
         """When no tasks exist, nothing happens"""
         orch_mod, _, _ = _import_modules(monkeypatch, tmp_path)
 
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        orch = orch_mod.Orchestrator()
+        orch.dv = MagicMock()
+        orch.dv.get.return_value = MagicMock(
             json=lambda: {"value": []}
         )
-
-        orch = orch_mod.Orchestrator()
         orch.admin_user_id = "admin-xyz"
         orch.shared_workers = ["worker-1"]
 
         orch.process_new_tasks()
-        # No POST for mirror creation
-        # (we only patched GET, so no POST mock to check - this just verifies no crash)
+        # No POST for mirror creation since no tasks discovered
 
 
 # ===========================================================================
@@ -131,48 +123,42 @@ class TestE2EOrchestratorPipeline:
 
 class TestE2EWorkerLifecycle:
 
-    @patch("integrated_task_worker.requests.get")
-    def test_worker_authenticates_and_polls(self, mock_get, monkeypatch, tmp_path):
+    def test_worker_authenticates_and_polls(self, monkeypatch, tmp_path):
         """Worker authenticates, gets user ID, and polls for tasks"""
         _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
+        worker = worker_mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+
         # WhoAmI response then task poll response
-        mock_get.side_effect = [
-            MagicMock(
-                raise_for_status=MagicMock(),
-                json=lambda: {"UserId": "worker-user-id"}
-            ),
-            MagicMock(
-                raise_for_status=MagicMock(),
-                json=lambda: {"value": []}
-            ),
+        worker.dv.get.side_effect = [
+            MagicMock(json=lambda: {"UserId": "worker-user-id"}),
+            MagicMock(json=lambda: {"value": []}),
         ]
 
-        worker = worker_mod.IntegratedTaskWorker()
         assert worker.get_current_user() == "worker-user-id"
         tasks = worker.poll_pending_tasks()
         assert tasks == []
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_worker_updates_task_status(self, mock_patch, monkeypatch, tmp_path):
+    def test_worker_updates_task_status(self, monkeypatch, tmp_path):
         """Worker can update task status in Dataverse"""
         _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
 
         worker = worker_mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
         result = worker.update_task("task-001", status="Running", status_message="Running")
         assert result is True
 
-        sent_data = mock_patch.call_args[1]["json"]
+        # update_task calls dv.patch(url, data) -- data is positional arg [1]
+        sent_data = worker.dv.patch.call_args[0][1]
         assert sent_data["cr_status"] == 5
 
-    @patch("integrated_task_worker.requests.post")
-    def test_worker_sends_webhook_message(self, mock_post, monkeypatch, tmp_path):
+    def test_worker_sends_webhook_message(self, monkeypatch, tmp_path):
         """Worker can send messages through webhook"""
         _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
 
         worker = worker_mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
         result = worker.send_to_webhook("Task started!")
         assert result is True
 
@@ -262,12 +248,8 @@ class TestE2EVersionChecking:
 class TestE2ETaskProcessing:
 
     @patch("integrated_task_worker.subprocess.run")
-    @patch("integrated_task_worker.requests.get")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.patch")
     @patch("integrated_task_worker.subprocess.Popen")
-    def test_process_task_success(self, mock_popen, mock_patch, mock_post,
-                                   mock_get, mock_run, monkeypatch, tmp_path):
+    def test_process_task_success(self, mock_popen, mock_run, monkeypatch, tmp_path):
         """Worker processes a task successfully end-to-end"""
         _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
@@ -282,16 +264,6 @@ class TestE2ETaskProcessing:
             returncode=0
         )
 
-        # Mock PATCH (task updates + claim) and POST (webhook messages)
-        mock_patch.return_value = MagicMock(status_code=200, raise_for_status=MagicMock())
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
-
-        # Mock GET (is_devbox_busy returns not busy, promote_queued_tasks returns empty)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": []}
-        )
-
         # Mock git operations
         mock_run.side_effect = [
             MagicMock(returncode=0),  # git add
@@ -300,10 +272,12 @@ class TestE2ETaskProcessing:
         ]
 
         worker = worker_mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(json=lambda: {"value": []})
 
         # Mock the execute_with_autonomous_agent to simulate success
         with patch.object(worker, "execute_with_autonomous_agent") as mock_exec:
-            mock_exec.return_value = (True, "Task completed!", "transcript-data", {})
+            mock_exec.return_value = ("completed", "Task completed!", "transcript-data", {})
 
             task = {
                 "cr_shraga_taskid": "task-e2e-001",
@@ -316,11 +290,8 @@ class TestE2ETaskProcessing:
             result = worker.process_task(task)
             assert result is True
 
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.patch")
     @patch("integrated_task_worker.subprocess.Popen")
-    def test_process_task_failure(self, mock_popen, mock_patch, mock_post,
-                                   monkeypatch, tmp_path):
+    def test_process_task_failure(self, mock_popen, monkeypatch, tmp_path):
         """Worker handles task failure"""
         _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
@@ -333,13 +304,12 @@ class TestE2ETaskProcessing:
             communicate=MagicMock(return_value=(json.dumps({"result": json.dumps(parsed)}), "")),
             returncode=0
         )
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
 
         worker = worker_mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
 
         with patch.object(worker, "execute_with_autonomous_agent") as mock_exec:
-            mock_exec.return_value = (False, "Failed: Need API key", "transcript", {})
+            mock_exec.return_value = ("failed", "Failed: Need API key", "transcript", {})
 
             task = {
                 "cr_shraga_taskid": "task-e2e-002",
@@ -448,13 +418,13 @@ class TestE2EGitCommitResults:
 class TestE2EErrorHandling:
 
     def test_orchestrator_handles_no_token(self, monkeypatch, tmp_path):
-        """Orchestrator degrades gracefully without token"""
-        orch_mod, _, mock_cred = _import_modules(monkeypatch, tmp_path)
-        mock_cred.get_token.side_effect = Exception("Auth failed")
+        """Orchestrator degrades gracefully when DV client fails"""
+        from dv_client import DataverseRetryExhausted
+        orch_mod, _, _ = _import_modules(monkeypatch, tmp_path)
 
         orch = orch_mod.Orchestrator()
-        orch._token_cache = None
-        orch._token_expires = None
+        orch.dv = MagicMock()
+        orch.dv.get.side_effect = DataverseRetryExhausted("Auth failed")
 
         # Should return empty list, not crash
         assert orch.discover_user_tasks() == []
@@ -474,22 +444,24 @@ class TestE2EErrorHandling:
             worker.get_token()
         assert exc_info.value.code == 1
 
-    @patch("orchestrator.requests.get")
-    def test_orchestrator_handles_dataverse_error(self, mock_get, monkeypatch, tmp_path):
+    def test_orchestrator_handles_dataverse_error(self, monkeypatch, tmp_path):
         """Orchestrator handles Dataverse API errors"""
+        from dv_client import DataverseError
         orch_mod, _, _ = _import_modules(monkeypatch, tmp_path)
-        mock_get.side_effect = ConnectionError("Connection refused")
 
         orch = orch_mod.Orchestrator()
+        orch.dv = MagicMock()
+        orch.dv.get.side_effect = DataverseError("Connection refused", 500, "")
         assert orch.discover_user_tasks() == []
 
-    @patch("integrated_task_worker.requests.get")
-    def test_worker_handles_poll_error(self, mock_get, monkeypatch, tmp_path):
+    def test_worker_handles_poll_error(self, monkeypatch, tmp_path):
         """Worker handles poll errors gracefully"""
+        from dv_client import DataverseRetryExhausted
         _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
-        mock_get.side_effect = ConnectionError("Connection refused")
 
         worker = worker_mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.side_effect = DataverseRetryExhausted("Connection refused")
         worker.current_user_id = "user-1"
         assert worker.poll_pending_tasks() == []
 
@@ -523,55 +495,40 @@ class TestE2EFullFlow:
             "_ownerid_value": "user-flow-aaa",
         }
 
-        with patch("orchestrator.requests.get") as orch_get, \
-             patch("orchestrator.requests.post") as orch_post, \
-             patch("orchestrator.requests.patch") as orch_patch, \
-             patch("orchestrator.time.sleep"):
-
-            orch_get.return_value = MagicMock(
-                raise_for_status=MagicMock(),
+        with patch("orchestrator.time.sleep"):
+            orch = orch_mod.Orchestrator()
+            orch.dv = MagicMock()
+            orch.dv.get.return_value = MagicMock(
                 json=lambda: {"value": [user_task]}
             )
-            orch_post.return_value = MagicMock(
-                raise_for_status=MagicMock(),
+            orch.dv.post.return_value = MagicMock(
                 json=lambda: {"cr_shraga_taskid": "mirror-flow-001"},
                 headers={}
             )
-            orch_patch.return_value = MagicMock(raise_for_status=MagicMock())
-
-            orch = orch_mod.Orchestrator()
+            orch.dv.patch.return_value = MagicMock()
             orch.admin_user_id = "admin-flow"
             orch.shared_workers = ["worker-flow-1"]
 
             orch.process_new_tasks()
 
             # Verify mirror was created
-            assert orch_post.called
-            mirror_data = orch_post.call_args[1]["json"]
+            assert orch.dv.post.called
+            # dv.post(url, mirror_data, extra_headers=...) -- data is positional arg [1]
+            mirror_data = orch.dv.post.call_args[0][1]
             assert mirror_data["cr_ismirror"] is True
 
         # --- Worker phase ---
-        with patch("integrated_task_worker.requests.patch") as worker_patch, \
-             patch("integrated_task_worker.requests.post") as worker_post, \
-             patch("integrated_task_worker.requests.get") as worker_get, \
-             patch("integrated_task_worker.subprocess.Popen") as worker_popen, \
+        with patch("integrated_task_worker.subprocess.Popen") as worker_popen, \
              patch("integrated_task_worker.subprocess.run") as worker_run:
 
             parsed = {
                 "task_description": "Create a calculator app",
-    
+
                 "success_criteria": "Calculator works"
             }
             worker_popen.return_value = MagicMock(
                 communicate=MagicMock(return_value=(json.dumps({"result": json.dumps(parsed)}), "")),
                 returncode=0
-            )
-            worker_patch.return_value = MagicMock(status_code=200, raise_for_status=MagicMock())
-            worker_post.return_value = MagicMock(raise_for_status=MagicMock())
-            # Mock GET (is_devbox_busy returns not busy, promote_queued_tasks returns empty)
-            worker_get.return_value = MagicMock(
-                raise_for_status=MagicMock(),
-                json=lambda: {"value": []}
             )
             worker_run.side_effect = [
                 MagicMock(returncode=0),
@@ -580,9 +537,11 @@ class TestE2EFullFlow:
             ]
 
             worker = worker_mod.IntegratedTaskWorker()
+            worker.dv = MagicMock()
+            worker.dv.get.return_value = MagicMock(json=lambda: {"value": []})
 
             with patch.object(worker, "execute_with_autonomous_agent") as mock_exec:
-                mock_exec.return_value = (True, "Calculator created!", "transcript", {})
+                mock_exec.return_value = ("completed", "Calculator created!", "transcript", {})
 
                 mirror_task = {
                     "cr_shraga_taskid": "mirror-flow-001",
@@ -596,7 +555,7 @@ class TestE2EFullFlow:
                 assert result is True
 
             # Verify worker updated task status
-            assert worker_patch.called
+            assert worker.dv.patch.called
 
 
 # ===========================================================================
@@ -619,12 +578,8 @@ class TestE2ECancelRunningTask:
     5. The worker object remains functional and can process additional tasks.
     """
 
-    @patch("integrated_task_worker.requests.get")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.patch")
     @patch("integrated_task_worker.subprocess.Popen")
-    def test_e2e_cancel_running_task(self, mock_popen, mock_patch, mock_post,
-                                      mock_get, monkeypatch, tmp_path):
+    def test_e2e_cancel_running_task(self, mock_popen, monkeypatch, tmp_path):
         """
         Full E2E cancellation flow:
         1. Submit task and let it be claimed (Running)
@@ -646,25 +601,9 @@ class TestE2ECancelRunningTask:
             returncode=0
         )
 
-        # --- Mock PATCH (claim_task + status updates) ---
-        mock_patch.return_value = MagicMock(
-            status_code=200,
-            raise_for_status=MagicMock()
-        )
-
-        # --- Mock POST (webhook messages) ---
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
-
-        # --- Mock GET ---
-        # is_devbox_busy returns "not busy" (empty value list)
-        # is_task_canceled will be patched separately on the instance
-        # promote_queued_tasks returns empty list
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": []}
-        )
-
         worker = worker_mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(json=lambda: {"value": []})
 
         # Patch is_task_canceled to return True on first call (simulating
         # the user canceling the task while it's running). This is the
@@ -708,14 +647,15 @@ class TestE2ECancelRunningTask:
                     assert mock_write_files.called
 
                     # 5. Webhook messages were sent (at least one for cancel notification)
-                    assert mock_post.called
-                    webhook_calls = mock_post.call_args_list
+                    assert worker.dv.post.called
+                    post_calls = worker.dv.post.call_args_list
                     # Find the cancellation-related webhook message
-                    webhook_bodies = [
-                        c[1]["json"]["cr_content"]
-                        for c in webhook_calls
-                        if "json" in c[1] and "cr_content" in c[1].get("json", {})
-                    ]
+                    # dv.post(url, data, ...) -- data is positional arg [1]
+                    webhook_bodies = []
+                    for c in post_calls:
+                        data = c[0][1] if len(c[0]) > 1 else c[1].get("data", {})
+                        if isinstance(data, dict) and "cr_content" in data:
+                            webhook_bodies.append(data["cr_content"])
                     cancel_messages = [
                         body for body in webhook_bodies
                         if "cancel" in body.lower() or "Cancel" in body
@@ -726,20 +666,20 @@ class TestE2ECancelRunningTask:
                     )
 
                     # 6. Task status was updated (PATCH was called for claim + status updates)
-                    assert mock_patch.called
-                    patch_calls = mock_patch.call_args_list
-                    # Look for the final status update with STATUS_FAILED
+                    assert worker.dv.patch.called
+                    patch_calls = worker.dv.patch.call_args_list
+                    # Look for the final status update with STATUS_CANCELED (9)
+                    # dv.patch(url, data) -- data is positional arg [1]
                     patch_bodies = [
-                        c[1]["json"]
-                        for c in patch_calls
-                        if "json" in c[1]
+                        c[0][1] for c in patch_calls
+                        if len(c[0]) > 1 and isinstance(c[0][1], dict)
                     ]
-                    failed_updates = [
+                    canceled_updates = [
                         body for body in patch_bodies
-                        if body.get("cr_status") == 8
+                        if body.get("cr_status") == 9
                     ]
-                    assert len(failed_updates) >= 1, (
-                        f"Expected at least one PATCH setting status to 'Failed', "
+                    assert len(canceled_updates) >= 1, (
+                        f"Expected at least one PATCH setting status to 'Canceled', "
                         f"got bodies: {patch_bodies}"
                     )
 
@@ -765,18 +705,13 @@ class TestE2ECancelRunningTask:
         )
 
         # Verify the worker can still make API calls (e.g., update_task)
-        mock_patch.reset_mock()
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
+        worker.dv.patch.reset_mock()
         update_ok = worker.update_task("another-task-id", status="Running", status_message="Test")
         assert update_ok is True
 
-    @patch("integrated_task_worker.requests.get")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.patch")
     @patch("integrated_task_worker.subprocess.Popen")
     def test_e2e_cancel_after_worker_phase_before_verification(
-        self, mock_popen, mock_patch, mock_post, mock_get,
-        monkeypatch, tmp_path
+        self, mock_popen, monkeypatch, tmp_path
     ):
         """
         Cancel detected after worker phase completes but before verification.
@@ -799,16 +734,6 @@ class TestE2ECancelRunningTask:
             returncode=0
         )
 
-        mock_patch.return_value = MagicMock(
-            status_code=200,
-            raise_for_status=MagicMock()
-        )
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": []}
-        )
-
         # --- Mock AgentCLI instance ---
         mock_agent_instance = MagicMock()
         session_folder = tmp_path / "cancel_session_2"
@@ -825,6 +750,8 @@ class TestE2ECancelRunningTask:
         )
 
         worker = worker_mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(json=lambda: {"value": []})
 
         # is_task_canceled: False on first call (before worker phase),
         # True on second call (after worker phase, before verification).
@@ -876,12 +803,9 @@ class TestE2ECancelRunningTask:
             # Worker phase DID run (worker_loop was called)
             assert mock_agent_instance.worker_loop.called
 
-    @patch("integrated_task_worker.requests.get")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.patch")
     @patch("integrated_task_worker.subprocess.Popen")
     def test_e2e_cancel_not_triggered_when_task_runs_normally(
-        self, mock_popen, mock_patch, mock_post, mock_get, monkeypatch, tmp_path
+        self, mock_popen, monkeypatch, tmp_path
     ):
         """
         Verify that when is_task_canceled returns False throughout, the task
@@ -901,17 +825,10 @@ class TestE2ECancelRunningTask:
             )),
             returncode=0
         )
-        mock_patch.return_value = MagicMock(
-            status_code=200,
-            raise_for_status=MagicMock()
-        )
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": []}
-        )
 
         worker = worker_mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(json=lambda: {"value": []})
 
         session_folder = tmp_path / "normal_session"
         session_folder.mkdir()
@@ -924,7 +841,7 @@ class TestE2ECancelRunningTask:
 
             # Mock execute_with_autonomous_agent for simplicity (normal success)
             with patch.object(worker, "execute_with_autonomous_agent") as mock_exec:
-                mock_exec.return_value = (True, "Task done!", "transcript", {})
+                mock_exec.return_value = ("completed", "Task done!", "transcript", {})
 
                 with patch("integrated_task_worker.subprocess.run") as mock_run:
                     mock_run.side_effect = [
@@ -947,10 +864,10 @@ class TestE2ECancelRunningTask:
                     assert result is True
 
                     # Verify the final status is Completed (7), not Failed
+                    # dv.patch(url, data) -- data is positional arg [1]
                     patch_bodies = [
-                        c[1]["json"]
-                        for c in mock_patch.call_args_list
-                        if "json" in c[1]
+                        c[0][1] for c in worker.dv.patch.call_args_list
+                        if len(c[0]) > 1 and isinstance(c[0][1], dict)
                     ]
                     completed_updates = [
                         body for body in patch_bodies
