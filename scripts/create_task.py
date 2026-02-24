@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 
 from dv_helpers import DataverseClient
@@ -141,18 +140,6 @@ def main(argv: list[str] | None = None) -> int:
         "email": args.email,
     }
     print(json.dumps(output, indent=2))
-
-    # Write signal file so the PM wrapper can detect task creation deterministically
-    # (instead of parsing Claude's natural language response)
-    import tempfile
-    signal_dir = os.environ.get("SHRAGA_SIGNAL_DIR", tempfile.gettempdir())
-    signal_file = os.path.join(signal_dir, "shraga_task_created.json")
-    try:
-        with open(signal_file, "w") as f:
-            json.dump({"task_id": task_id, "short_description": short_desc}, f)
-    except OSError:
-        pass  # Non-critical, followup detection falls back to heuristic
-
     return 0
 
 

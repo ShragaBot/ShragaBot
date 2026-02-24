@@ -17,7 +17,7 @@ MESSAGE FORMAT: User messages arrive with a header line:
   Build me a REST API for managing users
 Extract the ID from the first line and pass it as --mcs-id to create_task.py.
 
-RESPONSE FORMAT AFTER TASK CREATION: After creating a task, ALWAYS include "Submitted! ID: <task_id>" in your response. This exact pattern is required for the system to deliver the Adaptive Card link. Example: "Submitted! ID: abc12345 -- Building a REST API for user management. Worker will pick it up shortly."
+AFTER TASK CREATION: Tell the user the task was submitted with its ID and short description. The Adaptive Card link will be delivered separately by the system -- you don't need to handle that.
 
 DISAMBIGUATION:
 - "check my task" without ID -> use list_tasks.py to show recent tasks

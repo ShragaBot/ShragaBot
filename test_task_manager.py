@@ -927,10 +927,14 @@ class TestFullFlow:
         assert entry["session_id"] == "flow-session-123"
 
 
-# -- Follow-up Detection Tests -- T045 ----------------------------------------
+# -- Follow-up Detection Tests -- T045 (REMOVED) ------------------------------
+# followup_expected detection was removed from the PM. Card link delivery is now
+# handled entirely by the TaskRunner Power Automate flow sending directly to the
+# MCS bot chat. The PM just sends its response -- fire and forget.
+# -----------------------------------------------------------------------
 
-class TestFollowupDetection:
-    """Tests for the task_created / followup_expected detection heuristic.
+class _RemovedTestFollowupDetection:
+    """REMOVED: Tests for the old task_created / followup_expected detection heuristic.
 
     When the PM creates a task, Claude responds with "Submitted! ID: <uuid>".
     The PM must detect this and set cr_followup_expected='true' so the MCS topic

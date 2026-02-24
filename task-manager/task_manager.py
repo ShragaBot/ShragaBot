@@ -184,16 +184,14 @@ class TaskManager:
             _log(f"[DV] Marked {row_id[:8]} as Processed")
         except Exception as e: _log(f"[WARN] mark_processed failed: {e}")
 
-    def send_response(self, in_reply_to: str, mcs_conversation_id: str, text: str,
-                      followup_expected: bool = False):
+    def send_response(self, in_reply_to: str, mcs_conversation_id: str, text: str):
         hdr = self._headers(content_type="application/json")
         if not hdr: _log("[ERROR] Cannot send response -- no auth token"); return None
         try:
             body = {"cr_name": text[:100], "cr_useremail": self.user_email,
                     "cr_mcs_conversation_id": mcs_conversation_id, "cr_message": text,
                     "cr_direction": DIR_OUT, "cr_status": ST_UNCLAIMED,
-                    "cr_in_reply_to": in_reply_to,
-                    "cr_followup_expected": "true" if followup_expected else ""}
+                    "cr_in_reply_to": in_reply_to}
             r = requests.post(f"{DV_API}/{CONV_TBL}", headers=hdr, json=body, timeout=REQ_TMO)
             r.raise_for_status()
             _log(f'[DV] Wrote outbound response (reply_to={in_reply_to[:8]}): "{text[:60]}..."')
@@ -337,26 +335,9 @@ class TaskManager:
         except subprocess.TimeoutExpired: _log("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE
         except FileNotFoundError: _log("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE
         except Exception as e: _log(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE
-        # Detect task creation via signal file from create_task.py (deterministic).
-        # Falls back to heuristic if signal file not found.
-        task_created = False
-        signal_file = os.path.join(os.environ.get("SHRAGA_SIGNAL_DIR", os.environ.get("TEMP", "/tmp")), "shraga_task_created.json")
-        try:
-            if os.path.exists(signal_file):
-                os.remove(signal_file)
-                task_created = True
-                _log("[FOLLOWUP] Task creation detected via signal file")
-        except OSError:
-            pass
-        if not task_created:
-            resp_lower = resp.lower()
-            task_created = "submitted" in resp_lower and "id:" in resp_lower
-            if task_created:
-                _log("[FOLLOWUP] Task creation detected via heuristic (fallback)")
-        self.send_response(in_reply_to=rid, mcs_conversation_id=mcs, text=resp,
-                           followup_expected=task_created)
+        self.send_response(in_reply_to=rid, mcs_conversation_id=mcs, text=resp)
         self.mark_processed(rid)
-        _log(f"[MSG] Responded (followup={task_created}): {resp[:80]}...")
+        _log(f"[MSG] Responded: {resp[:80]}...")
 
     def run(self):
         if sys.platform == "win32":
