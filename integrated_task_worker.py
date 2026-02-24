@@ -1583,6 +1583,7 @@ Worker/Verifier loop initiated..."""
             _duration_str = f"{mins}m {secs:02d}s" if mins > 0 else f"{secs}s"
 
         # Update final status based on terminal_status (three-way branch)
+        task_result = False
         if terminal_status == "completed":
             # Commit results to Git for audit trail
             commit_sha = self.commit_task_results(task_id, self.work_base_dir)
@@ -1615,10 +1616,7 @@ Full details saved in Dataverse (Task ID: {task_id}){git_info}"""
             self.send_to_webhook(completion_msg)
 
             _log(f"[TASK] Completed: {task_name}\n")
-            self.current_task_id = None
-            self._current_session_folder = None
-            self._current_transcript = ""
-            return True
+            task_result = True
 
         elif terminal_status == "canceled":
             # Canceled: use STATUS_CANCELED, no "Error:" prefix
@@ -1636,10 +1634,6 @@ Full details saved in Dataverse (Task ID: {task_id}){git_info}"""
             self.send_to_webhook(f"Task canceled: {task_name}")
 
             _log(f"[TASK] Canceled: {task_name}\n")
-            self.current_task_id = None
-            self._current_session_folder = None
-            self._current_transcript = ""
-            return False
 
         else:  # "failed"
             self.update_task(
@@ -1664,10 +1658,71 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
             self.send_to_webhook(failure_msg)
 
             _log(f"[TASK] Failed: {task_name}\n")
-            self.current_task_id = None
-            self._current_session_folder = None
-            self._current_transcript = ""
-            return False
+
+        # Run cleanup agent for ALL terminal states (after all DV updates)
+        session_folder_for_cleanup = self._current_session_folder
+        if session_folder_for_cleanup and isinstance(session_folder_for_cleanup, Path):
+            self.run_cleanup_agent(session_folder_for_cleanup)
+
+        self.current_task_id = None
+        self._current_session_folder = None
+        self._current_transcript = ""
+        return task_result
+
+    def run_cleanup_agent(self, session_folder: Path):
+        """Run a cleanup agent to revert all changes made during a task.
+
+        Uses the Claude CLI to analyze trajectory files in the session folder
+        and revert any changes the task made outside the session folder (git
+        modifications, temp files, pip installs, etc.).
+
+        Args:
+            session_folder: Path to the OneDrive session folder (contains
+                           trajectories/ with per-phase JSONL files).
+        """
+        _log(f"[CLEANUP AGENT] Starting cleanup for {session_folder}")
+
+        trajectories_dir = session_folder / "trajectories"
+        trajectory_listing = ""
+        if trajectories_dir.is_dir():
+            try:
+                files = list(trajectories_dir.glob("*.jsonl"))
+                trajectory_listing = "\n".join(f"  - {f.name}" for f in files)
+            except Exception:
+                trajectory_listing = "(could not list trajectory files)"
+
+        cleanup_prompt = f"""You are a cleanup agent. Your job is to identify and revert ALL changes
+made by a previous task, restoring the dev box to its pre-task state.
+
+SESSION FOLDER (do NOT delete this): {session_folder}
+
+TRAJECTORY FILES (Claude session logs, analyze for what was changed):
+{trajectories_dir}
+{trajectory_listing if trajectory_listing else "(no trajectory files found)"}
+
+INSTRUCTIONS:
+1. Read the trajectory files to understand what the task did
+2. Identify ALL changes made during the task:
+   - Git: uncommitted changes, new branches, modified tracked files
+   - Files: temp files, config changes, new files OUTSIDE the session folder
+   - Packages: pip/npm/etc. packages installed during the task
+   - Environment: env var changes, service modifications
+3. REVERT everything EXCEPT the session folder itself:
+   - Git: reset any uncommitted changes in the work repo, remove untracked files (outside session folder)
+   - Files: remove any temp files created outside session folder
+   - Packages: uninstall any packages that were installed during the task
+4. Do NOT delete or modify anything inside {session_folder}
+5. Be conservative - if unsure whether something was from this task, leave it
+
+Report what you reverted at the end.
+"""
+
+        try:
+            agent = AgentCLI()
+            agent.call_claude(cleanup_prompt, session_folder, timeout=300, stream=False)
+            _log(f"[CLEANUP AGENT] Cleanup completed for {session_folder}")
+        except Exception as e:
+            _log(f"[CLEANUP AGENT] Cleanup failed (non-fatal): {e}")
 
     def run(self):
         """Main worker loop"""
