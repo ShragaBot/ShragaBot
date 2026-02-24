@@ -41,15 +41,12 @@ def _log(msg: str):
 DV_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynamics.com")
 DV_API = f"{DV_URL}/api/data/v9.2"
 CONV_TBL = os.environ.get("CONVERSATIONS_TABLE", "cr_shraga_conversations")
-TASKS_TBL = os.environ.get("TASKS_TABLE", "cr_shraga_tasks")
 USER_EMAIL = os.environ.get("USER_EMAIL")
 POLL_SEC = int(os.environ.get("POLL_INTERVAL", "1"))
 REQ_TMO = 30
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "")
 DIR_IN, DIR_OUT = "Inbound", "Outbound"
 ST_UNCLAIMED, ST_CLAIMED, ST_PROCESSED, ST_EXPIRED = "Unclaimed", "Claimed", "Processed", "Expired"
-TASK_RUNNING, TASK_FAILED = 5, 8  # Integer picklist values for OData filters
-TASK_CANCELED, TASK_CANCELING = 9, 11
 FALLBACK_MESSAGE = "The system is temporarily unavailable, please try again shortly."
 WORKING_DIR = os.environ.get("WORKING_DIR", "")
 SESSIONS_FILE = os.environ.get("SESSIONS_FILE", "")
@@ -217,22 +214,6 @@ class TaskManager:
             f" and cr_status eq '{ST_UNCLAIMED}' and createdon lt {cutoff}",
             {"cr_status": ST_EXPIRED}, "CLEANUP")
 
-    def sweep_stale_tasks(self, stale_minutes: int = 30) -> int:
-        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        count = self._dv_batch_patch(TASKS_TBL,
-            f"crb3b_useremail eq '{self.user_email}' and cr_status eq {TASK_RUNNING}"
-            f" and modifiedon lt {cutoff}",
-            {"cr_status": TASK_FAILED, "cr_result":
-             "Task failed: no progress detected for 30+ minutes (likely worker crash or restart)"},
-            "SWEEP")
-        count += self._dv_batch_patch(TASKS_TBL,
-            f"crb3b_useremail eq '{self.user_email}' and cr_status eq {TASK_CANCELING}"
-            f" and modifiedon lt {cutoff}",
-            {"cr_status": TASK_CANCELED, "cr_result":
-             "Task auto-canceled: stuck in Canceling state for 30+ minutes"},
-            "SWEEP-CANCEL")
-        return count
-
     def _call_claude(self, user_text: str, session_id: str | None = None) -> tuple[str | None, str]:
         cmd = ["claude", "--print", "--output-format", "json", "--dangerously-skip-permissions",
                "--model", CHAT_MODEL or "sonnet", "--effort", "low"]
@@ -333,7 +314,6 @@ class TaskManager:
         self._set_onboarding_completed()
         self.cleanup_stale_outbound()
         last_cleanup = time.time()
-        last_sweep = 0  # Sweep on first iteration, then every 5 minutes
         while True:
             try:
                 for m in self.poll_unclaimed():
@@ -344,7 +324,6 @@ class TaskManager:
                             _log(f"[ERROR] Processing {rid}: {e}")
                             try: self.send_response(rid, m.get("cr_mcs_conversation_id",""), FALLBACK_MESSAGE); self.mark_processed(rid)
                             except Exception: pass
-                if time.time() - last_sweep > 300: self.sweep_stale_tasks(); last_sweep = time.time()
                 if time.time() - last_cleanup > 1800: self.cleanup_stale_outbound(); last_cleanup = time.time()
                 # Check if a new release is available
                 if should_exit(self._my_version):
