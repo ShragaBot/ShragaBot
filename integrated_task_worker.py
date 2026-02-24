@@ -957,6 +957,91 @@ JSON output:"""
         except Exception as e:
             _log(f"[ERROR] Could not write transcript.md: {e}")
 
+    def write_outcome_file(self, results_dir: Path, terminal_status: str,
+                           reason: str, task_id: str,
+                           accumulated_stats: dict, phases: list):
+        """Write outcome.json with terminal state details to results/.
+
+        Args:
+            results_dir: Path to the results/ subdirectory.
+            terminal_status: One of 'completed', 'canceled', 'failed', 'killed'.
+            reason: Human-readable reason/error message.
+            task_id: Dataverse task ID.
+            accumulated_stats: Merged stats from all phases.
+            phases: List of phase dicts.
+        """
+        outcome = {
+            "terminal_status": terminal_status,
+            "reason": reason[:2000] if reason else "",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "task_id": task_id,
+            "cost_usd": round(accumulated_stats.get("total_cost_usd", 0.0), 6),
+            "duration_ms": accumulated_stats.get("total_duration_ms", 0),
+            "phases_completed": len(phases),
+        }
+
+        # On failure/killed: include full error details
+        if terminal_status in ("failed", "killed"):
+            outcome["error_details"] = reason
+
+        try:
+            outcome_file = results_dir / "outcome.json"
+            outcome_file.write_text(json.dumps(outcome, indent=2, default=str), encoding="utf-8")
+            _log(f"[FILES] Wrote outcome.json to {outcome_file}")
+        except Exception as e:
+            _log(f"[ERROR] Could not write outcome.json: {e}")
+
+    def move_files_to_results_dir(self, session_folder: Path, terminal_status: str,
+                                  reason: str, task_id: str,
+                                  accumulated_stats: dict, phases: list):
+        """Create results/ subfolder and move terminal files into it.
+
+        Moves: result.md, transcript.md, session_summary.json, SESSION_LOG.md,
+        GIT_HISTORY.md. Copies SUMMARY.md and VERDICT.json only if they exist
+        (completed tasks only). Writes outcome.json.
+
+        Args:
+            session_folder: Path to the OneDrive session folder.
+            terminal_status: Terminal status string.
+            reason: Result/error text.
+            task_id: Dataverse task ID.
+            accumulated_stats: Merged stats from all phases.
+            phases: List of phase dicts.
+        """
+        results_dir = session_folder / "results"
+        try:
+            results_dir.mkdir(exist_ok=True)
+        except Exception as e:
+            _log(f"[ERROR] Could not create results/ dir: {e}")
+            return
+
+        # Move terminal files
+        files_to_move = [
+            "result.md", "transcript.md", "session_summary.json",
+            "SESSION_LOG.md", "GIT_HISTORY.md",
+        ]
+        for fname in files_to_move:
+            src = session_folder / fname
+            if src.exists():
+                try:
+                    shutil.move(str(src), str(results_dir / fname))
+                except Exception as e:
+                    _log(f"[WARN] Could not move {fname} to results/: {e}")
+
+        # Copy SUMMARY.md and VERDICT.json if they exist (completed tasks only)
+        files_to_copy = ["SUMMARY.md", "VERDICT.json"]
+        for fname in files_to_copy:
+            src = session_folder / fname
+            if src.exists():
+                try:
+                    shutil.copy2(str(src), str(results_dir / fname))
+                except Exception as e:
+                    _log(f"[WARN] Could not copy {fname} to results/: {e}")
+
+        # Write outcome.json
+        self.write_outcome_file(results_dir, terminal_status, reason,
+                                task_id, accumulated_stats, phases)
+
     def write_session_log(self, summary: dict, session_folder: Path,
                           result_text: str = "", folder_url: str = ""):
         """Write a human-readable SESSION_LOG.md to the session folder.
@@ -1246,6 +1331,19 @@ JSON output:"""
                 self.copy_claude_trajectory_files(session_folder, phases)
             except Exception as e:
                 _log(f"[ERROR] Failed to copy trajectory files: {e}")
+
+            # Move terminal files into results/ subfolder and write outcome.json
+            try:
+                self.move_files_to_results_dir(
+                    session_folder=session_folder,
+                    terminal_status=terminal_status,
+                    reason=result_text,
+                    task_id=task_id,
+                    accumulated_stats=accumulated_stats,
+                    phases=phases,
+                )
+            except Exception as e:
+                _log(f"[ERROR] Failed to move files to results/: {e}")
 
         try:
             # Worker/Verifier loop
