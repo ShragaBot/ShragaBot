@@ -287,9 +287,9 @@ class TaskManager:
         txt = msg.get("cr_message", "").strip()
         if not txt: self.mark_processed(rid); return
         _log(f"[MSG] Processing: {txt[:80]}...")
-        # Inject MCS conversation ID so Claude can write it to task rows
+        # Inject IDs so Claude can pass them to create_task.py
         if mcs:
-            txt = f"[MCS_CONVERSATION_ID={mcs}]\n{txt}"
+            txt = f"[MCS_CONVERSATION_ID={mcs}]\n[INBOUND_ROW_ID={rid}]\n{txt}"
 
         session_entry = self._sessions.get(mcs, {}) if mcs else {}
         if isinstance(session_entry, str):
