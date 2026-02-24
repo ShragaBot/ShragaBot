@@ -120,9 +120,9 @@
                         "parameters": {
                           "entityName": "cr_shragamessages",
                           "$filter": "crb3b_taskid eq '@{triggerOutputs()?['body/crb3b_taskid']}'",
-                          "$orderby": "createdon asc",
-                          "$top": 50,
-                          "$select": "cr_content,createdon"
+                          "$orderby": "createdon desc",
+                          "$select": "cr_content,createdon",
+                          "$top": 150
                         },
                         "host": {
                           "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
@@ -382,7 +382,7 @@
       }
     },
     "createdTime": "2026-02-14T13:29:13.0088168Z",
-    "lastModifiedTime": "2026-02-24T10:34:36.0304483Z",
+    "lastModifiedTime": "2026-02-24T11:20:14.5923311Z",
     "flowSuspensionReason": "None",
     "environment": {
       "name": "8660590d-33ac-ecd8-aef3-e4dd0d6071f4",
