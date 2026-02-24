@@ -48,34 +48,36 @@ class TestGetToken:
     def test_get_token_returns_token(self, monkeypatch, tmp_path):
         mod, mock_cred = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get_token.return_value = "fake-token"
         token = worker.get_token()
         assert token == "fake-token"
 
     def test_get_token_caches(self, monkeypatch, tmp_path):
         mod, mock_cred = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get_token.return_value = "fake-token"
         t1 = worker.get_token()
         t2 = worker.get_token()
-        # Should only call get_token once due to caching
-        assert mock_cred.get_token.call_count == 1
+        # get_token delegates to dv.get_token which handles caching
         assert t1 == t2
 
     def test_get_token_refreshes_when_expired(self, monkeypatch, tmp_path):
         mod, mock_cred = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get_token.return_value = "fake-token"
         worker.get_token()
-        # Force expire
-        worker._token_expires = datetime.now(timezone.utc) - timedelta(hours=1)
         worker.get_token()
-        assert mock_cred.get_token.call_count == 2
+        # Both calls delegate to dv.get_token() (which handles caching internally)
+        assert worker.dv.get_token.call_count == 2
 
     def test_get_token_exits_on_error(self, monkeypatch, tmp_path):
         mod, mock_cred = _import_worker(monkeypatch, tmp_path)
-        mock_cred.get_token.side_effect = Exception("Auth failed")
         worker = mod.IntegratedTaskWorker()
-        # Reset cache
-        worker._token_cache = None
-        worker._token_expires = None
+        worker.dv = MagicMock()
+        worker.dv.get_token.side_effect = Exception("Auth failed")
         import pytest
         with pytest.raises(SystemExit) as exc_info:
             worker.get_token()
@@ -128,24 +130,23 @@ class TestVersionManagement:
 
 class TestGetCurrentUser:
 
-    @patch("integrated_task_worker.requests.get")
-    def test_get_current_user_success(self, mock_get, monkeypatch, tmp_path):
+    def test_get_current_user_success(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             status_code=200,
             json=lambda: {"UserId": "user-abc-123", "BusinessUnitId": "bu1"},
-            raise_for_status=MagicMock()
         )
-        worker = mod.IntegratedTaskWorker()
         uid = worker.get_current_user()
         assert uid == "user-abc-123"
         assert worker.current_user_id == "user-abc-123"
 
-    @patch("integrated_task_worker.requests.get")
-    def test_get_current_user_failure(self, mock_get, monkeypatch, tmp_path):
+    def test_get_current_user_failure(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.side_effect = Exception("Network error")
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.side_effect = Exception("Network error")
         uid = worker.get_current_user()
         assert uid is None
 
@@ -209,38 +210,37 @@ class TestAppendToTranscript:
 
 class TestUpdateTask:
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_update_task_success(self, mock_patch, monkeypatch, tmp_path):
+    def test_update_task_success(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
         result = worker.update_task("task-123", status="Running", status_message="Running")
         assert result is True
         # Verify PATCH was called with correct data
-        call_kwargs = mock_patch.call_args
-        sent_data = call_kwargs[1]["json"]
+        call_args = worker.dv.patch.call_args
+        sent_data = call_args[0][1]  # data is positional arg 2
         assert sent_data["cr_status"] == 5
         assert sent_data["cr_statusmessage"] == "Running"
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_update_task_failure(self, mock_patch, monkeypatch, tmp_path):
+    def test_update_task_failure(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.side_effect = Exception("Network error")
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.side_effect = Exception("Network error")
         result = worker.update_task("task-123", status="Running")
         assert result is False
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_update_task_skips_none_values(self, mock_patch, monkeypatch, tmp_path):
+    def test_update_task_skips_none_values(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
         worker.update_task("task-123", status="Completed", status_message=None)
-        sent_data = mock_patch.call_args[1]["json"]
+        call_args = worker.dv.patch.call_args
+        sent_data = call_args[0][1]  # data is positional arg 2
         assert "cr_status" in sent_data
         # status_message is None so should not be in payload
-        # Actually the code does include None values only if they're not None
-        # Let's check the code logic: if status_message is not None: data["..."] = ...
         assert "cr_statusmessage" not in sent_data
 
 
@@ -250,84 +250,82 @@ class TestUpdateTask:
 
 class TestSendToWebhook:
 
-    @patch("integrated_task_worker.requests.post")
-    def test_send_success(self, mock_post, monkeypatch, tmp_path):
+    def test_send_success(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.post.return_value = MagicMock()
         result = worker.send_to_webhook("Test message")
         assert result is True
 
-    @patch("integrated_task_worker.requests.post")
-    def test_send_truncates_title(self, mock_post, monkeypatch, tmp_path):
+    def test_send_truncates_title(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.post.return_value = MagicMock()
         long_msg = "A" * 500
         worker.send_to_webhook(long_msg)
-        sent_data = mock_post.call_args[1]["json"]
+        call_args = worker.dv.post.call_args
+        sent_data = call_args[0][1]  # data is positional arg 2
         assert len(sent_data["cr_name"]) <= 450
 
-    @patch("integrated_task_worker.requests.post")
-    def test_send_includes_task_id_when_set(self, mock_post, monkeypatch, tmp_path):
+    def test_send_includes_task_id_when_set(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.post.return_value = MagicMock()
         worker.current_task_id = "task-abc-123"
         worker.send_to_webhook("Test message")
-        sent_data = mock_post.call_args[1]["json"]
+        call_args = worker.dv.post.call_args
+        sent_data = call_args[0][1]  # data is positional arg 2
         assert sent_data["crb3b_taskid"] == "task-abc-123"
 
-    @patch("integrated_task_worker.requests.post")
-    def test_send_omits_task_id_when_none(self, mock_post, monkeypatch, tmp_path):
+    def test_send_omits_task_id_when_none(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.post.return_value = MagicMock()
         worker.current_task_id = None
         worker.send_to_webhook("Test message")
-        sent_data = mock_post.call_args[1]["json"]
+        call_args = worker.dv.post.call_args
+        sent_data = call_args[0][1]  # data is positional arg 2
         assert "crb3b_taskid" not in sent_data
 
-    @patch("integrated_task_worker.requests.post")
-    def test_send_retries_with_truncation_on_400_large_message(self, mock_post, monkeypatch, tmp_path):
+    def test_send_retries_with_truncation_on_400_large_message(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        import requests as req_lib
-        # First call fails with 400, second succeeds
-        error_response = MagicMock()
-        error_response.status_code = 400
-        error_response.text = "Request too large"
-        first_error = req_lib.exceptions.HTTPError(response=error_response)
-        mock_post.side_effect = [first_error, MagicMock(raise_for_status=MagicMock())]
-
+        from dv_client import DataverseError
+        # First call fails with DataverseError(400), second succeeds
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.post.side_effect = [
+            DataverseError("400 Bad Request", status_code=400, response_text="Request too large"),
+            MagicMock(),
+        ]
+
         large_msg = "X" * 20000
         result = worker.send_to_webhook(large_msg)
         assert result is True
-        assert mock_post.call_count == 2
+        assert worker.dv.post.call_count == 2
         # Second call should have truncated content
-        retry_data = mock_post.call_args_list[1][1]["json"]
+        retry_data = worker.dv.post.call_args_list[1][0][1]  # data positional arg 2
         assert len(retry_data["cr_content"]) < 20000
 
-    @patch("integrated_task_worker.requests.post")
-    def test_send_no_retry_on_400_small_message(self, mock_post, monkeypatch, tmp_path):
+    def test_send_no_retry_on_400_small_message(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        import requests as req_lib
-        error_response = MagicMock()
-        error_response.status_code = 400
-        error_response.text = "Bad request"
-        first_error = req_lib.exceptions.HTTPError(response=error_response)
-        mock_post.side_effect = first_error
-
+        from dv_client import DataverseError
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.post.side_effect = DataverseError("400 Bad Request", status_code=400, response_text="Bad request")
+
         result = worker.send_to_webhook("Short message")
         assert result is False
-        assert mock_post.call_count == 1
+        assert worker.dv.post.call_count == 1
 
-    @patch("integrated_task_worker.requests.post")
-    def test_send_returns_false_on_non_http_error(self, mock_post, monkeypatch, tmp_path):
+    def test_send_returns_false_on_non_http_error(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_post.side_effect = ConnectionError("Network unreachable")
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.post.side_effect = ConnectionError("Network unreachable")
         result = worker.send_to_webhook("Test message")
         assert result is False
 
@@ -427,116 +425,79 @@ class TestCommitTaskResults:
 
 class TestPollPendingTasks:
 
-    @patch("integrated_task_worker.requests.get")
-    def test_poll_returns_tasks(self, mock_get, monkeypatch, tmp_path):
+    def test_poll_returns_tasks(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": [{"cr_name": "Task1"}]}
         )
-        worker = mod.IntegratedTaskWorker()
         worker.current_user_id = "user-123"
         tasks = worker.poll_pending_tasks()
         assert len(tasks) == 1
         assert tasks[0]["cr_name"] == "Task1"
 
-    @patch("integrated_task_worker.requests.get")
-    def test_poll_filter_uses_webhook_user(self, mock_get, monkeypatch, tmp_path):
+    def test_poll_filter_uses_webhook_user(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": []}
         )
-        worker = mod.IntegratedTaskWorker()
         worker.current_user_id = "user-123"
         worker.poll_pending_tasks()
         # Verify the filter uses WEBHOOK_USER env var (testuser@example.com), not a hardcoded email
-        call_kwargs = mock_get.call_args
+        call_kwargs = worker.dv.get.call_args
         filter_param = call_kwargs[1]["params"]["$filter"]
         assert "testuser@example.com" in filter_param
         assert "sagik@microsoft.com" not in filter_param
 
-    @patch("integrated_task_worker.requests.get")
-    def test_poll_filter_includes_devbox_filter(self, mock_get, monkeypatch, tmp_path):
+    def test_poll_filter_includes_devbox_filter(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": []}
         )
-        worker = mod.IntegratedTaskWorker()
         worker.current_user_id = "user-123"
         worker.poll_pending_tasks()
         # V2: filter uses only crb3b_devbox eq null (no hostname match)
-        call_kwargs = mock_get.call_args
+        call_kwargs = worker.dv.get.call_args
         filter_param = call_kwargs[1]["params"]["$filter"]
         assert "crb3b_devbox eq null" in filter_param
         # Should NOT contain a hostname match
         assert f"crb3b_devbox eq '{mod.MACHINE_NAME}'" not in filter_param
 
-    @patch("integrated_task_worker.requests.get")
-    def test_poll_returns_empty_on_error(self, mock_get, monkeypatch, tmp_path):
+    def test_poll_returns_empty_on_error(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.side_effect = Exception("Network error")
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.side_effect = Exception("Network error")
         worker.current_user_id = "user-123"
         tasks = worker.poll_pending_tasks()
         assert tasks == []
 
-    @patch("integrated_task_worker.requests.get")
-    def test_poll_calls_get_current_user_if_none(self, mock_get, monkeypatch, tmp_path):
+    def test_poll_calls_get_current_user_if_none(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
         # First call for WhoAmI, second for task poll
-        mock_get.side_effect = [
+        worker.dv.get.side_effect = [
             MagicMock(
-                raise_for_status=MagicMock(),
                 json=lambda: {"UserId": "user-abc"}
             ),
             MagicMock(
-                raise_for_status=MagicMock(),
                 json=lambda: {"value": []}
             ),
         ]
-        worker = mod.IntegratedTaskWorker()
         worker.current_user_id = None
         tasks = worker.poll_pending_tasks()
         assert worker.current_user_id == "user-abc"
 
 
 # ===========================================================================
-# _get_headers
+# _get_headers (REMOVED -- header building now in DataverseClient)
 # ===========================================================================
-
-class TestGetHeaders:
-
-    def test_returns_headers_with_token(self, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        worker = mod.IntegratedTaskWorker()
-        headers = worker._get_headers()
-        assert headers["Authorization"] == "Bearer fake-token"
-        assert headers["OData-Version"] == "4.0"
-        assert "Content-Type" not in headers
-
-    def test_includes_content_type_when_specified(self, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        worker = mod.IntegratedTaskWorker()
-        headers = worker._get_headers(content_type="application/json")
-        assert headers["Content-Type"] == "application/json"
-
-    def test_includes_if_match_when_etag_specified(self, monkeypatch, tmp_path):
-        mod, _ = _import_worker(monkeypatch, tmp_path)
-        worker = mod.IntegratedTaskWorker()
-        headers = worker._get_headers(etag='W/"12345"')
-        assert headers["If-Match"] == 'W/"12345"'
-
-    def test_exits_when_no_token(self, monkeypatch, tmp_path):
-        mod, mock_cred = _import_worker(monkeypatch, tmp_path)
-        mock_cred.get_token.side_effect = Exception("Auth failed")
-        worker = mod.IntegratedTaskWorker()
-        worker._token_cache = None
-        worker._token_expires = None
-        import pytest
-        with pytest.raises(SystemExit):
-            worker._get_headers()
 
 
 # ===========================================================================
@@ -545,16 +506,16 @@ class TestGetHeaders:
 
 class TestCleanupInProgressTask:
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_marks_running_task_as_failed(self, mock_patch, monkeypatch, tmp_path):
+    def test_marks_running_task_as_failed(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
         worker.current_task_id = "task-running-123"
         worker._cleanup_in_progress_task("Worker interrupted")
-        # Should have called update_task with FAILED status
-        call_kwargs = mock_patch.call_args
-        sent_data = call_kwargs[1]["json"]
+        # Should have called update_task which calls dv.patch with FAILED status
+        call_args = worker.dv.patch.call_args
+        sent_data = call_args[0][1]  # data is positional arg 2
         assert sent_data["cr_status"] == 8  # Failed (integer picklist)
         assert "Worker interrupted" in sent_data["cr_statusmessage"]
         # Should clear task ID after cleanup
@@ -590,31 +551,31 @@ class TestVersionCheckModule:
 
 class TestTimeoutHandling:
 
-    @patch("integrated_task_worker.requests.get")
-    def test_get_current_user_timeout(self, mock_get, monkeypatch, tmp_path):
+    def test_get_current_user_timeout(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        import requests as req_lib
-        mock_get.side_effect = req_lib.exceptions.Timeout("Connection timed out")
+        from dv_client import DataverseRetryExhausted
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.side_effect = DataverseRetryExhausted("Connection timed out")
         result = worker.get_current_user()
         assert result is None
 
-    @patch("integrated_task_worker.requests.get")
-    def test_poll_pending_tasks_timeout(self, mock_get, monkeypatch, tmp_path):
+    def test_poll_pending_tasks_timeout(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        import requests as req_lib
-        mock_get.side_effect = req_lib.exceptions.Timeout("Connection timed out")
+        from dv_client import DataverseRetryExhausted
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.side_effect = DataverseRetryExhausted("Connection timed out")
         worker.current_user_id = "user-123"
         tasks = worker.poll_pending_tasks()
         assert tasks == []
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_update_task_timeout(self, mock_patch, monkeypatch, tmp_path):
+    def test_update_task_timeout(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        import requests as req_lib
-        mock_patch.side_effect = req_lib.exceptions.Timeout("Connection timed out")
+        from dv_client import DataverseRetryExhausted
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.side_effect = DataverseRetryExhausted("Connection timed out")
         result = worker.update_task("task-123", status="Running")
         assert result is False
 
@@ -631,43 +592,51 @@ class TestTimeoutHandling:
 
 class TestUpdateTaskSessionSummary:
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_update_task_includes_session_summary(self, mock_patch, monkeypatch, tmp_path):
+    def test_update_task_includes_session_summary(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
         result = worker.update_task("task-123", status="Completed", session_summary='{"test": true}')
         assert result is True
-        sent_data = mock_patch.call_args[1]["json"]
+        call_args = worker.dv.patch.call_args
+        sent_data = call_args[0][1]  # data is positional arg 2
         assert sent_data["crb3b_sessionsummary"] == '{"test": true}'
         assert sent_data["cr_status"] == 7
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_update_task_omits_session_summary_when_none(self, mock_patch, monkeypatch, tmp_path):
+    def test_update_task_omits_session_summary_when_none(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
         worker.update_task("task-123", status="Completed", session_summary=None)
-        sent_data = mock_patch.call_args[1]["json"]
+        call_args = worker.dv.patch.call_args
+        sent_data = call_args[0][1]  # data is positional arg 2
         assert "crb3b_sessionsummary" not in sent_data
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_update_task_retries_without_summary_on_column_error(self, mock_patch, monkeypatch, tmp_path):
+    def test_update_task_retries_without_summary_on_column_error(self, monkeypatch, tmp_path):
         """If crb3b_sessionsummary column doesn't exist, retry without it."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        import requests as req_lib
-
-        # First call fails with "property crb3b_sessionsummary doesn't exist"
-        first_call_error = Exception("The property 'crb3b_sessionsummary' does not exist")
-        # Second call succeeds
-        mock_patch.side_effect = [first_call_error, MagicMock(raise_for_status=MagicMock())]
+        from dv_client import DataverseError
 
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        # First call fails with DataverseError about missing property
+        # Second call succeeds
+        worker.dv.patch.side_effect = [
+            DataverseError(
+                "The property 'crb3b_sessionsummary' does not exist",
+                status_code=400,
+                response_text="The property 'crb3b_sessionsummary' does not exist"
+            ),
+            MagicMock(),
+        ]
+
         result = worker.update_task("task-123", status="Completed", session_summary='{"test": true}')
         assert result is True
-        assert mock_patch.call_count == 2
+        assert worker.dv.patch.call_count == 2
         # Second call should not have crb3b_sessionsummary
-        retry_data = mock_patch.call_args_list[1][1]["json"]
+        retry_data = worker.dv.patch.call_args_list[1][0][1]  # data positional arg 2
         assert "crb3b_sessionsummary" not in retry_data
         assert retry_data["cr_status"] == 7
 
@@ -678,19 +647,17 @@ class TestUpdateTaskSessionSummary:
 
 class TestBuildSessionSummary:
 
-    @patch("integrated_task_worker.requests.get")
-    def test_build_summary_basic_structure(self, mock_get, monkeypatch, tmp_path):
+    def test_build_summary_basic_structure(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        # Mock fetch_task_activities
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        # Mock fetch_task_activities via dv.get
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": [
                 {"cr_name": "Started task"},
                 {"cr_name": "Read files"},
             ]}
         )
-
-        worker = mod.IntegratedTaskWorker()
         session_folder = tmp_path / "test_session"
         session_folder.mkdir()
 
@@ -736,15 +703,13 @@ class TestBuildSessionSummary:
         assert "Started task" in summary["activities"]
         assert "Read files" in summary["activities"]
 
-    @patch("integrated_task_worker.requests.get")
-    def test_build_summary_handles_empty_stats(self, mock_get, monkeypatch, tmp_path):
+    def test_build_summary_handles_empty_stats(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": []}
         )
-
-        worker = mod.IntegratedTaskWorker()
         session_folder = tmp_path / "empty_session"
         session_folder.mkdir()
 
@@ -764,16 +729,14 @@ class TestBuildSessionSummary:
         assert summary["activities"] == []
         assert summary["num_sub_agents"] == 0
 
-    @patch("integrated_task_worker.requests.get")
-    def test_build_summary_sub_agents_count(self, mock_get, monkeypatch, tmp_path):
+    def test_build_summary_sub_agents_count(self, monkeypatch, tmp_path):
         """num_sub_agents = len(model_usage) - 1 (main model excluded)"""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": []}
         )
-
-        worker = mod.IntegratedTaskWorker()
         session_folder = tmp_path / "multi_model_session"
         session_folder.mkdir()
 
@@ -803,17 +766,14 @@ class TestBuildSessionSummary:
 
 class TestWriteSessionSummary:
 
-    @patch("integrated_task_worker.requests.get")
-    @patch("integrated_task_worker.requests.patch")
-    def test_writes_json_file_to_session_folder(self, mock_patch, mock_get, monkeypatch, tmp_path):
+    def test_writes_json_file_to_session_folder(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": []}
         )
-
-        worker = mod.IntegratedTaskWorker()
         session_folder = tmp_path / "summary_test_session"
         session_folder.mkdir()
 
@@ -842,21 +802,18 @@ class TestWriteSessionSummary:
         assert content["total_cost_usd"] == 0.05
 
         # Verify DV update was attempted
-        assert mock_patch.called
-        patch_data = mock_patch.call_args[1]["json"]
+        assert worker.dv.patch.called
+        patch_data = worker.dv.patch.call_args[0][1]  # data positional arg 2
         assert "crb3b_sessionsummary" in patch_data
 
-    @patch("integrated_task_worker.requests.get")
-    @patch("integrated_task_worker.requests.patch")
-    def test_write_summary_returns_dict(self, mock_patch, mock_get, monkeypatch, tmp_path):
+    def test_write_summary_returns_dict(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": []}
         )
-
-        worker = mod.IntegratedTaskWorker()
         session_folder = tmp_path / "return_test"
         session_folder.mkdir()
 
@@ -872,18 +829,15 @@ class TestWriteSessionSummary:
         assert isinstance(result, dict)
         assert result["terminal_status"] == "failed"
 
-    @patch("integrated_task_worker.requests.get")
-    @patch("integrated_task_worker.requests.patch")
-    def test_write_summary_graceful_on_file_write_failure(self, mock_patch, mock_get, monkeypatch, tmp_path):
+    def test_write_summary_graceful_on_file_write_failure(self, monkeypatch, tmp_path):
         """If session folder doesn't exist, file write fails gracefully."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": []}
         )
-
-        worker = mod.IntegratedTaskWorker()
         # Use a non-existent folder path
         bad_folder = tmp_path / "nonexistent" / "deep" / "path"
 
@@ -1299,55 +1253,52 @@ class TestWriteResultAndTranscriptFiles:
 
 class TestFetchTaskActivities:
 
-    @patch("integrated_task_worker.requests.get")
-    def test_fetch_activities_success(self, mock_get, monkeypatch, tmp_path):
+    def test_fetch_activities_success(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": [
                 {"cr_name": "Started task", "createdon": "2026-01-01T00:00:00Z"},
                 {"cr_name": "Read files", "createdon": "2026-01-01T00:01:00Z"},
                 {"cr_name": "Wrote code", "createdon": "2026-01-01T00:02:00Z"},
             ]}
         )
-        worker = mod.IntegratedTaskWorker()
         activities = worker.fetch_task_activities("task-001")
         assert len(activities) == 3
         assert activities[0] == "Started task"
         assert activities[2] == "Wrote code"
 
-    @patch("integrated_task_worker.requests.get")
-    def test_fetch_activities_truncates_long_names(self, mock_get, monkeypatch, tmp_path):
+    def test_fetch_activities_truncates_long_names(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
         long_name = "A" * 200
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": [{"cr_name": long_name}]}
         )
-        worker = mod.IntegratedTaskWorker()
         activities = worker.fetch_task_activities("task-001")
         assert len(activities[0]) == 120
 
-    @patch("integrated_task_worker.requests.get")
-    def test_fetch_activities_returns_empty_on_error(self, mock_get, monkeypatch, tmp_path):
+    def test_fetch_activities_returns_empty_on_error(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.side_effect = Exception("Network error")
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.side_effect = Exception("Network error")
         activities = worker.fetch_task_activities("task-001")
         assert activities == []
 
-    @patch("integrated_task_worker.requests.get")
-    def test_fetch_activities_skips_empty_names(self, mock_get, monkeypatch, tmp_path):
+    def test_fetch_activities_skips_empty_names(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": [
                 {"cr_name": "Valid"},
                 {"cr_name": ""},
                 {"cr_name": None},
             ]}
         )
-        worker = mod.IntegratedTaskWorker()
         activities = worker.fetch_task_activities("task-001")
         assert len(activities) == 1
         assert activities[0] == "Valid"
@@ -1394,33 +1345,31 @@ class TestV2StatusConstants:
 
 class TestClaimTask:
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_claim_task_success(self, mock_patch, monkeypatch, tmp_path):
+    def test_claim_task_success(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(
-            status_code=200,
-            raise_for_status=MagicMock()
-        )
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
         task = {
             "cr_shraga_taskid": "task-claim-001",
             "@odata.etag": 'W/"67890"',
         }
         result = worker.claim_task(task)
         assert result is True
-        # Verify If-Match header was sent
-        call_headers = mock_patch.call_args[1]["headers"]
-        assert call_headers["If-Match"] == 'W/"67890"'
+        # Verify etag was passed as keyword arg
+        call_kwargs = worker.dv.patch.call_args
+        assert call_kwargs[1]["etag"] == 'W/"67890"'
         # Verify body sets status to Running
-        call_body = mock_patch.call_args[1]["json"]
+        call_body = call_kwargs[0][1]  # data is positional arg 2
         assert call_body["cr_status"] == mod._STATUS_INT[mod.STATUS_RUNNING]
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_claim_task_conflict_412(self, mock_patch, monkeypatch, tmp_path):
-        """HTTP 412 means another worker claimed it first."""
+    def test_claim_task_conflict_412(self, monkeypatch, tmp_path):
+        """ETagConflictError means another worker claimed it first."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(status_code=412)
+        from dv_client import ETagConflictError
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.side_effect = ETagConflictError("412 Precondition Failed")
         task = {
             "cr_shraga_taskid": "task-claim-002",
             "@odata.etag": 'W/"99999"',
@@ -1442,12 +1391,12 @@ class TestClaimTask:
         result = worker.claim_task(task)
         assert result is False
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_claim_task_timeout(self, mock_patch, monkeypatch, tmp_path):
+    def test_claim_task_timeout(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        import requests as req_lib
-        mock_patch.side_effect = req_lib.exceptions.Timeout("timed out")
+        from dv_client import DataverseRetryExhausted
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.side_effect = DataverseRetryExhausted("timed out")
         task = {
             "cr_shraga_taskid": "task-timeout",
             "@odata.etag": 'W/"11111"',
@@ -1455,11 +1404,11 @@ class TestClaimTask:
         result = worker.claim_task(task)
         assert result is False
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_claim_task_network_error(self, mock_patch, monkeypatch, tmp_path):
+    def test_claim_task_network_error(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.side_effect = Exception("Network error")
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.side_effect = Exception("Network error")
         task = {
             "cr_shraga_taskid": "task-net-err",
             "@odata.etag": 'W/"22222"',
@@ -1474,22 +1423,19 @@ class TestClaimTask:
 
 class TestClaimTaskDevbox:
 
-    @patch("integrated_task_worker.requests.patch")
-    def test_claim_task_includes_devbox_in_body(self, mock_patch, monkeypatch, tmp_path):
+    def test_claim_task_includes_devbox_in_body(self, monkeypatch, tmp_path):
         """claim_task() PATCH body must include crb3b_devbox = MACHINE_NAME."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(
-            status_code=200,
-            raise_for_status=MagicMock()
-        )
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
         task = {
             "cr_shraga_taskid": "task-devbox-001",
             "@odata.etag": 'W/"77777"',
         }
         result = worker.claim_task(task)
         assert result is True
-        call_body = mock_patch.call_args[1]["json"]
+        call_body = worker.dv.patch.call_args[0][1]  # data positional arg 2
         assert call_body["crb3b_devbox"] == mod.MACHINE_NAME
 
 
@@ -1499,18 +1445,17 @@ class TestClaimTaskDevbox:
 
 class TestPollFilterDevboxNull:
 
-    @patch("integrated_task_worker.requests.get")
-    def test_poll_filter_uses_devbox_null_only(self, mock_get, monkeypatch, tmp_path):
+    def test_poll_filter_uses_devbox_null_only(self, monkeypatch, tmp_path):
         """poll_pending_tasks filter should use 'crb3b_devbox eq null' without hostname match."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             json=lambda: {"value": []}
         )
-        worker = mod.IntegratedTaskWorker()
         worker.current_user_id = "user-123"
         worker.poll_pending_tasks()
-        call_kwargs = mock_get.call_args
+        call_kwargs = worker.dv.get.call_args
         filter_param = call_kwargs[1]["params"]["$filter"]
         assert "crb3b_devbox eq null" in filter_param
         # The filter should NOT contain a hostname match (only null)
@@ -1523,39 +1468,39 @@ class TestPollFilterDevboxNull:
 
 class TestIsTaskCanceledV2:
 
-    @patch("integrated_task_worker.requests.get")
-    def test_is_task_canceled_true_for_canceling(self, mock_get, monkeypatch, tmp_path):
+    def test_is_task_canceled_true_for_canceling(self, monkeypatch, tmp_path):
         """is_task_canceled returns True when status is Canceling (11)."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             status_code=200,
             json=lambda: {"cr_status": mod._STATUS_INT[mod.STATUS_CANCELING]},
         )
-        worker = mod.IntegratedTaskWorker()
         result = worker.is_task_canceled("task-canceling-001")
         assert result is True
 
-    @patch("integrated_task_worker.requests.get")
-    def test_is_task_canceled_true_for_canceled(self, mock_get, monkeypatch, tmp_path):
+    def test_is_task_canceled_true_for_canceled(self, monkeypatch, tmp_path):
         """is_task_canceled returns True when status is Canceled (9)."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             status_code=200,
             json=lambda: {"cr_status": mod._STATUS_INT[mod.STATUS_CANCELED]},
         )
-        worker = mod.IntegratedTaskWorker()
         result = worker.is_task_canceled("task-canceled-001")
         assert result is True
 
-    @patch("integrated_task_worker.requests.get")
-    def test_is_task_canceled_true_for_string_canceling(self, mock_get, monkeypatch, tmp_path):
+    def test_is_task_canceled_true_for_string_canceling(self, monkeypatch, tmp_path):
         """is_task_canceled returns True for the string label 'Canceling'."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             status_code=200,
             json=lambda: {"cr_status": mod.STATUS_CANCELING},
         )
-        worker = mod.IntegratedTaskWorker()
         result = worker.is_task_canceled("task-str-canceling-001")
         assert result is True
 
@@ -1573,12 +1518,11 @@ class TestWorkerRunLoopResilience:
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
         worker.current_user_id = "user-test-run"
+        worker.dv = MagicMock()
         return mod, worker
 
     @patch("integrated_task_worker.time.sleep")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.get")
-    def test_worker_continues_after_successful_task(self, mock_get, mock_post, mock_sleep, monkeypatch, tmp_path):
+    def test_worker_continues_after_successful_task(self, mock_sleep, monkeypatch, tmp_path):
         """After a successful task, the worker should loop back and poll again (not exit)."""
         mod, worker = self._make_worker(monkeypatch, tmp_path)
 
@@ -1612,9 +1556,7 @@ class TestWorkerRunLoopResilience:
         assert poll_call_count == 3
 
     @patch("integrated_task_worker.time.sleep")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.get")
-    def test_worker_continues_after_failed_task(self, mock_get, mock_post, mock_sleep, monkeypatch, tmp_path):
+    def test_worker_continues_after_failed_task(self, mock_sleep, monkeypatch, tmp_path):
         """If process_task raises an exception, the worker should continue polling."""
         mod, worker = self._make_worker(monkeypatch, tmp_path)
 
@@ -1645,9 +1587,7 @@ class TestWorkerRunLoopResilience:
         assert poll_call_count == 3
 
     @patch("integrated_task_worker.time.sleep")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.get")
-    def test_worker_continues_after_transient_error(self, mock_get, mock_post, mock_sleep, monkeypatch, tmp_path):
+    def test_worker_continues_after_transient_error(self, mock_sleep, monkeypatch, tmp_path):
         """If poll_pending_tasks raises a transient error, the worker sleeps 60s and retries."""
         mod, worker = self._make_worker(monkeypatch, tmp_path)
 
@@ -1674,9 +1614,7 @@ class TestWorkerRunLoopResilience:
         assert poll_call_count == 3
 
     @patch("integrated_task_worker.time.sleep")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.get")
-    def test_worker_sleeps_on_error(self, mock_get, mock_post, mock_sleep, monkeypatch, tmp_path):
+    def test_worker_sleeps_on_error(self, mock_sleep, monkeypatch, tmp_path):
         """On transient error, the worker should sleep 60s (not tight-loop)."""
         mod, worker = self._make_worker(monkeypatch, tmp_path)
 
@@ -1725,28 +1663,11 @@ class TestProcessTask:
 
     @patch("integrated_task_worker.subprocess.run")
     @patch("integrated_task_worker.subprocess.Popen")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.patch")
-    @patch("integrated_task_worker.requests.get")
-    def test_process_task_success(self, mock_get, mock_patch, mock_post,
-                                  mock_popen, mock_subrun,
+    def test_process_task_success(self, mock_popen, mock_subrun,
                                   monkeypatch, tmp_path):
         """Successful task: claim succeeds, agent returns success, status set
         to COMPLETED, result and transcript saved."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-
-        # --- HTTP mocks ---
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": []}
-        )
-        # requests.patch succeeds (claim_task, update_task)
-        mock_patch.return_value = MagicMock(
-            status_code=200,
-            raise_for_status=MagicMock()
-        )
-        # requests.post succeeds (send_to_webhook)
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
 
         # --- parse_prompt_with_llm mock (subprocess.Popen) ---
         parsed_json = {"task_description": "Write hello world", "success_criteria": "Script runs"}
@@ -1765,6 +1686,10 @@ class TestProcessTask:
         ]
 
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
+        worker.dv.post.return_value = MagicMock()
+        worker.dv.get.return_value = MagicMock(json=lambda: {"value": []})
         worker.current_user_id = "user-test"
 
         # Mock execute_with_autonomous_agent to return success
@@ -1773,7 +1698,7 @@ class TestProcessTask:
         session_stats = {"total_cost_usd": 0.10, "total_duration_ms": 5000}
 
         worker.execute_with_autonomous_agent = MagicMock(
-            return_value=(True, success_result, final_transcript, session_stats)
+            return_value=("completed", success_result, final_transcript, session_stats)
         )
 
         task = self._make_task()
@@ -1791,10 +1716,10 @@ class TestProcessTask:
         assert call_kwargs[1]["parsed_prompt_data"] is not None
 
         # update_task was called to set STATUS_COMPLETED
-        # Find the PATCH call that sets cr_status to COMPLETED
+        # Find the dv.patch call that sets cr_status to COMPLETED
         completed_update_found = False
-        for patch_call in mock_patch.call_args_list:
-            call_data = patch_call[1].get("json", {})
+        for patch_call in worker.dv.patch.call_args_list:
+            call_data = patch_call[0][1] if len(patch_call[0]) > 1 else {}
             if call_data.get("cr_status") == mod._STATUS_INT[mod.STATUS_COMPLETED]:
                 completed_update_found = True
                 assert "Task completed and verified" in call_data.get("cr_statusmessage", "")
@@ -1803,36 +1728,18 @@ class TestProcessTask:
                 break
         assert completed_update_found, "update_task should set status to STATUS_COMPLETED"
 
-        # send_to_webhook was called with completion message
-        webhook_messages = [c[0][0] for c in mock_post.call_args_list
-                           if "json" in (c[1] if len(c) > 1 else {})]
-        # At minimum, start notification and completion notification were sent
-        assert mock_post.call_count >= 2, "At least start and completion webhooks should be sent"
+        # send_to_webhook was called (dv.post) with completion message
+        assert worker.dv.post.call_count >= 2, "At least start and completion webhooks should be sent"
 
     # ------------------------------------------------------------------
     # Failure path
     # ------------------------------------------------------------------
 
     @patch("integrated_task_worker.subprocess.Popen")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.patch")
-    @patch("integrated_task_worker.requests.get")
-    def test_process_task_failure(self, mock_get, mock_patch, mock_post,
-                                  mock_popen, monkeypatch, tmp_path):
+    def test_process_task_failure(self, mock_popen, monkeypatch, tmp_path):
         """Failed task: agent returns failure, status set to STATUS_FAILED,
         error saved in result."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-
-        # --- HTTP mocks ---
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": []}
-        )
-        mock_patch.return_value = MagicMock(
-            status_code=200,
-            raise_for_status=MagicMock()
-        )
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
 
         # --- parse_prompt_with_llm mock ---
         parsed_json = {"task_description": "Broken task", "success_criteria": "N/A"}
@@ -1844,6 +1751,10 @@ class TestProcessTask:
         mock_popen.return_value = popen_proc
 
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
+        worker.dv.post.return_value = MagicMock()
+        worker.dv.get.return_value = MagicMock(json=lambda: {"value": []})
         worker.current_user_id = "user-test"
 
         # Mock execute_with_autonomous_agent to return failure
@@ -1852,7 +1763,7 @@ class TestProcessTask:
         session_stats = {"total_cost_usd": 0.50, "total_duration_ms": 120000}
 
         worker.execute_with_autonomous_agent = MagicMock(
-            return_value=(False, error_msg, final_transcript, session_stats)
+            return_value=("failed", error_msg, final_transcript, session_stats)
         )
 
         task = self._make_task()
@@ -1866,8 +1777,8 @@ class TestProcessTask:
 
         # update_task was called to set STATUS_FAILED
         failed_update_found = False
-        for patch_call in mock_patch.call_args_list:
-            call_data = patch_call[1].get("json", {})
+        for patch_call in worker.dv.patch.call_args_list:
+            call_data = patch_call[0][1] if len(patch_call[0]) > 1 else {}
             if call_data.get("cr_status") == mod._STATUS_INT[mod.STATUS_FAILED]:
                 failed_update_found = True
                 assert "Task failed" in call_data.get("cr_statusmessage", "")
@@ -1878,32 +1789,17 @@ class TestProcessTask:
         assert failed_update_found, "update_task should set status to STATUS_FAILED"
 
         # send_to_webhook was called with failure message
-        assert mock_post.call_count >= 2, "At least start and failure webhooks should be sent"
+        assert worker.dv.post.call_count >= 2, "At least start and failure webhooks should be sent"
 
     # ------------------------------------------------------------------
     # Cancellation path (agent returns canceled)
     # ------------------------------------------------------------------
 
     @patch("integrated_task_worker.subprocess.Popen")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.patch")
-    @patch("integrated_task_worker.requests.get")
-    def test_process_task_canceled(self, mock_get, mock_patch, mock_post,
-                                   mock_popen, monkeypatch, tmp_path):
+    def test_process_task_canceled(self, mock_popen, monkeypatch, tmp_path):
         """Canceled task: when execute_with_autonomous_agent detects
-        cancellation (returns success=False with cancel message), the task is
-        marked as FAILED with the cancellation reason."""
+        cancellation (returns "canceled"), the task is marked as STATUS_CANCELED."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
-            json=lambda: {"value": []}
-        )
-        mock_patch.return_value = MagicMock(
-            status_code=200,
-            raise_for_status=MagicMock()
-        )
-        mock_post.return_value = MagicMock(raise_for_status=MagicMock())
 
         # parse_prompt_with_llm mock
         parsed_json = {"task_description": "Cancelable task", "success_criteria": "N/A"}
@@ -1915,6 +1811,10 @@ class TestProcessTask:
         mock_popen.return_value = popen_proc
 
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
+        worker.dv.post.return_value = MagicMock()
+        worker.dv.get.return_value = MagicMock(json=lambda: {"value": []})
         worker.current_user_id = "user-test"
 
         # execute_with_autonomous_agent returns cancellation
@@ -1923,7 +1823,7 @@ class TestProcessTask:
         cancel_stats = {"total_cost_usd": 0.02, "total_duration_ms": 3000}
 
         worker.execute_with_autonomous_agent = MagicMock(
-            return_value=(False, cancel_msg, cancel_transcript, cancel_stats)
+            return_value=("canceled", cancel_msg, cancel_transcript, cancel_stats)
         )
 
         task = self._make_task(cr_shraga_taskid="task-cancel-001")
@@ -1934,24 +1834,24 @@ class TestProcessTask:
         # current_task_id cleared
         assert worker.current_task_id is None
 
-        # Status set to FAILED (cancellation comes through the failure branch)
-        failed_found = False
-        for patch_call in mock_patch.call_args_list:
-            call_data = patch_call[1].get("json", {})
-            if call_data.get("cr_status") == mod._STATUS_INT[mod.STATUS_FAILED]:
-                failed_found = True
+        # Status set to STATUS_CANCELED (three-way handling)
+        canceled_found = False
+        for patch_call in worker.dv.patch.call_args_list:
+            call_data = patch_call[0][1] if len(patch_call[0]) > 1 else {}
+            if call_data.get("cr_status") == mod._STATUS_INT[mod.STATUS_CANCELED]:
+                canceled_found = True
                 # Result should contain the cancel message
                 assert cancel_msg in call_data.get("cr_result", "")
                 assert call_data.get("cr_transcript") == cancel_transcript
                 break
-        assert failed_found, "Canceled task should be marked as STATUS_FAILED"
+        assert canceled_found, "Canceled task should be marked as STATUS_CANCELED"
 
-        # Webhook notification sent with cancellation error details
-        webhook_calls = mock_post.call_args_list
-        failure_webhook_found = any(
+        # Webhook notification sent with cancellation details
+        webhook_calls = worker.dv.post.call_args_list
+        cancel_webhook_found = any(
             cancel_msg in str(c) for c in webhook_calls
         )
-        assert failure_webhook_found, "Failure webhook should contain the cancellation message"
+        assert cancel_webhook_found, "Webhook should contain the cancellation message"
 
 
 # ===========================================================================
@@ -2072,7 +1972,7 @@ class TestExecuteWithAutonomousAgent:
         )
 
         # Verify return values
-        assert success is True
+        assert success == "completed"
         assert "Task summary: everything works." in result
         assert "View in OneDrive" in result
         assert isinstance(transcript, str)
@@ -2169,7 +2069,7 @@ class TestExecuteWithAutonomousAgent:
             parsed_prompt_data=parsed_prompt,
         )
 
-        assert success is True
+        assert success == "completed"
         assert "Summary after retry" in result
 
         # Worker called twice
@@ -2217,7 +2117,7 @@ class TestExecuteWithAutonomousAgent:
         )
 
         # Returns failure
-        assert success is False
+        assert success == "failed"
         assert "Claude CLI process crashed" in result
         assert "Error during autonomous execution" in result
 
@@ -2267,7 +2167,7 @@ class TestExecuteWithAutonomousAgent:
             parsed_prompt_data=parsed_prompt,
         )
 
-        assert success is False
+        assert success == "failed"
         assert "Max iterations" in result
 
         # Worker and verifier each called 10 times
@@ -2313,7 +2213,7 @@ class TestExecuteWithAutonomousAgent:
             parsed_prompt_data=parsed_prompt,
         )
 
-        assert success is False
+        assert success == "canceled"
         assert "canceled" in result.lower()
 
         # Worker, verifier, summarizer NOT called
@@ -2400,7 +2300,7 @@ class TestExecuteWithAutonomousAgent:
             parsed_prompt_data=parsed_prompt,
         )
 
-        assert success is True
+        assert success == "completed"
         # Stats should be accumulated (our fake_merge sums total_cost_usd, etc.)
         assert stats.get("total_cost_usd", 0) > 0
         assert stats.get("total_duration_ms", 0) > 0
@@ -2414,88 +2314,88 @@ class TestExecuteWithAutonomousAgent:
 class TestIsTaskCanceled:
     """Tests for IntegratedTaskWorker.is_task_canceled()."""
 
-    @patch("integrated_task_worker.requests.get")
-    def test_is_task_canceled_true(self, mock_get, monkeypatch, tmp_path):
+    def test_is_task_canceled_true(self, monkeypatch, tmp_path):
         """When Dataverse returns cr_status == STATUS_CANCELED, is_task_canceled returns True."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             status_code=200,
             json=lambda: {"cr_status": mod.STATUS_CANCELED},
         )
-        worker = mod.IntegratedTaskWorker()
         result = worker.is_task_canceled("task-cancel-001")
         assert result is True
 
         # Verify the correct URL was called with $select=cr_status
-        call_args = mock_get.call_args
-        url_called = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+        call_args = worker.dv.get.call_args
+        url_called = call_args[0][0] if call_args[0] else ""
         assert "task-cancel-001" in url_called
         assert "$select=cr_status" in url_called
 
-    @patch("integrated_task_worker.requests.get")
-    def test_is_task_canceled_false(self, mock_get, monkeypatch, tmp_path):
+    def test_is_task_canceled_false(self, monkeypatch, tmp_path):
         """When Dataverse returns a non-canceled status (e.g., STATUS_RUNNING), returns False."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             status_code=200,
             json=lambda: {"cr_status": mod.STATUS_RUNNING},
         )
-        worker = mod.IntegratedTaskWorker()
         result = worker.is_task_canceled("task-running-001")
         assert result is False
 
-    @patch("integrated_task_worker.requests.get")
-    def test_is_task_canceled_false_for_completed(self, mock_get, monkeypatch, tmp_path):
+    def test_is_task_canceled_false_for_completed(self, monkeypatch, tmp_path):
         """A completed task (status 7) is not canceled."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             status_code=200,
             json=lambda: {"cr_status": mod.STATUS_COMPLETED},
         )
-        worker = mod.IntegratedTaskWorker()
         result = worker.is_task_canceled("task-completed-001")
         assert result is False
 
-    @patch("integrated_task_worker.requests.get")
-    def test_is_task_canceled_false_for_pending(self, mock_get, monkeypatch, tmp_path):
+    def test_is_task_canceled_false_for_pending(self, monkeypatch, tmp_path):
         """A pending task (status 1) is not canceled."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             status_code=200,
             json=lambda: {"cr_status": mod.STATUS_PENDING},
         )
-        worker = mod.IntegratedTaskWorker()
         result = worker.is_task_canceled("task-pending-001")
         assert result is False
 
-    @patch("integrated_task_worker.requests.get")
-    def test_is_task_canceled_api_error(self, mock_get, monkeypatch, tmp_path):
+    def test_is_task_canceled_api_error(self, monkeypatch, tmp_path):
         """When the Dataverse API call raises an exception, returns False (fail-open)."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.side_effect = Exception("Network unreachable")
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.side_effect = Exception("Network unreachable")
         result = worker.is_task_canceled("task-error-001")
         assert result is False
 
-    @patch("integrated_task_worker.requests.get")
-    def test_is_task_canceled_api_timeout(self, mock_get, monkeypatch, tmp_path):
+    def test_is_task_canceled_api_timeout(self, monkeypatch, tmp_path):
         """When the Dataverse API call times out, returns False (fail-open)."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        import requests as req_lib
-        mock_get.side_effect = req_lib.exceptions.Timeout("Connection timed out")
+        from dv_client import DataverseRetryExhausted
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.side_effect = DataverseRetryExhausted("Connection timed out")
         result = worker.is_task_canceled("task-timeout-001")
         assert result is False
 
-    @patch("integrated_task_worker.requests.get")
-    def test_is_task_canceled_non_200_response(self, mock_get, monkeypatch, tmp_path):
+    def test_is_task_canceled_non_200_response(self, monkeypatch, tmp_path):
         """When Dataverse returns a non-200 status code (e.g. 404), returns False."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
+        worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.get.return_value = MagicMock(
             status_code=404,
             json=lambda: {"error": "not found"},
         )
-        worker = mod.IntegratedTaskWorker()
         result = worker.is_task_canceled("task-notfound-001")
         assert result is False
 
@@ -2503,31 +2403,29 @@ class TestIsTaskCanceled:
         """When task_id is empty string, returns False immediately without API call."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
-        with patch("integrated_task_worker.requests.get") as mock_get:
-            result = worker.is_task_canceled("")
-            assert result is False
-            # Should not have made any API call
-            mock_get.assert_not_called()
+        worker.dv = MagicMock()
+        result = worker.is_task_canceled("")
+        assert result is False
+        # Should not have made any API call
+        worker.dv.get.assert_not_called()
 
     def test_is_task_canceled_none_task_id(self, monkeypatch, tmp_path):
         """When task_id is None, returns False immediately without API call."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
-        with patch("integrated_task_worker.requests.get") as mock_get:
-            result = worker.is_task_canceled(None)
-            assert result is False
-            mock_get.assert_not_called()
+        worker.dv = MagicMock()
+        result = worker.is_task_canceled(None)
+        assert result is False
+        worker.dv.get.assert_not_called()
 
     def test_is_task_canceled_no_auth_token(self, monkeypatch, tmp_path):
-        """When auth token is unavailable, worker exits (scheduler restarts it)."""
-        mod, mock_cred = _import_worker(monkeypatch, tmp_path)
-        mock_cred.get_token.side_effect = Exception("Auth failed")
+        """When auth token is unavailable (dv.get raises), returns False (fail-open)."""
+        mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
-        worker._token_cache = None
-        worker._token_expires = None
-        import pytest
-        with pytest.raises(SystemExit):
-            worker.is_task_canceled("task-noauth-001")
+        worker.dv = MagicMock()
+        worker.dv.get.side_effect = Exception("Auth failed")
+        result = worker.is_task_canceled("task-noauth-001")
+        assert result is False
 
 
 class TestRunLoopContinuesAfterTask:
@@ -2539,12 +2437,11 @@ class TestRunLoopContinuesAfterTask:
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
         worker.current_user_id = "user-test-run"
+        worker.dv = MagicMock()
         return mod, worker
 
     @patch("integrated_task_worker.time.sleep")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.get")
-    def test_run_loop_continues_after_task(self, mock_get, mock_post, mock_sleep, monkeypatch, tmp_path):
+    def test_run_loop_continues_after_task(self, mock_sleep, monkeypatch, tmp_path):
         """After processing a task (success or failure), the run() loop must
         continue polling for more tasks rather than exiting.
 
@@ -2598,9 +2495,7 @@ class TestRunLoopContinuesAfterTask:
         assert second_task["cr_shraga_taskid"] == "task-loop-002"
 
     @patch("integrated_task_worker.time.sleep")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.get")
-    def test_run_loop_continues_after_exception_in_process_task(self, mock_get, mock_post, mock_sleep, monkeypatch, tmp_path):
+    def test_run_loop_continues_after_exception_in_process_task(self, mock_sleep, monkeypatch, tmp_path):
         """If process_task raises an unhandled exception, the run() loop must
         catch it, clean up, and continue polling -- not crash."""
         mod, worker = self._make_worker(monkeypatch, tmp_path)
@@ -2653,9 +2548,7 @@ class TestRunLoopContinuesAfterTask:
         assert poll_call_count == 4
 
     @patch("integrated_task_worker.time.sleep")
-    @patch("integrated_task_worker.requests.post")
-    @patch("integrated_task_worker.requests.get")
-    def test_run_loop_normal_sleep_between_iterations(self, mock_get, mock_post, mock_sleep, monkeypatch, tmp_path):
+    def test_run_loop_normal_sleep_between_iterations(self, mock_sleep, monkeypatch, tmp_path):
         """On normal polling (no errors), the worker sleeps 10 seconds between iterations."""
         mod, worker = self._make_worker(monkeypatch, tmp_path)
 
@@ -2907,7 +2800,7 @@ class TestSessionFolderEnrichment:
             parsed_prompt_data=parsed_prompt,
         )
 
-        assert success is True
+        assert success == "completed"
 
         # write_task_prompt_file was called with raw prompt and success criteria
         worker.write_task_prompt_file.assert_called_once_with(
@@ -3040,17 +2933,15 @@ class TestUpdateTaskShortDescription:
         """Test that update_task sends crb3b_shortdescription to Dataverse."""
         mod, _ = _import_worker(monkeypatch, tmp_path)
         worker = mod.IntegratedTaskWorker()
+        worker.dv = MagicMock()
+        worker.dv.patch.return_value = MagicMock()
 
-        with patch("requests.patch") as mock_patch:
-            mock_patch.return_value = MagicMock(status_code=204)
-            mock_patch.return_value.raise_for_status = MagicMock()
+        worker.update_task(
+            "task-123",
+            short_description="Build a REST API for auth."
+        )
 
-            worker.update_task(
-                "task-123",
-                short_description="Build a REST API for auth."
-            )
-
-            # Verify the PATCH was called with crb3b_shortdescription in the body
-            call_args = mock_patch.call_args
-            body = call_args[1]["json"]
-            assert body["crb3b_shortdescription"] == "Build a REST API for auth."
+        # Verify dv.patch was called with crb3b_shortdescription in the body
+        call_args = worker.dv.patch.call_args
+        body = call_args[0][1]  # data is positional arg 2
+        assert body["crb3b_shortdescription"] == "Build a REST API for auth."
