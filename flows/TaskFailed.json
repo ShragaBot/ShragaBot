@@ -181,7 +181,7 @@
               "entityName": "cr_shragamessages",
               "$filter": "crb3b_taskid eq '@{triggerOutputs()?['body/cr_shraga_taskid']}'",
               "$orderby": "createdon asc",
-              "$top": 20,
+              "$top": 50,
               "$select": "cr_content,createdon"
             },
             "host": {
@@ -390,7 +390,7 @@
       }
     },
     "createdTime": "2026-02-14T10:20:22.485113Z",
-    "lastModifiedTime": "2026-02-24T10:02:45.681873Z",
+    "lastModifiedTime": "2026-02-24T10:10:37.8898569Z",
     "flowSuspensionReason": "None",
     "environment": {
       "name": "8660590d-33ac-ecd8-aef3-e4dd0d6071f4",
