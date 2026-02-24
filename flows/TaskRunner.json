@@ -313,8 +313,8 @@
                     "item/cr_message": "@{concat('Your task is queued! Track progress here: ', outputs('Post_card_in_a_chat_or_channel')?['body/messageLink'])}",
                     "item/cr_direction": "Outbound",
                     "item/cr_status": "Unclaimed",
-                    "item/cr_in_reply_to": "@coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_inboundrowid'], '')",
-                    "item/cr_followup_expected": ""
+                    "item/cr_in_reply_to": "@outputs('Get_a_row_by_ID')?['body/crb3b_inboundrowid']",
+                    "item/cr_followup_expected": "true"
                   },
                   "host": {
                     "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
@@ -399,7 +399,7 @@
       }
     },
     "createdTime": "2026-02-13T20:13:50.4741319Z",
-    "lastModifiedTime": "2026-02-23T19:22:07.1253703Z",
+    "lastModifiedTime": "2026-02-24T09:49:21.8376137Z",
     "flowSuspensionReason": "None",
     "environment": {
       "name": "8660590d-33ac-ecd8-aef3-e4dd0d6071f4",
