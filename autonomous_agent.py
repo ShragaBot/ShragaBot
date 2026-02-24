@@ -10,6 +10,8 @@ import sys
 import threading
 import time
 import traceback
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlparse
@@ -24,6 +26,38 @@ except ImportError:
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
+# --- File logging ---
+_LOG_FILE = Path(__file__).parent / "agent.log"
+
+_file_logger = logging.getLogger("shraga_agent")
+_file_logger.setLevel(logging.DEBUG)
+_file_handler = RotatingFileHandler(
+    str(_LOG_FILE),
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=5,
+    encoding="utf-8",
+)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_file_logger.addHandler(_file_handler)
+
+
+def _log(msg: str):
+    """Print with timestamp to console AND write to log file."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}")
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass  # Never let logging crash the service
+
+
+def _log_to_file(msg: str):
+    """Write to log file only (no console output), for augmenting existing prints."""
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass
 
 
 def extract_phase_stats(response: dict) -> dict:
@@ -178,9 +212,8 @@ class AgentCLI:
 - This file is READ ONLY
 - This is the ONLY source of truth for the task
 - All work should be done in this folder
-- You can finish with two statuses:
+- You can finish with one status:
   - "done" - Task completed, ready for verification
-  - "blocked" - Need user input to proceed
 """
         self.task_file.write_text(task_content, encoding='utf-8')
 
@@ -281,6 +314,7 @@ Return one of:
             except subprocess.TimeoutExpired:
                 stop_spinner[0] = True
                 process.kill()
+                _log_to_file(f"[ERROR] Timeout after {timeout}s")
                 raise Exception(f"Timeout after {timeout}s")
             except KeyboardInterrupt:
                 stop_spinner[0] = True
@@ -316,6 +350,7 @@ Return one of:
         last_update = start_time
 
         print("--- AGENT WORKING (live progress) ---\n")
+        _log_to_file("AGENT WORKING (live progress)")
 
         try:
             while True:
@@ -385,6 +420,7 @@ Return one of:
                                                 details = f" → \"{pattern}\""
 
                                         print(f"\n[*] Using tool: {tool_name}{details}", flush=True)
+                                        _log_to_file(f"Using tool: {tool_name}{details}")
 
                                         # Callback for tool usage event - DISABLED (user wants only thoughts)
                                         # if on_event:
@@ -436,6 +472,17 @@ Return one of:
                     break
 
             print("\n\n--- AGENT COMPLETED ---\n")
+            _log_to_file("AGENT COMPLETED")
+
+            # Ensure the subprocess is fully terminated before reading stderr.
+            # Without this, process.stderr.read() can block forever if orphaned
+            # child processes (PowerShell, npm, Node.js) still hold the pipe open.
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                _log_to_file("[WARN] Claude CLI process did not exit within 30s, killing")
+                process.kill()
+                process.wait(timeout=10)
 
             # Parse final result if not found in stream
             if full_result is None and stdout_data:
@@ -451,16 +498,26 @@ Return one of:
 
             if full_result is None:
                 # Log diagnostic info before raising
-                stderr = process.stderr.read() if process.stderr else ""
+                stderr = ""
+                try:
+                    stderr = process.stderr.read() if process.stderr else ""
+                except Exception:
+                    pass
                 print(f"[!] Stream parsing failed. Return code: {process.returncode}")
                 print(f"[!] Stderr: {stderr[:1000]}" if stderr else "[!] No stderr output")
                 print(f"[!] Stdout lines collected: {len(stdout_data)}")
                 if stdout_data:
                     print(f"[!] Last stdout line: {stdout_data[-1][:500]}")
-                raise Exception(f"Could not parse final result from stream. returncode={process.returncode}, lines={len(stdout_data)}, stderr={stderr[:200]}")
+                err_msg = f"Could not parse final result from stream. returncode={process.returncode}, lines={len(stdout_data)}, stderr={stderr[:200]}"
+                _log_to_file(f"[ERROR] {err_msg}")
+                raise Exception(err_msg)
 
             if process.returncode != 0:
-                stderr = process.stderr.read()
+                stderr = ""
+                try:
+                    stderr = process.stderr.read() if process.stderr else ""
+                except Exception:
+                    pass
                 if stderr:
                     print(f"[!] Stderr: {stderr}")
 
@@ -482,6 +539,7 @@ Return one of:
         print(f"\n{'='*60}")
         print(f"WORKER ITERATION #{iteration}")
         print(f"{'='*60}\n")
+        _log_to_file(f"WORKER ITERATION #{iteration}")
 
         # Build worker prompt
         worker_prompt = f"""You are a worker agent executing a task.
@@ -502,19 +560,17 @@ The verifier found issues with your previous work. Address the feedback and try 
 
 """
 
-        worker_prompt += """When you're done, respond with EXACTLY one of these statuses:
+        worker_prompt += """When you're done, respond with EXACTLY this status:
 
 STATUS: done
 (if task is complete and ready for verification)
-
-STATUS: blocked - <reason why you're blocked>
-(if you need user input to proceed)
 
 Place your status at the END of your response.
 """
 
         # Call worker agent
         print("[*] Calling worker agent...")
+        _log_to_file("Calling worker agent...")
         response = self.call_claude(worker_prompt, self.project_folder, on_event=on_event)
 
         # Extract phase stats from Claude response
@@ -526,40 +582,9 @@ Place your status at the END of your response.
         # Parse status
         if "STATUS: done" in result_text:
             return "done", result_text, phase_stats
-        elif "STATUS: blocked" in result_text:
-            # Extract reason
-            blocked_line = [line for line in result_text.split('\n') if 'STATUS: blocked' in line][0]
-            reason = blocked_line.replace("STATUS: blocked", "").strip(" -")
-            return "blocked", reason, phase_stats
         else:
-            # Default to blocked if unclear
-            return "blocked", "Status unclear - please clarify", phase_stats
-
-    def contact_user(self, reason):
-        """Phase 4: Contact user when blocked"""
-        print(f"\n{'='*60}")
-        print("AGENT BLOCKED - USER INPUT NEEDED")
-        print(f"{'='*60}\n")
-        print(f"Reason: {reason}\n")
-        print("Please provide input to help the agent continue:")
-        print("(Enter multi-line input, press Ctrl+Z then Enter when done on Windows,")
-        print(" or Ctrl+D on Unix)\n")
-
-        response_lines = []
-        try:
-            while True:
-                line = input()
-                response_lines.append(line)
-        except EOFError:
-            pass
-
-        user_response = "\n".join(response_lines)
-
-        # Add user response to a file in the project
-        response_file = self.project_folder / f"user_response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-        response_file.write_text(f"# User Response\n\n{user_response}", encoding='utf-8')
-
-        return user_response
+            # Default to done if unclear
+            return "done", result_text, phase_stats
 
     def verify_work(self, worker_output, on_event=None):
         """Phase 5: Verifier checks if work is done
@@ -570,6 +595,7 @@ Place your status at the END of your response.
         print(f"\n{'='*60}")
         print("VERIFICATION PHASE")
         print(f"{'='*60}\n")
+        _log_to_file("VERIFICATION PHASE")
 
         verifier_prompt = f"""You are a verifier agent. Check if the work meets the success criteria.
 
@@ -674,6 +700,7 @@ After writing VERDICT.json, summarize your findings in plain text for the user t
 """
 
         print("[*] Calling verifier agent...")
+        _log_to_file("Calling verifier agent...")
         response = self.call_claude(verifier_prompt, self.project_folder, on_event=on_event)
 
         # Extract phase stats from Claude response
@@ -687,6 +714,7 @@ After writing VERDICT.json, summarize your findings in plain text for the user t
 
         if not verdict_file.exists():
             print("[ERROR] VERDICT.json file not found - verifier did not create it")
+            _log_to_file("[ERROR] VERDICT.json file not found - verifier did not create it")
             return False, "Verifier did not create VERDICT.json file", phase_stats
 
         try:
@@ -709,16 +737,20 @@ After writing VERDICT.json, summarize your findings in plain text for the user t
 
             if approved:
                 print("[SUCCESS] Work approved by verifier")
+                _log_to_file("[SUCCESS] Work approved by verifier")
                 return True, None, phase_stats
             else:
                 print(f"[RETRY] Verification failed: {feedback}")
+                _log_to_file(f"[RETRY] Verification failed: {feedback}")
                 return False, feedback if feedback else "No feedback provided", phase_stats
 
         except json.JSONDecodeError as e:
             print(f"[ERROR] Failed to parse VERDICT.json: {e}")
+            _log_to_file(f"[ERROR] Failed to parse VERDICT.json: {e}")
             return False, f"Invalid JSON in VERDICT.json: {e}", phase_stats
         except Exception as e:
             print(f"[ERROR] Error reading VERDICT.json: {e}")
+            _log_to_file(f"[ERROR] Error reading VERDICT.json: {e}")
             return False, f"Error reading verdict file: {e}", phase_stats
 
     def create_summary(self, on_event=None):
@@ -733,6 +765,7 @@ After writing VERDICT.json, summarize your findings in plain text for the user t
         print(f"\n{'='*60}")
         print("SUMMARY CREATION")
         print(f"{'='*60}\n")
+        _log_to_file("SUMMARY CREATION")
 
         # Build OneDrive URL mapping for files in the project folder.
         # Use suffix-based inference (_path_looks_like_file) instead of
@@ -786,6 +819,7 @@ Write SUMMARY.md with your summary, then output a brief confirmation message.
 """
 
         print("[*] Calling summarizer agent...")
+        _log_to_file("Calling summarizer agent...")
         response = self.call_claude(summarizer_prompt, self.project_folder, on_event=on_event)
 
         # Extract phase stats from Claude response
@@ -830,14 +864,7 @@ Write SUMMARY.md with your summary, then output a brief confirmation message.
                 # Worker phase
                 status, output, _worker_stats = self.worker_loop(iteration, verifier_feedback)
 
-                if status == "blocked":
-                    # Contact user
-                    user_input = self.contact_user(output)
-                    # Continue to next iteration
-                    iteration += 1
-                    continue
-
-                elif status == "done":
+                if status == "done":
                     # Verification phase
                     approved, feedback, _verifier_stats = self.verify_work(output)
 
@@ -846,6 +873,7 @@ Write SUMMARY.md with your summary, then output a brief confirmation message.
                         print("[+] TASK COMPLETED SUCCESSFULLY!")
                         print(f"{'='*60}\n")
                         print(f"Project folder: {self.project_folder}")
+                        _log_to_file(f"TASK COMPLETED SUCCESSFULLY! Project: {self.project_folder}")
                         break
                     else:
                         print(f"\n[!]  Verification failed. Going back to worker with feedback.\n")
@@ -858,12 +886,15 @@ Write SUMMARY.md with your summary, then output a brief confirmation message.
                 print(f"[!] Max iterations ({max_iterations}) reached without approval")
                 print(f"{'='*60}\n")
                 print(f"Project folder: {self.project_folder}")
+                _log_to_file(f"Max iterations ({max_iterations}) reached without approval. Project: {self.project_folder}")
 
         except KeyboardInterrupt:
             print("\n\n[!]  Interrupted by user")
+            _log_to_file("Interrupted by user")
             sys.exit(1)
         except Exception as e:
             print(f"\n\n[X] Error: {e}")
+            _log_to_file(f"[ERROR] {e}")
             traceback.print_exc()
             sys.exit(1)
 

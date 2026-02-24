@@ -69,15 +69,17 @@ class TestGetToken:
         worker.get_token()
         assert mock_cred.get_token.call_count == 2
 
-    def test_get_token_returns_none_on_error(self, monkeypatch, tmp_path):
+    def test_get_token_exits_on_error(self, monkeypatch, tmp_path):
         mod, mock_cred = _import_worker(monkeypatch, tmp_path)
         mock_cred.get_token.side_effect = Exception("Auth failed")
         worker = mod.IntegratedTaskWorker()
         # Reset cache
         worker._token_cache = None
         worker._token_expires = None
-        token = worker.get_token()
-        assert token is None
+        import pytest
+        with pytest.raises(SystemExit) as exc_info:
+            worker.get_token()
+        assert exc_info.value.code == 1
 
 
 # ===========================================================================
@@ -526,13 +528,15 @@ class TestGetHeaders:
         headers = worker._get_headers(etag='W/"12345"')
         assert headers["If-Match"] == 'W/"12345"'
 
-    def test_returns_none_when_no_token(self, monkeypatch, tmp_path):
+    def test_exits_when_no_token(self, monkeypatch, tmp_path):
         mod, mock_cred = _import_worker(monkeypatch, tmp_path)
         mock_cred.get_token.side_effect = Exception("Auth failed")
         worker = mod.IntegratedTaskWorker()
         worker._token_cache = None
         worker._token_expires = None
-        assert worker._get_headers() is None
+        import pytest
+        with pytest.raises(SystemExit):
+            worker._get_headers()
 
 
 # ===========================================================================
@@ -1253,8 +1257,8 @@ class TestWriteResultAndTranscriptFiles:
         session_folder = tmp_path / "failed_session"
         session_folder.mkdir()
 
-        failed_result = "Blocked: Missing API credentials"
-        failed_transcript = '{"from":"system","time":"2026-02-21T00:03:00","message":"[ERROR] Blocked"}'
+        failed_result = "Failed: Missing API credentials"
+        failed_transcript = '{"from":"system","time":"2026-02-21T00:03:00","message":"[ERROR] Failed"}'
 
         worker.write_result_and_transcript_files(
             session_folder=session_folder,
@@ -1264,8 +1268,8 @@ class TestWriteResultAndTranscriptFiles:
 
         result_content = (session_folder / "result.md").read_text(encoding="utf-8")
         transcript_content = (session_folder / "transcript.md").read_text(encoding="utf-8")
-        assert "Blocked: Missing API credentials" in result_content
-        assert "[ERROR] Blocked" in transcript_content
+        assert "Failed: Missing API credentials" in result_content
+        assert "[ERROR] Failed" in transcript_content
 
     def test_files_written_on_canceled_state(self, monkeypatch, tmp_path):
         """Verify files are written even for canceled tasks."""
@@ -2182,65 +2186,6 @@ class TestExecuteWithAutonomousAgent:
         assert mock_agent.create_summary.call_count == 1
 
     # -------------------------------------------------------------------
-    # FAILURE: Worker returns "blocked"
-    # -------------------------------------------------------------------
-
-    def test_execute_with_autonomous_agent_failure_blocked(self, monkeypatch, tmp_path):
-        """Worker returns 'blocked' status -- task should fail with blocked message.
-
-        Verifies:
-        - Returns (False, "Blocked: ...", transcript, stats)
-        - Dataverse updated with STATUS_FAILED
-        - Webhook notification sent with blocked reason
-        - Session summary written with 'failed' terminal status
-        - Verifier and summarizer are NOT called
-        """
-        mod, worker, mock_agent, session_folder = self._make_worker_and_mocks(
-            monkeypatch, tmp_path
-        )
-
-        worker_stats = {"cost_usd": 0.05, "duration_ms": 15000, "num_turns": 3, "session_id": "s1"}
-        mock_agent.worker_loop.return_value = (
-            "blocked", "Missing API credentials for external service", worker_stats
-        )
-
-        parsed_prompt = {
-            "task_description": "Integrate with external API",
-            "success_criteria": "API calls succeed",
-        }
-        success, result, transcript, stats = worker.execute_with_autonomous_agent(
-            task_prompt="Integrate with external API",
-            task_id="task-blocked-001",
-            current_transcript="",
-            parsed_prompt_data=parsed_prompt,
-        )
-
-        # Returns failure
-        assert success is False
-        assert "blocked" in result.lower() or "Blocked" in result
-        assert "Missing API credentials" in result
-
-        # Dataverse updated with STATUS_FAILED (not WAITING_FOR_INPUT)
-        update_calls = worker.update_task.call_args_list
-        assert any(
-            c[1].get("status") == mod.STATUS_FAILED
-            for c in update_calls
-        ), "Expected STATUS_FAILED update for blocked task"
-
-        # Webhook sent with blocked reason
-        webhook_calls = [str(c) for c in worker.send_to_webhook.call_args_list]
-        assert any("blocked" in c.lower() or "Blocked" in c for c in webhook_calls)
-
-        # Session summary written with 'failed' terminal status
-        worker.write_session_summary.assert_called_once()
-        summary_kwargs = worker.write_session_summary.call_args[1]
-        assert summary_kwargs["terminal_status"] == "failed"
-
-        # Verifier and summarizer NOT called
-        assert mock_agent.verify_work.call_count == 0
-        assert mock_agent.create_summary.call_count == 0
-
-    # -------------------------------------------------------------------
     # FAILURE: Exception during execution
     # -------------------------------------------------------------------
 
@@ -2574,17 +2519,15 @@ class TestIsTaskCanceled:
             mock_get.assert_not_called()
 
     def test_is_task_canceled_no_auth_token(self, monkeypatch, tmp_path):
-        """When auth token is unavailable (_get_headers returns None), returns False."""
+        """When auth token is unavailable, worker exits (scheduler restarts it)."""
         mod, mock_cred = _import_worker(monkeypatch, tmp_path)
         mock_cred.get_token.side_effect = Exception("Auth failed")
         worker = mod.IntegratedTaskWorker()
         worker._token_cache = None
         worker._token_expires = None
-        with patch("integrated_task_worker.requests.get") as mock_get:
-            result = worker.is_task_canceled("task-noauth-001")
-            assert result is False
-            # Should not have made any API call since headers are None
-            mock_get.assert_not_called()
+        import pytest
+        with pytest.raises(SystemExit):
+            worker.is_task_canceled("task-noauth-001")
 
 
 class TestRunLoopContinuesAfterTask:

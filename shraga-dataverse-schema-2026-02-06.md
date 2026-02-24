@@ -42,7 +42,6 @@ Shraga uses 4 core tables to manage task execution, user metadata, worker infras
 
 - `1` - Pending (waiting for worker)
 - `5` - Running (worker executing)
-- `6` - Waiting for Input (blocked, needs user input)
 - `7` - Completed (successfully finished)
 - `8` - Failed (execution error)
 - `9` - Canceled (user canceled)
@@ -51,7 +50,7 @@ Shraga uses 4 core tables to manage task execution, user metadata, worker infras
 ```json
 {
   "description": "What to do",
-  "contactRules": "When to reach out (only when blocked, frequently, etc.)",
+  "contactRules": "When to reach out (e.g., on error, frequently, etc.)",
   "successCriteria": "How to verify completion"
 }
 ```

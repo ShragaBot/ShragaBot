@@ -26,11 +26,37 @@ from onedrive_utils import find_onedrive_root, local_path_to_web_url, OneDriveRo
 
 DATAVERSE_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynamics.com")
 
+# --- File logging ---
+# Logs go to both console and a rotating log file so we can debug live issues.
+# Log file lives next to the script (inside the release folder on dev boxes).
+# Rotates at 10MB, keeps 5 files = 50MB max.
+import logging
+from logging.handlers import RotatingFileHandler
+
+_LOG_FILE = Path(__file__).parent / "worker.log"
+
+_file_logger = logging.getLogger("shraga_worker")
+_file_logger.setLevel(logging.DEBUG)
+_file_handler = RotatingFileHandler(
+    str(_LOG_FILE),
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=5,
+    encoding="utf-8",
+)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_file_logger.addHandler(_file_handler)
+
 
 def _log(msg: str):
-    """Print with timestamp prefix."""
+    """Print with timestamp to console AND write to log file."""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{ts}] {msg}")
+    line = f"[{ts}] {msg}"
+    print(line)
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass  # Never let logging crash the worker
+
 TABLE = os.environ.get("TABLE_NAME", "cr_shraga_tasks")  # MCS table with solution prefix
 STATE_FILE = ".integrated_worker_state.json"
 
@@ -181,8 +207,32 @@ class IntegratedTaskWorker:
                 if datetime.now(timezone.utc) < self._token_expires:
                     return self._token_cache
 
-            # Get new token
-            token: AccessToken = self.credential.get_token(f"{DATAVERSE_URL}/.default")
+            # Get new token with timeout -- DefaultAzureCredential can hang
+            # indefinitely if auth providers are unresponsive or waiting for
+            # interactive input. Use a thread to enforce a hard 30s deadline.
+            import threading
+            token_result = [None]
+            token_error = [None]
+
+            def _fetch():
+                try:
+                    token_result[0] = self.credential.get_token(f"{DATAVERSE_URL}/.default")
+                except Exception as e:
+                    token_error[0] = e
+
+            t = threading.Thread(target=_fetch, daemon=True)
+            t.start()
+            t.join(timeout=30)
+
+            if t.is_alive():
+                _log("[FATAL] get_token() timed out after 30s -- Azure credential hung. Exiting.")
+                _log("[HINT] Run: az login")
+                sys.exit(1)
+
+            if token_error[0]:
+                raise token_error[0]
+
+            token = token_result[0]
 
             # Cache token (expire 5 minutes early to be safe)
             self._token_cache = token.token
@@ -190,9 +240,9 @@ class IntegratedTaskWorker:
 
             return self._token_cache
         except Exception as e:
-            _log(f"[ERROR] Getting token: {e}")
-            _log("[HINT] Make sure you've run: az login")
-            return None
+            _log(f"[FATAL] Getting token failed: {e} -- Exiting.")
+            _log("[HINT] Run: az login")
+            sys.exit(1)
 
     def _get_headers(self, content_type=None, etag=None):
         """Build OData headers with auth token. Returns None if token unavailable."""
@@ -1274,35 +1324,24 @@ JSON output:"""
                 )
 
                 # Worker phase
+                _log(f"[PHASE] Worker starting (iteration {iteration})")
                 status, output, worker_stats = agent.worker_loop(iteration, verifier_feedback, on_event=streaming_event)
+                _log(f"[PHASE] Worker finished: status={status}")
                 _record_phase(f"worker_{iteration}", worker_stats)
 
                 # Log worker output
+                _log(f"[PHASE] Updating transcript after worker")
                 transcript = self.append_to_transcript(
                     transcript,
                     "worker",
                     output
                 )
                 self.update_task(task_id, transcript=transcript)
+                _log(f"[PHASE] Transcript updated in Dataverse")
 
-                if status == "blocked":
-                    # Worker is blocked -- fail directly (no WaitingForInput state)
-                    blocked_msg = f"Worker blocked: {output}"
-                    transcript = self.append_to_transcript(
-                        transcript, "system", blocked_msg
-                    )
-                    self.update_task(
-                        task_id,
-                        status=STATUS_FAILED,
-                        status_message=blocked_msg,
-                        transcript=transcript
-                    )
-                    self.send_to_webhook(blocked_msg)
-                    _finalize_summary("failed", blocked_msg)
-                    return False, blocked_msg, transcript, accumulated_stats
-
-                elif status == "done":
+                if status == "done":
                     # Check for cancellation before verification
+                    _log(f"[PHASE] Checking cancellation before verification")
                     if self.is_task_canceled(task_id):
                         cancel_msg = "Task canceled by user (before verification)"
                         self.send_to_webhook(cancel_msg)
@@ -1311,6 +1350,7 @@ JSON output:"""
 
                     # Verification phase
                     _log(f"\n[VERIFICATION]")
+                    _log(f"[PHASE] Verifier starting (iteration {iteration})")
 
                     transcript = self.append_to_transcript(
                         transcript,
@@ -1324,6 +1364,7 @@ JSON output:"""
                     )
 
                     approved, feedback, verifier_stats = agent.verify_work(output, on_event=streaming_event)
+                    _log(f"[PHASE] Verifier finished: approved={approved}")
                     _record_phase(f"verifier_{iteration}", verifier_stats)
 
                     # Log verifier output
@@ -1339,10 +1380,11 @@ JSON output:"""
                         _log(f"\n[SUCCESS] Task approved by verifier")
 
                         # Create summary
-                        _log(f"\n[SUMMARIZER] Creating final summary...")
+                        _log(f"[PHASE] Summarizer starting")
                         self.send_to_webhook("Creating summary of results...")
 
                         summary, summarizer_stats = agent.create_summary(on_event=streaming_event)
+                        _log(f"[PHASE] Summarizer finished")
                         _record_phase("summarizer", summarizer_stats)
 
                         # Log summary creation
@@ -1565,6 +1607,10 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
 
         _log(f"Worker started for user: {self.current_user_id}")
         _log(f"Current version: {self._my_version}")
+
+        # Clean up any tasks left in Running from a previous crash
+        self._cleanup_orphaned_tasks()
+
         _log("\n[POLLING] Monitoring for pending tasks...\n")
 
         # Send startup notification
@@ -1624,11 +1670,13 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
                     # Poll every 10 seconds (autonomous agent takes longer)
                     time.sleep(10)
 
-                except Exception as e:
-                    _log(f"\n[ERROR] Unexpected error in worker loop: {e}")
+                except KeyboardInterrupt:
+                    raise  # Let KeyboardInterrupt propagate to outer handler
+                except BaseException as e:
+                    _log(f"\n[ERROR] Unexpected error in worker loop: {type(e).__name__}: {e}")
                     self._cleanup_in_progress_task(f"Worker loop error: {e}")
                     try:
-                        self.send_to_webhook(f"Worker error (recovering): {e}")
+                        self.send_to_webhook(f"Worker error (recovering): {type(e).__name__}: {e}")
                     except Exception:
                         pass
                     time.sleep(60)
@@ -1656,6 +1704,62 @@ Full transcript saved in Dataverse (Task ID: {task_id})"""
             )
             self.current_task_id = None
 
+    def _cleanup_orphaned_tasks(self):
+        """On startup, find tasks stuck in Running on this dev box and fail them.
+
+        This handles the case where the Worker process crashed or was killed
+        mid-task. Without this, orphaned tasks stay in Running forever.
+        """
+        headers = self._get_headers()
+        if not headers:
+            return
+
+        url = f"{DATAVERSE_URL}/api/data/v9.2/{TABLE}"
+        params = {
+            "$filter": (
+                f"cr_status eq {_STATUS_INT[STATUS_RUNNING]}"
+                f" and crb3b_devbox eq '{MACHINE_NAME}'"
+            ),
+            "$select": "cr_shraga_taskid,cr_name",
+        }
+
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            orphans = response.json().get("value", [])
+        except Exception as e:
+            _log(f"[WARN] Could not check for orphaned tasks: {e}")
+            return
+
+        for task in orphans:
+            tid = task.get("cr_shraga_taskid")
+            tname = task.get("cr_name", "Unknown")
+            _log(f"[CLEANUP] Orphaned task found: {tname} ({tid}) -- marking as failed")
+            self.update_task(
+                tid,
+                status=STATUS_FAILED,
+                status_message="Worker crashed or restarted -- task was orphaned",
+                result="Error: Worker process died while executing this task. The task was left in Running state and has been marked as failed on restart."
+            )
+            try:
+                self.send_to_webhook(f"Orphaned task cleaned up on restart: {tname} ({tid[:8]})")
+            except Exception:
+                pass
+
 if __name__ == "__main__":
-    worker = IntegratedTaskWorker()
-    worker.run()
+    try:
+        worker = IntegratedTaskWorker()
+        worker.run()
+    except KeyboardInterrupt:
+        _log("[SHUTDOWN] Worker stopped by user (Ctrl+C)")
+    except BaseException as e:
+        # Last-resort logging before the process dies.
+        # Capture as much context as possible for post-mortem debugging.
+        import traceback
+        tb = traceback.format_exc()
+        _log(f"[FATAL] Worker process dying: {type(e).__name__}: {e}")
+        _log(f"[FATAL] Traceback:\n{tb}")
+        _log(f"[FATAL] Version: {getattr(worker, '_my_version', 'unknown') if 'worker' in dir() else 'unknown'}")
+        _log(f"[FATAL] Current task: {getattr(worker, 'current_task_id', 'none') if 'worker' in dir() else 'unknown'}")
+        _log(f"[FATAL] Machine: {MACHINE_NAME}")
+        sys.exit(1)

@@ -83,20 +83,11 @@ class TestWorkerLoop:
         assert isinstance(phase_stats, dict)
 
     @patch.object(AgentCLI, "call_claude")
-    def test_returns_blocked_when_status_blocked(self, mock_call, tmp_path, monkeypatch):
-        cli = self._make_cli(tmp_path, monkeypatch)
-        mock_call.return_value = {"result": "Need credentials.\n\nSTATUS: blocked - Missing API key"}
-        status, output, phase_stats = cli.worker_loop(1)
-        assert status == "blocked"
-        assert "Missing API key" in output
-        assert isinstance(phase_stats, dict)
-
-    @patch.object(AgentCLI, "call_claude")
-    def test_defaults_to_blocked_on_unclear(self, mock_call, tmp_path, monkeypatch):
+    def test_defaults_to_done_on_unclear(self, mock_call, tmp_path, monkeypatch):
         cli = self._make_cli(tmp_path, monkeypatch)
         mock_call.return_value = {"result": "I'm not sure what to do"}
         status, output, _stats = cli.worker_loop(1)
-        assert status == "blocked"
+        assert status == "done"
 
     @patch.object(AgentCLI, "call_claude")
     def test_passes_verifier_feedback(self, mock_call, tmp_path, monkeypatch):
@@ -246,27 +237,6 @@ class TestCreateSummary:
         result, phase_stats = cli.create_summary()
         assert "Summarizer raw output" in result
         assert isinstance(phase_stats, dict)
-
-
-# ===========================================================================
-# contact_user
-# ===========================================================================
-
-class TestContactUser:
-
-    def test_creates_response_file(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        cli = AgentCLI()
-        cli.setup_project("T", "C")
-
-        # Simulate user input
-        monkeypatch.setattr("builtins.input", MagicMock(side_effect=["My answer", EOFError]))
-        response = cli.contact_user("Need API key")
-
-        assert "My answer" in response
-        # Check response file was created
-        response_files = list(cli.project_folder.glob("user_response_*.md"))
-        assert len(response_files) == 1
 
 
 # ===========================================================================

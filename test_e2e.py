@@ -339,7 +339,7 @@ class TestE2ETaskProcessing:
         worker = worker_mod.IntegratedTaskWorker()
 
         with patch.object(worker, "execute_with_autonomous_agent") as mock_exec:
-            mock_exec.return_value = (False, "Blocked: Need API key", "transcript", {})
+            mock_exec.return_value = (False, "Failed: Need API key", "transcript", {})
 
             task = {
                 "cr_shraga_taskid": "task-e2e-002",
@@ -461,7 +461,7 @@ class TestE2EErrorHandling:
         assert orch.get_current_user() is None
 
     def test_worker_handles_no_token(self, monkeypatch, tmp_path):
-        """Worker degrades gracefully without token"""
+        """Worker exits when token cannot be obtained (scheduler restarts it)"""
         _, worker_mod, mock_cred = _import_modules(monkeypatch, tmp_path)
         mock_cred.get_token.side_effect = Exception("Auth failed")
 
@@ -469,8 +469,10 @@ class TestE2EErrorHandling:
         worker._token_cache = None
         worker._token_expires = None
 
-        assert worker.get_token() is None
-        assert worker.poll_pending_tasks() == []
+        import pytest
+        with pytest.raises(SystemExit) as exc_info:
+            worker.get_token()
+        assert exc_info.value.code == 1
 
     @patch("orchestrator.requests.get")
     def test_orchestrator_handles_dataverse_error(self, mock_get, monkeypatch, tmp_path):

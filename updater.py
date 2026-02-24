@@ -17,12 +17,39 @@ import subprocess
 import sys
 import re
 import os
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from datetime import datetime
 
 SHRAGA_ROOT = Path(os.environ.get("SHRAGA_ROOT", os.path.join("C:", os.sep, "Dev", "Shraga")))
 RELEASES_DIR = SHRAGA_ROOT / "releases"
 VERSION_FILE = SHRAGA_ROOT / "current_version.txt"
 REPO_URL = "https://github.com/ShragaBot/ShragaBot.git"
+
+# --- File logging ---
+_LOG_FILE = Path(__file__).parent / "updater.log"
+
+_file_logger = logging.getLogger("shraga_updater")
+_file_logger.setLevel(logging.DEBUG)
+_file_handler = RotatingFileHandler(
+    str(_LOG_FILE),
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=5,
+    encoding="utf-8",
+)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_file_logger.addHandler(_file_handler)
+
+
+def _log(msg: str):
+    """Print with timestamp to console AND write to log file."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}")
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass  # Never let logging crash the service
 
 
 def get_current_version() -> str:
@@ -43,7 +70,7 @@ def get_latest_release() -> str | None:
             capture_output=True, text=True, timeout=30
         )
         if result.returncode != 0:
-            print(f"[WARN] git ls-remote failed: {result.stderr.strip()}")
+            _log(f"[WARN] git ls-remote failed: {result.stderr.strip()}")
             return None
 
         versions = []
@@ -57,10 +84,10 @@ def get_latest_release() -> str | None:
 
         return f"v{max(versions)}"
     except subprocess.TimeoutExpired:
-        print("[WARN] git ls-remote timed out")
+        _log("[WARN] git ls-remote timed out")
         return None
     except Exception as e:
-        print(f"[WARN] get_latest_release failed: {e}")
+        _log(f"[WARN] get_latest_release failed: {e}")
         return None
 
 
@@ -88,14 +115,14 @@ def deploy_release(version: str) -> bool:
     release_dir = RELEASES_DIR / version
     sentinel = release_dir / ".deploy_complete"
     if sentinel.exists():
-        print(f"[UPDATE] Release {version} already deployed at {release_dir}")
+        _log(f"[UPDATE] Release {version} already deployed at {release_dir}")
         return True
     # Clean up any partial/failed deploy
     if release_dir.exists():
         import shutil
         shutil.rmtree(release_dir, ignore_errors=True)
 
-    print(f"[UPDATE] Deploying {version}...")
+    _log(f"[UPDATE] Deploying {version}...")
     RELEASES_DIR.mkdir(parents=True, exist_ok=True)
 
     # Download zip from GitHub and extract (no git clone, no .git directory)
@@ -108,7 +135,7 @@ def deploy_release(version: str) -> bool:
             capture_output=True, text=True, timeout=120
         )
         if result.returncode != 0 or not zip_path.exists() or zip_path.stat().st_size < 1000:
-            print(f"[ERROR] Download failed: {result.stderr.strip()}")
+            _log(f"[ERROR] Download failed: {result.stderr.strip()}")
             return False
 
         # Extract — GitHub zips have a top-level folder like ShragaBot-release-v1/
@@ -127,7 +154,7 @@ def deploy_release(version: str) -> bool:
             if extract_dir.exists():
                 shutil.rmtree(extract_dir, ignore_errors=True)
     except Exception as e:
-        print(f"[ERROR] Deploy failed: {e}")
+        _log(f"[ERROR] Deploy failed: {e}")
         if release_dir.exists():
             shutil.rmtree(release_dir, ignore_errors=True)
         return False
@@ -137,7 +164,7 @@ def deploy_release(version: str) -> bool:
 
     # Install dependencies
     py = find_python()
-    print(f"[UPDATE] Installing dependencies with {py}...")
+    _log(f"[UPDATE] Installing dependencies with {py}...")
     subprocess.run(
         [py, "-m", "ensurepip", "--upgrade"],
         capture_output=True, text=True, timeout=60,
@@ -150,39 +177,39 @@ def deploy_release(version: str) -> bool:
         cwd=str(release_dir)
     )
     if pip_result.returncode != 0:
-        print(f"[WARN] pip install issues: {pip_result.stderr[:200]}")
+        _log(f"[WARN] pip install issues: {pip_result.stderr[:200]}")
 
     # Mark deployment as complete (sentinel file for partial-deploy detection)
     sentinel.write_text(version)
-    print(f"[UPDATE] Release {version} deployed to {release_dir}")
+    _log(f"[UPDATE] Release {version} deployed to {release_dir}")
     return True
 
 
 def update_version_file(version: str):
     """Write the current version file. Services will detect this change and restart."""
     VERSION_FILE.write_text(version)
-    print(f"[UPDATE] current_version.txt updated to: {version}")
+    _log(f"[UPDATE] current_version.txt updated to: {version}")
 
 
 def main():
-    print("[UPDATER] Checking for new releases...")
+    _log("[UPDATER] Checking for new releases...")
 
     latest = get_latest_release()
     if not latest:
-        print("[UPDATER] No release branches found")
+        _log("[UPDATER] No release branches found")
         return
 
     current = get_current_version()
     if current == latest:
         return  # Up to date, silent
 
-    print(f"[UPDATER] New release available: {latest} (current: {current or 'none'})")
+    _log(f"[UPDATER] New release available: {latest} (current: {current or 'none'})")
 
     if deploy_release(latest):
         update_version_file(latest)
-        print(f"[UPDATER] Update complete. Services will restart with {latest}.")
+        _log(f"[UPDATER] Update complete. Services will restart with {latest}.")
     else:
-        print(f"[ERROR] Failed to deploy {latest}")
+        _log(f"[ERROR] Failed to deploy {latest}")
 
 
 if __name__ == "__main__":

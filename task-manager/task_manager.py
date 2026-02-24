@@ -1,6 +1,8 @@
 """PM thin wrapper: DV I/O + session persistence + stale detection.
 Claude Code handles all task management autonomously via CLAUDE.md."""
 import platform, requests, json, time, os, sys, subprocess, uuid
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from azure.identity import DefaultAzureCredential
@@ -12,11 +14,29 @@ os.environ.setdefault('DEVBOX_HOSTNAME', platform.node())
 
 INSTANCE_ID = uuid.uuid4().hex[:8]
 
+# --- File logging ---
+_LOG_FILE = Path(__file__).parent / "pm.log"
+
+_file_logger = logging.getLogger("shraga_pm")
+_file_logger.setLevel(logging.DEBUG)
+_file_handler = RotatingFileHandler(
+    str(_LOG_FILE),
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=5,
+    encoding="utf-8",
+)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_file_logger.addHandler(_file_handler)
+
 
 def _log(msg: str):
-    """Print with timestamp prefix."""
+    """Print with timestamp to console AND write to log file."""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {msg}")
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass  # Never let logging crash the service
 DV_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynamics.com")
 DV_API = f"{DV_URL}/api/data/v9.2"
 CONV_TBL = os.environ.get("CONVERSATIONS_TABLE", "cr_shraga_conversations")

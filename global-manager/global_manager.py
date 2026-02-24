@@ -22,6 +22,7 @@ Code is completely unavailable:
     "The system is temporarily unavailable, please try again shortly."
 """
 import logging
+from logging.handlers import RotatingFileHandler
 import requests
 import json
 import time
@@ -38,6 +39,30 @@ os.environ.setdefault('PYTHONUNBUFFERED', '1')
 
 # Unique instance ID for this process (helps distinguish multiple GM instances)
 INSTANCE_ID = uuid.uuid4().hex[:8]
+
+# --- File logging ---
+_LOG_FILE = Path(__file__).parent / "gm.log"
+
+_file_logger = logging.getLogger("shraga_gm")
+_file_logger.setLevel(logging.DEBUG)
+_file_handler = RotatingFileHandler(
+    str(_LOG_FILE),
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=5,
+    encoding="utf-8",
+)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_file_logger.addHandler(_file_handler)
+
+
+def _log(msg: str):
+    """Print with timestamp to console AND write to log file."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}")
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass  # Never let logging crash the service
 
 DATAVERSE_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynamics.com")
 DATAVERSE_API = f"{DATAVERSE_URL}/api/data/v9.2"
@@ -76,7 +101,7 @@ def get_credential():
     """
     cred = DefaultAzureCredential()
     cred.get_token(f"{DATAVERSE_URL}/.default")
-    print("[AUTH] Using existing Azure credentials")
+    _log("[AUTH] Using existing Azure credentials")
     return cred
 
 
@@ -145,14 +170,14 @@ class SessionManager:
         }
         self._save()
         if is_new:
-            print(f"[SESSIONS] New session {session_id[:8]}... for {conversation_id[:20]}...")
+            _log(f"[SESSIONS] New session {session_id[:8]}... for {conversation_id[:20]}...")
 
     def forget(self, conversation_id: str):
         """Remove a session (e.g. after resume failure)."""
         if conversation_id in self._sessions:
             old = self._sessions.pop(conversation_id)
             self._save()
-            print(f"[SESSIONS] Forgot session {old['session_id'][:8]}... for {conversation_id[:20]}...")
+            _log(f"[SESSIONS] Forgot session {old['session_id'][:8]}... for {conversation_id[:20]}...")
 
     def cleanup_expired(self, max_age_hours: int | None = None):
         """Remove sessions older than max_age_hours (default SESSION_EXPIRY_HOURS).
@@ -210,9 +235,9 @@ class GlobalManager:
         prompt_file = Path(__file__).parent / "GM_SYSTEM_PROMPT.md"
         self._system_prompt_file = str(prompt_file) if prompt_file.exists() else ""
         if self._system_prompt_file:
-            print(f"[CONFIG] System prompt: {prompt_file} ({prompt_file.stat().st_size} bytes)")
+            _log(f"[CONFIG] System prompt: {prompt_file} ({prompt_file.stat().st_size} bytes)")
         else:
-            print(f"[WARN] No system prompt found at {prompt_file}")
+            _log(f"[WARN] No system prompt found at {prompt_file}")
 
     # ── Auth ──────────────────────────────────────────────────────────
 
@@ -229,7 +254,7 @@ class GlobalManager:
             )
             return self._token_cache
         except Exception as e:
-            print(f"[ERROR] Getting token: {e}")
+            _log(f"[ERROR] Getting token: {e}")
             return None
 
     def _headers(self, content_type=None, etag=None):
@@ -318,10 +343,10 @@ class GlobalManager:
 
             return claimable
         except requests.exceptions.Timeout:
-            print("[WARN] poll_stale_unclaimed timed out")
+            _log("[WARN] poll_stale_unclaimed timed out")
             return []
         except Exception as e:
-            print(f"[ERROR] poll_stale_unclaimed: {e}")
+            _log(f"[ERROR] poll_stale_unclaimed: {e}")
             return []
 
     def claim_message(self, msg: dict) -> bool:
@@ -344,7 +369,7 @@ class GlobalManager:
             resp.raise_for_status()
             return True
         except Exception as e:
-            print(f"[ERROR] claim_message: {e}")
+            _log(f"[ERROR] claim_message: {e}")
             return False
 
     def mark_processed(self, row_id: str):
@@ -358,9 +383,9 @@ class GlobalManager:
                 json={"cr_status": STATUS_PROCESSED},
                 timeout=REQUEST_TIMEOUT,
             )
-            print(f"[DV] Marked {row_id[:8]} as Processed")
+            _log(f"[DV] Marked {row_id[:8]} as Processed")
         except Exception as e:
-            print(f"[WARN] mark_processed failed: {e}")
+            _log(f"[WARN] mark_processed failed: {e}")
 
     def send_response(self, in_reply_to: str, mcs_conversation_id: str,
                       user_email: str, text: str, followup_expected: bool = False):
@@ -381,12 +406,12 @@ class GlobalManager:
             url = f"{DATAVERSE_API}/{CONVERSATIONS_TABLE}"
             resp = requests.post(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
             resp.raise_for_status()
-            print(f"[DV] Wrote outbound response to {user_email} (reply_to={in_reply_to[:8]}): \"{text[:60]}...\"")
+            _log(f"[DV] Wrote outbound response to {user_email} (reply_to={in_reply_to[:8]}): \"{text[:60]}...\"")
             if resp.status_code == 204 or not resp.content:
                 return True
             return resp.json()
         except Exception as e:
-            print(f"[ERROR] send_response: {e}")
+            _log(f"[ERROR] send_response: {e}")
             return None
 
     # ── Claude Code Session ──────────────────────────────────────────
@@ -416,12 +441,12 @@ class GlobalManager:
             try:
                 stdout, stderr = proc.communicate(timeout=120)
             except subprocess.TimeoutExpired:
-                print("[WARN] Claude Code timed out -- killing process")
+                _log("[WARN] Claude Code timed out -- killing process")
                 proc.kill()
                 proc.communicate()  # reap
                 return None, ""
             if proc.returncode != 0:
-                print(f"[WARN] Claude Code failed (rc={proc.returncode}): {stderr[:300]}")
+                _log(f"[WARN] Claude Code failed (rc={proc.returncode}): {stderr[:300]}")
                 return None, ""
             raw = stdout.strip()
             if not raw:
@@ -431,20 +456,20 @@ class GlobalManager:
             except json.JSONDecodeError:
                 return raw, ""
             if data.get("is_error"):
-                print(f"[WARN] Claude error: {data.get('result', '')[:200]}")
+                _log(f"[WARN] Claude error: {data.get('result', '')[:200]}")
                 return None, ""
             resp = data.get("result", "")
             new_sid = data.get("session_id", "")
             # Guard: if Claude returned raw JSON tool_calls, discard
             if resp and resp.strip().startswith('{"tool_calls"'):
-                print("[WARN] Claude returned raw tool_calls JSON - discarding")
+                _log("[WARN] Claude returned raw tool_calls JSON - discarding")
                 return None, new_sid
             return resp, new_sid
         except FileNotFoundError:
-            print("[WARN] Claude Code CLI not found")
+            _log("[WARN] Claude Code CLI not found")
             return None, ""
         except Exception as e:
-            print(f"[ERROR] _call_claude_code: {e}")
+            _log(f"[ERROR] _call_claude_code: {e}")
             return None, ""
 
     # ── Message Processing ───────────────────────────────────────────
@@ -464,7 +489,7 @@ class GlobalManager:
             self.mark_processed(row_id)
             return
 
-        print(f"[GLOBAL] Processing orphaned message from {user_email}: {user_text[:80]}...")
+        _log(f"[GLOBAL] Processing orphaned message from {user_email}: {user_text[:80]}...")
 
         # Look up existing session (None if first message in this conversation)
         existing = self.session_manager.get_session(mcs_conv_id)
@@ -486,7 +511,7 @@ class GlobalManager:
 
         # If resume failed, retry without session
         if response is None and session_id:
-            print(f"[SESSIONS] Resume failed for {session_id[:8]}..., starting fresh")
+            _log(f"[SESSIONS] Resume failed for {session_id[:8]}..., starting fresh")
             self.session_manager.forget(mcs_conv_id)
             response, new_sid = self._call_claude_code(prompt, session_id=None)
 
@@ -497,7 +522,7 @@ class GlobalManager:
         if new_sid and mcs_conv_id:
             self.session_manager.save_session(mcs_conv_id, new_sid, user_email)
 
-        print(f"[PROCESS] Finished processing {row_id[:8]}. Sending response ({len(response)} chars)...")
+        _log(f"[PROCESS] Finished processing {row_id[:8]}. Sending response ({len(response)} chars)...")
         self.send_response(
             in_reply_to=row_id,
             mcs_conversation_id=mcs_conv_id,
@@ -505,7 +530,7 @@ class GlobalManager:
             text=response,
         )
         self.mark_processed(row_id)
-        print(f"[PROCESS] Done with {row_id[:8]}")
+        _log(f"[PROCESS] Done with {row_id[:8]}")
 
     # ── Main Loop ─────────────────────────────────────────────────────
 
@@ -513,13 +538,13 @@ class GlobalManager:
         if sys.platform == "win32":
             sys.stdout.reconfigure(encoding='utf-8')
             sys.stderr.reconfigure(encoding='utf-8')
-        print(f"[START] Global Manager (thin wrapper) | instance={INSTANCE_ID} | pid={os.getpid()}")
-        print(f"[CONFIG] Dataverse: {DATAVERSE_URL}")
-        print(f"[CONFIG] Users table: {USERS_TABLE}")
-        print(f"[CONFIG] Claim delay: new users={CLAIM_DELAY_NEW_USER}s, known users={CLAIM_DELAY_KNOWN_USER}s")
-        print(f"[CONFIG] Poll interval: {POLL_INTERVAL}s")
-        print(f"[CONFIG] Session expiry: {SESSION_EXPIRY_HOURS}h")
-        print(f"[CONFIG] Sessions file: {SESSIONS_FILE}")
+        _log(f"[START] Global Manager (thin wrapper) | instance={INSTANCE_ID} | pid={os.getpid()}")
+        _log(f"[CONFIG] Dataverse: {DATAVERSE_URL}")
+        _log(f"[CONFIG] Users table: {USERS_TABLE}")
+        _log(f"[CONFIG] Claim delay: new users={CLAIM_DELAY_NEW_USER}s, known users={CLAIM_DELAY_KNOWN_USER}s")
+        _log(f"[CONFIG] Poll interval: {POLL_INTERVAL}s")
+        _log(f"[CONFIG] Session expiry: {SESSION_EXPIRY_HOURS}h")
+        _log(f"[CONFIG] Sessions file: {SESSIONS_FILE}")
 
         cleanup_counter = 0
 
@@ -533,19 +558,19 @@ class GlobalManager:
 
                 messages = self.poll_stale_unclaimed()
                 if messages:
-                    print(f"[POLL] Found {len(messages)} unclaimed message(s)")
+                    _log(f"[POLL] Found {len(messages)} unclaimed message(s)")
                 for msg in messages:
                     row_id = msg.get("cr_shraga_conversationid", "?")[:8]
                     user_email = msg.get("cr_useremail", "?")
                     user_text = (msg.get("cr_message", "") or "")[:50]
-                    print(f"[CLAIM] Attempting to claim {row_id} from {user_email}: \"{user_text}\"")
+                    _log(f"[CLAIM] Attempting to claim {row_id} from {user_email}: \"{user_text}\"")
                     if self.claim_message(msg):
-                        print(f"[CLAIM] Claimed {row_id} successfully")
+                        _log(f"[CLAIM] Claimed {row_id} successfully")
                         try:
                             self.process_message(msg)
                         except Exception as e:
                             row_id = msg.get("cr_shraga_conversationid", "?")
-                            print(f"[ERROR] Processing message {row_id}: {e}")
+                            _log(f"[ERROR] Processing message {row_id}: {e}")
                             try:
                                 self.send_response(
                                     in_reply_to=row_id,
@@ -560,10 +585,10 @@ class GlobalManager:
                 time.sleep(POLL_INTERVAL)
 
             except KeyboardInterrupt:
-                print("\n[STOP] Shutting down.")
+                _log("[STOP] Shutting down.")
                 break
             except Exception as e:
-                print(f"[ERROR] Main loop: {e}")
+                _log(f"[ERROR] Main loop: {e}")
                 time.sleep(POLL_INTERVAL * 2)
 
 

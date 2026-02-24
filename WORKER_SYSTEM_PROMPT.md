@@ -67,7 +67,6 @@ The worker agent executes the task using Claude Code CLI with `--dangerously-ski
 
 The worker must end its response with one of:
 - `STATUS: done` -- task complete, ready for verification
-- `STATUS: blocked - <reason>` -- needs user input
 
 ### Verifier Phase (`AgentCLI.verify_work()`)
 
@@ -103,8 +102,6 @@ Iteration 2:
 
   -> Summarizer creates SUMMARY.md -> Pipeline completes
 ```
-
-If the worker returns `STATUS: blocked`, the task is set to `STATUS_FAILED` and the pipeline terminates with failure.
 
 If 10 iterations pass without approval, the task fails.
 
@@ -232,7 +229,6 @@ Each task gets an isolated session folder in OneDrive:
 
 Deprecated (kept in DV picklist for historical rows):
 - `"Queued"` (3) -- replaced by open competition routing
-- `"WaitingForInput"` (6) -- blocked tasks now fail directly
 
 ## Environment Variables
 

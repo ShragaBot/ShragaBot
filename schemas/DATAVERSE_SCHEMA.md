@@ -172,9 +172,8 @@ None (no formal Dataverse lookup relationships). References to other tables are 
 | 1 | Pending | Task created, waiting for worker pickup |
 | 3 | Queued | Task claimed but dev box is busy; waiting for current task to finish |
 | 5 | Running | Task is actively executing on the worker |
-| 6 | Waiting for Input | Task blocked, needs user input |
 | 7 | Completed | Task finished successfully |
-| 8 | Failed | Task failed (error, timeout, or blocked) |
+| 8 | Failed | Task failed (error or timeout) |
 | 9 | Canceled | Task was canceled by user |
 
 **Note on gaps:** Values 2 and 4 are intentionally skipped. Value 3 (Queued) was added later for multi-devbox scheduling. The Power Automate flows use these exact integer values in their trigger filters.

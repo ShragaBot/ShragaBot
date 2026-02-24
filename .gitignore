@@ -2,3 +2,5 @@
 __pycache__/
 .integrated_worker_state.json
 .update.lock
+*.log
+*.log.*
