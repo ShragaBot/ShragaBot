@@ -115,31 +115,31 @@ class TestOrchestratorToken:
 
 class TestOrchestratorGetCurrentUser:
 
-    @patch("orchestrator.requests.get")
-    def test_success(self, mock_get, monkeypatch, tmp_path):
+    def test_success(self, monkeypatch, tmp_path):
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        orch = mod.Orchestrator()
+        orch.dv = MagicMock()
+        orch.dv.get.return_value = MagicMock(
             json=lambda: {"UserId": "admin-xyz"}
         )
-        orch = mod.Orchestrator()
         uid = orch.get_current_user()
         assert uid == "admin-xyz"
         assert orch.admin_user_id == "admin-xyz"
 
-    @patch("orchestrator.requests.get")
-    def test_failure(self, mock_get, monkeypatch, tmp_path):
+    def test_failure(self, monkeypatch, tmp_path):
+        from dv_client import DataverseError
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
-        mock_get.side_effect = Exception("Network error")
         orch = mod.Orchestrator()
+        orch.dv = MagicMock()
+        orch.dv.get.side_effect = DataverseError("Network error", 500, "")
         assert orch.get_current_user() is None
 
-    @patch("orchestrator.requests.get")
-    def test_timeout(self, mock_get, monkeypatch, tmp_path):
+    def test_timeout(self, monkeypatch, tmp_path):
+        from dv_client import DataverseRetryExhausted
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
-        import requests as req_lib
-        mock_get.side_effect = req_lib.exceptions.Timeout()
         orch = mod.Orchestrator()
+        orch.dv = MagicMock()
+        orch.dv.get.side_effect = DataverseRetryExhausted("timeout")
         assert orch.get_current_user() is None
 
 
@@ -207,43 +207,43 @@ class TestOrchestratorVersionManagement:
 
 class TestDiscoverUserTasks:
 
-    @patch("orchestrator.requests.get")
-    def test_discovers_tasks(self, mock_get, monkeypatch, tmp_path):
+    def test_discovers_tasks(self, monkeypatch, tmp_path):
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
         tasks = [
             {"cr_name": "Task1", "cr_shraga_taskid": "t1"},
             {"cr_name": "Task2", "cr_shraga_taskid": "t2"},
         ]
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        orch = mod.Orchestrator()
+        orch.dv = MagicMock()
+        orch.dv.get.return_value = MagicMock(
             json=lambda: {"value": tasks}
         )
-        orch = mod.Orchestrator()
         orch.admin_user_id = "admin-123"
         result = orch.discover_user_tasks()
         assert len(result) == 2
 
-    @patch("orchestrator.requests.get")
-    def test_returns_empty_on_error(self, mock_get, monkeypatch, tmp_path):
+    def test_returns_empty_on_error(self, monkeypatch, tmp_path):
+        from dv_client import DataverseError
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
-        mock_get.side_effect = Exception("Network error")
         orch = mod.Orchestrator()
+        orch.dv = MagicMock()
+        orch.dv.get.side_effect = DataverseError("Network error", 500, "")
         assert orch.discover_user_tasks() == []
 
-    @patch("orchestrator.requests.get")
-    def test_returns_empty_on_timeout(self, mock_get, monkeypatch, tmp_path):
+    def test_returns_empty_on_timeout(self, monkeypatch, tmp_path):
+        from dv_client import DataverseRetryExhausted
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
-        import requests as req_lib
-        mock_get.side_effect = req_lib.exceptions.Timeout()
         orch = mod.Orchestrator()
+        orch.dv = MagicMock()
+        orch.dv.get.side_effect = DataverseRetryExhausted("timeout")
         assert orch.discover_user_tasks() == []
 
-    def test_returns_empty_when_no_token(self, monkeypatch, tmp_path):
-        mod, mock_cred = _import_orchestrator(monkeypatch, tmp_path)
-        mock_cred.get_token.side_effect = Exception("Auth failed")
+    def test_returns_empty_when_auth_fails(self, monkeypatch, tmp_path):
+        from dv_client import DataverseRetryExhausted
+        mod, _ = _import_orchestrator(monkeypatch, tmp_path)
         orch = mod.Orchestrator()
-        orch._token_cache = None
-        orch._token_expires = None
+        orch.dv = MagicMock()
+        orch.dv.get.side_effect = DataverseRetryExhausted("Token acquisition failed")
         assert orch.discover_user_tasks() == []
 
 
@@ -253,20 +253,17 @@ class TestDiscoverUserTasks:
 
 class TestCreateAdminMirror:
 
-    @patch("orchestrator.requests.patch")
-    @patch("orchestrator.requests.post")
-    def test_creates_mirror_and_links(self, mock_post, mock_patch, monkeypatch, tmp_path):
+    def test_creates_mirror_and_links(self, monkeypatch, tmp_path):
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
 
+        orch = mod.Orchestrator()
+        orch.dv = MagicMock()
         # POST returns created mirror
-        mock_post.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        orch.dv.post.return_value = MagicMock(
             json=lambda: {"cr_shraga_taskid": "mirror-123"},
             headers={}
         )
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
-
-        orch = mod.Orchestrator()
+        orch.dv.patch.return_value = MagicMock()
         orch.admin_user_id = "admin-abc"
 
         user_task = {
@@ -278,12 +275,14 @@ class TestCreateAdminMirror:
         mirror_id = orch.create_admin_mirror(user_task)
         assert mirror_id == "mirror-123"
 
-    @patch("orchestrator.requests.post")
-    def test_returns_none_on_error(self, mock_post, monkeypatch, tmp_path):
+    def test_returns_none_on_error(self, monkeypatch, tmp_path):
+        from dv_client import DataverseError
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
-        mock_post.side_effect = Exception("Network error")
 
         orch = mod.Orchestrator()
+        orch.dv = MagicMock()
+        orch.dv.post.side_effect = DataverseError("Network error", 500, "")
+
         user_task = {
             "cr_shraga_taskid": "user-task-1",
             "cr_name": "Test",
@@ -296,25 +295,23 @@ class TestCreateAdminMirror:
         orch = mod.Orchestrator()
         assert orch.create_admin_mirror({}) is None
 
-    @patch("orchestrator.requests.post")
-    def test_extracts_id_from_odata_header(self, mock_post, monkeypatch, tmp_path):
+    def test_extracts_id_from_odata_header(self, monkeypatch, tmp_path):
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
+        orch = mod.Orchestrator()
+        orch.dv = MagicMock()
         # Response body doesn't have ID, but header does
-        mock_post.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        orch.dv.post.return_value = MagicMock(
             json=lambda: {},
             headers={"OData-EntityId": "https://org.crm.dynamics.com/api/data/v9.2/tasks(header-mirror-id)"}
         )
-        orch = mod.Orchestrator()
+        orch.dv.patch.return_value = MagicMock()
+
         user_task = {
             "cr_shraga_taskid": "user-task-1",
             "cr_name": "Test",
             "cr_prompt": "",
         }
-        # Need to also mock the PATCH for linking
-        with patch("orchestrator.requests.patch") as mock_patch:
-            mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
-            mirror_id = orch.create_admin_mirror(user_task)
+        mirror_id = orch.create_admin_mirror(user_task)
         assert mirror_id == "header-mirror-id"
 
 
@@ -324,22 +321,23 @@ class TestCreateAdminMirror:
 
 class TestOrchestratorUpdateTask:
 
-    @patch("orchestrator.requests.patch")
-    def test_update_with_friendly_names(self, mock_patch, monkeypatch, tmp_path):
+    def test_update_with_friendly_names(self, monkeypatch, tmp_path):
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
         orch = mod.Orchestrator()
+        orch.dv = MagicMock()
         result = orch.update_task("task-1", status="Running", assigned_worker_id="w-1")
         assert result is True
-        sent_data = mock_patch.call_args[1]["json"]
+        # dv.patch(url, data) -- data is positional arg [1]
+        sent_data = orch.dv.patch.call_args[0][1]
         assert sent_data["cr_status"] == 5  # Running (integer picklist)
         assert sent_data["cr_assignedworkerid"] == "w-1"
 
-    @patch("orchestrator.requests.patch")
-    def test_returns_false_on_error(self, mock_patch, monkeypatch, tmp_path):
+    def test_returns_false_on_error(self, monkeypatch, tmp_path):
+        from dv_client import DataverseError
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
-        mock_patch.side_effect = Exception("Error")
         orch = mod.Orchestrator()
+        orch.dv = MagicMock()
+        orch.dv.patch.side_effect = DataverseError("Error", 500, "")
         assert orch.update_task("task-1", status="Running") is False
 
     def test_returns_false_with_empty_id(self, monkeypatch, tmp_path):
@@ -348,20 +346,19 @@ class TestOrchestratorUpdateTask:
         assert orch.update_task("", status="Running") is False
         assert orch.update_task(None, status="Running") is False
 
-    @patch("orchestrator.requests.patch")
-    def test_returns_false_with_no_fields(self, mock_patch, monkeypatch, tmp_path):
+    def test_returns_false_with_no_fields(self, monkeypatch, tmp_path):
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
         orch = mod.Orchestrator()
         # All None values
         assert orch.update_task("task-1", status=None) is False
 
-    @patch("orchestrator.requests.patch")
-    def test_skips_none_values(self, mock_patch, monkeypatch, tmp_path):
+    def test_skips_none_values(self, monkeypatch, tmp_path):
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
         orch = mod.Orchestrator()
+        orch.dv = MagicMock()
         orch.update_task("task-1", status="Running", assigned_worker_id=None)
-        sent_data = mock_patch.call_args[1]["json"]
+        # dv.patch(url, data) -- data is positional arg [1]
+        sent_data = orch.dv.patch.call_args[0][1]
         assert "cr_assignedworkerid" not in sent_data
 
 
@@ -403,11 +400,10 @@ class TestGetNextWorker:
 
 class TestAssignToWorker:
 
-    @patch("orchestrator.requests.patch")
-    def test_assign_success(self, mock_patch, monkeypatch, tmp_path):
+    def test_assign_success(self, monkeypatch, tmp_path):
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
         orch = mod.Orchestrator()
+        orch.dv = MagicMock()
         orch.shared_workers = ["w1"]
         result = orch.assign_to_worker("mirror-1", "user-1")
         assert result is True
@@ -434,15 +430,14 @@ class TestAssignToWorker:
 class TestProcessNewTasks:
 
     @patch("orchestrator.time.sleep")
-    @patch("orchestrator.requests.patch")
-    @patch("orchestrator.requests.post")
-    @patch("orchestrator.requests.get")
-    def test_full_pipeline(self, mock_get, mock_post, mock_patch, mock_sleep, monkeypatch, tmp_path):
+    def test_full_pipeline(self, mock_sleep, monkeypatch, tmp_path):
         mod, _ = _import_orchestrator(monkeypatch, tmp_path)
 
+        orch = mod.Orchestrator()
+        orch.dv = MagicMock()
+
         # discover returns 1 task
-        mock_get.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        orch.dv.get.return_value = MagicMock(
             json=lambda: {"value": [{
                 "cr_shraga_taskid": "user-task-1",
                 "cr_name": "Test",
@@ -451,24 +446,22 @@ class TestProcessNewTasks:
             }]}
         )
         # create_admin_mirror POST
-        mock_post.return_value = MagicMock(
-            raise_for_status=MagicMock(),
+        orch.dv.post.return_value = MagicMock(
             json=lambda: {"cr_shraga_taskid": "mirror-1"},
             headers={}
         )
         # update_task PATCHes
-        mock_patch.return_value = MagicMock(raise_for_status=MagicMock())
+        orch.dv.patch.return_value = MagicMock()
 
-        orch = mod.Orchestrator()
         orch.admin_user_id = "admin-1"
         orch.shared_workers = ["w1", "w2"]
 
         orch.process_new_tasks()
 
         # POST was called (mirror creation)
-        assert mock_post.called
+        assert orch.dv.post.called
         # PATCH was called (link + assign)
-        assert mock_patch.called
+        assert orch.dv.patch.called
 
 
 # ===========================================================================
