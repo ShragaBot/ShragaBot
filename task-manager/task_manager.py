@@ -149,7 +149,7 @@ class TaskManager:
         try:
             r = self.dv.get(f"{DV_API}/{CONV_TBL}?$filter=cr_useremail eq '{self.user_email}'"
                 f" and cr_direction eq '{DIR_IN}' and cr_status eq '{ST_UNCLAIMED}'"
-                f"&$orderby=createdon asc&$top=10", timeout=REQ_TMO)
+                f"&$orderby=createdon asc&$top=1", timeout=REQ_TMO)
             m = r.json().get("value", [])
             if m: _log(f"[POLL] Found {len(m)} unclaimed message(s) for {self.user_email}")
             return m
@@ -226,7 +226,7 @@ class TaskManager:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env=env, cwd=cwd, encoding="utf-8", errors="replace")
         try:
-            stdout, stderr = proc.communicate(timeout=300)
+            stdout, stderr = proc.communicate(timeout=60)
         except subprocess.TimeoutExpired:
             _log("[WARN] Claude CLI timed out -- killing process")
             proc.kill()
