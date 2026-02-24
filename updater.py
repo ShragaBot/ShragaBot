@@ -172,7 +172,7 @@ def deploy_release(version: str) -> bool:
     )
     pip_result = subprocess.run(
         [py, "-m", "pip", "install", "--quiet", "--upgrade",
-         "requests", "azure-identity", "azure-core", "watchdog"],
+         "-r", str(release_dir / "requirements.txt")],
         capture_output=True, text=True, timeout=120,
         cwd=str(release_dir)
     )

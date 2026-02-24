@@ -1,3 +1,4 @@
 requests
 azure-identity
 azure-core
+watchdog
