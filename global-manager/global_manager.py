@@ -35,6 +35,9 @@ from datetime import datetime, timezone, timedelta
 from azure.identity import DefaultAzureCredential
 from azure.core.credentials import AccessToken
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from timeout_utils import call_with_timeout
+
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 
 # Unique instance ID for this process (helps distinguish multiple GM instances)
@@ -100,7 +103,16 @@ def get_credential():
     environment variables.  Returns a ``DefaultAzureCredential`` instance.
     """
     cred = DefaultAzureCredential()
-    cred.get_token(f"{DATAVERSE_URL}/.default")
+    try:
+        call_with_timeout(
+            lambda: cred.get_token(f"{DATAVERSE_URL}/.default"),
+            timeout_sec=30,
+            description="initial credential.get_token()"
+        )
+    except TimeoutError:
+        _log("[FATAL] Initial credential.get_token() timed out after 30s. Exiting.")
+        _log("[HINT] Run: az login")
+        sys.exit(1)
     _log("[AUTH] Using existing Azure credentials")
     return cred
 
@@ -246,7 +258,15 @@ class GlobalManager:
             if self._token_cache and self._token_expires:
                 if datetime.now(timezone.utc) < self._token_expires:
                     return self._token_cache
-            token: AccessToken = self.credential.get_token(f"{DATAVERSE_URL}/.default")
+            try:
+                token: AccessToken = call_with_timeout(
+                    lambda: self.credential.get_token(f"{DATAVERSE_URL}/.default"),
+                    timeout_sec=30,
+                    description="credential.get_token()"
+                )
+            except TimeoutError:
+                _log("[FATAL] get_token() timed out after 30s -- Azure credential hung. Exiting.")
+                sys.exit(1)
             self._token_cache = token.token
             self._token_expires = (
                 datetime.fromtimestamp(token.expires_on, tz=timezone.utc)

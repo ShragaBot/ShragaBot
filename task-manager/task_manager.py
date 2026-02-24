@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 from azure.identity import DefaultAzureCredential
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from version_check import get_my_version, should_exit
+from timeout_utils import call_with_timeout
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 os.environ.setdefault('DEVBOX_HOSTNAME', platform.node())
@@ -154,11 +155,21 @@ class TaskManager:
         try:
             if self._token_cache and self._token_expires and datetime.now(timezone.utc) < self._token_expires:
                 return self._token_cache
-            t = self.credential.get_token(f"{DV_URL}/.default")
+            t = call_with_timeout(
+                lambda: self.credential.get_token(f"{DV_URL}/.default"),
+                timeout_sec=30,
+                description="credential.get_token()"
+            )
             self._token_cache = t.token
             self._token_expires = datetime.fromtimestamp(t.expires_on, tz=timezone.utc) - timedelta(minutes=5)
             return self._token_cache
-        except Exception as e: _log(f"[ERROR] Getting token: {e}"); return None
+        except TimeoutError:
+            _log("[FATAL] get_token() timed out after 30s -- Azure credential hung. Exiting.")
+            _log("[HINT] Run: az login")
+            sys.exit(1)
+        except Exception as e:
+            _log(f"[FATAL] Getting token failed: {e} -- Exiting.")
+            sys.exit(1)
 
     def _headers(self, content_type=None, etag=None):
         tok = self.get_token()

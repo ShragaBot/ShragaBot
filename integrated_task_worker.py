@@ -19,6 +19,7 @@ from azure.core.credentials import AccessToken
 # Import the autonomous agent system (from same directory as this file)
 sys.path.insert(0, str(Path(__file__).parent))
 from autonomous_agent import AgentCLI, extract_phase_stats, merge_phase_stats
+from timeout_utils import call_with_timeout
 
 import os
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
@@ -207,32 +208,16 @@ class IntegratedTaskWorker:
                 if datetime.now(timezone.utc) < self._token_expires:
                     return self._token_cache
 
-            # Get new token with timeout -- DefaultAzureCredential can hang
-            # indefinitely if auth providers are unresponsive or waiting for
-            # interactive input. Use a thread to enforce a hard 30s deadline.
-            import threading
-            token_result = [None]
-            token_error = [None]
-
-            def _fetch():
-                try:
-                    token_result[0] = self.credential.get_token(f"{DATAVERSE_URL}/.default")
-                except Exception as e:
-                    token_error[0] = e
-
-            t = threading.Thread(target=_fetch, daemon=True)
-            t.start()
-            t.join(timeout=30)
-
-            if t.is_alive():
+            try:
+                token = call_with_timeout(
+                    lambda: self.credential.get_token(f"{DATAVERSE_URL}/.default"),
+                    timeout_sec=30,
+                    description="credential.get_token()"
+                )
+            except TimeoutError:
                 _log("[FATAL] get_token() timed out after 30s -- Azure credential hung. Exiting.")
                 _log("[HINT] Run: az login")
                 sys.exit(1)
-
-            if token_error[0]:
-                raise token_error[0]
-
-            token = token_result[0]
 
             # Cache token (expire 5 minutes early to be safe)
             self._token_cache = token.token

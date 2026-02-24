@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
 from azure.identity import DefaultAzureCredential
 from dataclasses import dataclass
+from timeout_utils import call_with_timeout
 
 # ---------------------------------------------------------------------------
 # Shared deployment URLs — centralised so every provisioning path references
@@ -71,9 +72,16 @@ class DevBoxManager:
             if datetime.now(timezone.utc) < self._token_expires:
                 return self._token_cache
 
-        token = self.credential.get_token("https://devcenter.azure.com/.default")
-        self._token_cache = token.token
-        self._token_expires = datetime.fromtimestamp(token.expires_on, tz=timezone.utc) - timedelta(minutes=5)
+        try:
+            token_obj = call_with_timeout(
+                lambda: self.credential.get_token("https://devcenter.azure.com/.default"),
+                timeout_sec=30,
+                description="devcenter credential.get_token()"
+            )
+        except TimeoutError:
+            raise RuntimeError("credential.get_token() timed out after 30s")
+        self._token_cache = token_obj.token
+        self._token_expires = datetime.fromtimestamp(token_obj.expires_on, tz=timezone.utc) - timedelta(minutes=5)
         return self._token_cache
 
     def _get_headers(self) -> Dict[str, str]:

@@ -108,10 +108,17 @@ def get_auth_header(
     # Try DefaultAzureCredential as a last resort
     try:
         from azure.identity import DefaultAzureCredential
+        from timeout_utils import call_with_timeout
 
         cred = DefaultAzureCredential()
-        access_token = cred.get_token(resource)
+        access_token = call_with_timeout(
+            lambda: cred.get_token(resource),
+            timeout_sec=30,
+            description="DefaultAzureCredential.get_token()"
+        )
         return {"Authorization": f"Bearer {access_token.token}"}
+    except TimeoutError:
+        logger.warning("DefaultAzureCredential.get_token() timed out after 30s")
     except Exception as exc:
         logger.debug("DefaultAzureCredential failed: %s", exc)
 

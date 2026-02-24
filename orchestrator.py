@@ -22,6 +22,7 @@ from typing import Optional, List, Dict, Any
 from azure.identity import DefaultAzureCredential
 from azure.core.credentials import AccessToken
 import os
+from timeout_utils import call_with_timeout
 
 # Import Dev Box manager
 try:
@@ -148,7 +149,15 @@ class Orchestrator:
                     return self._token_cache
 
             # Get new token
-            token: AccessToken = self.credential.get_token(f"{DATAVERSE_URL}/.default")
+            try:
+                token: AccessToken = call_with_timeout(
+                    lambda: self.credential.get_token(f"{DATAVERSE_URL}/.default"),
+                    timeout_sec=30,
+                    description="credential.get_token()"
+                )
+            except TimeoutError:
+                print("[ERROR] get_token() timed out after 30s -- Azure credential hung")
+                return None
 
             # Cache token (expire 5 minutes early)
             self._token_cache = token.token

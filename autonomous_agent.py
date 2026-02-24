@@ -16,6 +16,8 @@ from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlparse
 
+from timeout_utils import PipeReader
+
 try:
     from onedrive_utils import local_path_to_web_url, _path_looks_like_file
 except ImportError:
@@ -343,10 +345,15 @@ Return one of:
         process.stdin.write(prompt)
         process.stdin.close()
 
+        # Wrap pipes in non-blocking PipeReaders
+        stdout_reader = PipeReader(process.stdout)
+        stderr_reader = PipeReader(process.stderr)
+
         # Collect output
         stdout_data = []
         full_result = None
         start_time = time.time()
+        last_activity = start_time
         last_update = start_time
 
         print("--- AGENT WORKING (live progress) ---\n")
@@ -354,14 +361,17 @@ Return one of:
 
         try:
             while True:
-                # Check timeout
-                if time.time() - start_time > timeout:
+                # Check activity-based timeout
+                if time.time() - last_activity > timeout:
+                    elapsed = int(time.time() - start_time)
+                    _log_to_file(f"[TIMEOUT] No activity for {timeout}s (total elapsed: {elapsed}s)")
                     process.kill()
-                    raise Exception(f"Timeout after {timeout}s")
+                    raise Exception(f"No activity for {timeout}s (total elapsed: {elapsed}s)")
 
                 # Read stdout
-                line = process.stdout.readline()
+                line = stdout_reader.readline(timeout=60)
                 if line:
+                    last_activity = time.time()  # reset activity timer
                     line = line.strip()
                     if line:
                         stdout_data.append(line)
@@ -378,49 +388,9 @@ Return one of:
                                 for item in content:
                                     if item.get('type') == 'tool_use':
                                         tool_name = item.get('name', 'unknown')
-                                        tool_input = item.get('input', {})
 
-                                        # Extract relevant details based on tool type
-                                        details = ""
-                                        if tool_name == 'Write':
-                                            file_path = tool_input.get('file_path', '')
-                                            if file_path:
-                                                details = f" → {os.path.basename(file_path)}"
-                                        elif tool_name == 'Read':
-                                            file_path = tool_input.get('file_path', '')
-                                            if file_path:
-                                                details = f" → {os.path.basename(file_path)}"
-                                        elif tool_name == 'Edit':
-                                            file_path = tool_input.get('file_path', '')
-                                            if file_path:
-                                                details = f" → {os.path.basename(file_path)}"
-                                        elif tool_name == 'Bash':
-                                            command = tool_input.get('command', '')
-                                            if command:
-                                                # Show first 50 chars of command
-                                                cmd_preview = command[:50] + ('...' if len(command) > 50 else '')
-                                                details = f" → {cmd_preview}"
-                                        elif tool_name == 'WebSearch':
-                                            query = tool_input.get('query', '')
-                                            if query:
-                                                details = f" → \"{query}\""
-                                        elif tool_name == 'WebFetch':
-                                            url = tool_input.get('url', '')
-                                            if url:
-                                                # Show domain only
-                                                domain = urlparse(url).netloc or url[:30]
-                                                details = f" → {domain}"
-                                        elif tool_name == 'Glob':
-                                            pattern = tool_input.get('pattern', '')
-                                            if pattern:
-                                                details = f" → {pattern}"
-                                        elif tool_name == 'Grep':
-                                            pattern = tool_input.get('pattern', '')
-                                            if pattern:
-                                                details = f" → \"{pattern}\""
-
-                                        print(f"\n[*] Using tool: {tool_name}{details}", flush=True)
-                                        _log_to_file(f"Using tool: {tool_name}{details}")
+                                        print(f"\n[*] Using tool: {tool_name}", flush=True)
+                                        _log_to_file(f"Using tool: {tool_name}")
 
                                         # Callback for tool usage event - DISABLED (user wants only thoughts)
                                         # if on_event:
@@ -458,7 +428,7 @@ Return one of:
                 # Check if process finished
                 if process.poll() is not None:
                     # Read remaining output
-                    remaining = process.stdout.read()
+                    remaining = stdout_reader.read_all(timeout=10)
                     if remaining:
                         for line in remaining.strip().split('\n'):
                             if line:
@@ -474,21 +444,17 @@ Return one of:
             print("\n\n--- AGENT COMPLETED ---\n")
             _log_to_file("AGENT COMPLETED")
 
-            # Parse final result if not found in stream
-            if full_result is None and stdout_data:
-                # Search backwards through collected lines for a result chunk
-                for line in reversed(stdout_data):
-                    try:
-                        chunk = json.loads(line)
-                        if chunk.get('type') == 'result':
-                            full_result = chunk
-                            break
-                    except (json.JSONDecodeError, TypeError):
-                        continue
+            # Ensure subprocess is fully terminated
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                _log_to_file("[WARN] CLI process did not exit within 30s, killing")
+                process.kill()
+                process.wait(timeout=5)
 
             if full_result is None:
                 # Log diagnostic info before raising
-                stderr = process.stderr.read() if process.stderr else ""
+                stderr = stderr_reader.read_all(timeout=10)
                 print(f"[!] Stream parsing failed. Return code: {process.returncode}")
                 print(f"[!] Stderr: {stderr[:1000]}" if stderr else "[!] No stderr output")
                 print(f"[!] Stdout lines collected: {len(stdout_data)}")
@@ -496,8 +462,8 @@ Return one of:
                     print(f"[!] Last stdout line: {stdout_data[-1][:500]}")
                 raise Exception(f"Could not parse final result from stream. returncode={process.returncode}, lines={len(stdout_data)}, stderr={stderr[:200]}")
 
-            if process.returncode != 0:
-                stderr = process.stderr.read()
+            if process.returncode is not None and process.returncode != 0:
+                stderr = stderr_reader.read_all(timeout=10)
                 if stderr:
                     print(f"[!] Stderr: {stderr}")
 
