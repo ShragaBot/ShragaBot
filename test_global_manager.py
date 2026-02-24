@@ -74,6 +74,7 @@ def manager(mock_credential, sessions_file):
     with patch("global_manager.get_credential", return_value=mock_credential):
         from global_manager import GlobalManager
         mgr = GlobalManager(sessions_file=sessions_file)
+    mgr.dv = MagicMock()
     return mgr
 
 
@@ -462,43 +463,38 @@ class TestClaudeMdUsage:
 class TestPolling:
     """DV polling tests (unchanged from original architecture)."""
 
-    @patch("global_manager.requests.get")
-    def test_poll_stale_unclaimed_returns_old_messages(self, mock_get, manager):
-        mock_get.return_value = FakeResponse(json_data={"value": [SAMPLE_STALE_MSG]})
+    def test_poll_stale_unclaimed_returns_old_messages(self, manager):
+        manager.dv.get.return_value = FakeResponse(json_data={"value": [SAMPLE_STALE_MSG]})
         msgs = manager.poll_stale_unclaimed()
         assert len(msgs) == 1
 
-    @patch("global_manager.requests.get")
-    def test_poll_filters_by_age(self, mock_get, manager):
-        mock_get.return_value = FakeResponse(json_data={"value": []})
+    def test_poll_filters_by_age(self, manager):
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
         manager.poll_stale_unclaimed()
-        url = mock_get.call_args[0][0]
+        url = manager.dv.get.call_args[0][0]
         assert "createdon lt" in url
         assert "cr_status eq 'Unclaimed'" in url
 
-    @patch("global_manager.requests.get")
-    def test_poll_handles_timeout(self, mock_get, manager):
-        import requests as req
-        mock_get.side_effect = req.exceptions.Timeout()
+    def test_poll_handles_timeout(self, manager):
+        from dv_client import DataverseRetryExhausted
+        manager.dv.get.side_effect = DataverseRetryExhausted("timeout")
         assert manager.poll_stale_unclaimed() == []
 
-    @patch("global_manager.requests.get")
-    def test_poll_handles_error(self, mock_get, manager):
-        mock_get.side_effect = Exception("network error")
+    def test_poll_handles_error(self, manager):
+        from dv_client import DataverseError
+        manager.dv.get.side_effect = DataverseError("network error", 500, "")
         assert manager.poll_stale_unclaimed() == []
 
-    @patch("global_manager.requests.get")
-    def test_poll_empty_result(self, mock_get, manager):
-        mock_get.return_value = FakeResponse(json_data={"value": []})
+    def test_poll_empty_result(self, manager):
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
         assert manager.poll_stale_unclaimed() == []
 
 
 class TestResponse:
     """Response writing tests (unchanged from original architecture)."""
 
-    @patch("global_manager.requests.post")
-    def test_send_response(self, mock_post, manager):
-        mock_post.return_value = FakeResponse(json_data={})
+    def test_send_response(self, manager):
+        manager.dv.post.return_value = FakeResponse(json_data={})
         result = manager.send_response(
             in_reply_to=SAMPLE_CONVERSATION_ID,
             mcs_conversation_id=SAMPLE_MCS_CONV_ID,
@@ -506,20 +502,19 @@ class TestResponse:
             text="Welcome!",
         )
         assert result is not None
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         assert body["cr_direction"] == "Outbound"
         assert body["cr_message"] == "Welcome!"
         assert body["cr_in_reply_to"] == SAMPLE_CONVERSATION_ID
         assert body["cr_mcs_conversation_id"] == SAMPLE_MCS_CONV_ID
 
-    @patch("global_manager.requests.post")
-    def test_send_response_error(self, mock_post, manager):
-        mock_post.side_effect = Exception("error")
+    def test_send_response_error(self, manager):
+        from dv_client import DataverseError
+        manager.dv.post.side_effect = DataverseError("error", 500, "")
         assert manager.send_response("id", "conv", "email", "text") is None
 
-    @patch("global_manager.requests.post")
-    def test_send_response_followup(self, mock_post, manager):
-        mock_post.return_value = FakeResponse(json_data={})
+    def test_send_response_followup(self, manager):
+        manager.dv.post.return_value = FakeResponse(json_data={})
         manager.send_response(
             in_reply_to="row-1",
             mcs_conversation_id="mcs-1",
@@ -527,28 +522,26 @@ class TestResponse:
             text="Working on it...",
             followup_expected=True,
         )
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         assert body["cr_followup_expected"] == "true"
 
-    @patch("global_manager.requests.post")
-    def test_send_response_no_followup(self, mock_post, manager):
-        mock_post.return_value = FakeResponse(json_data={})
+    def test_send_response_no_followup(self, manager):
+        manager.dv.post.return_value = FakeResponse(json_data={})
         manager.send_response(
             in_reply_to="row-1",
             mcs_conversation_id="mcs-1",
             user_email="user@example.com",
             text="Done!",
         )
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         assert body["cr_followup_expected"] == ""
 
-    @patch("global_manager.requests.post")
-    def test_send_response_truncates_name(self, mock_post, manager):
+    def test_send_response_truncates_name(self, manager):
         """cr_name field should be truncated to 100 chars (DV column limit)."""
-        mock_post.return_value = FakeResponse(json_data={})
+        manager.dv.post.return_value = FakeResponse(json_data={})
         long_text = "A" * 500
         manager.send_response("row-1", "mcs-1", "user@test.com", long_text)
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         assert len(body["cr_name"]) == 100
         assert body["cr_message"] == long_text  # Full message preserved
 
@@ -560,34 +553,27 @@ class TestResponse:
 class TestClaim:
     """Claim tests verifying ETag-based optimistic concurrency."""
 
-    @patch("global_manager.requests.patch")
-    def test_claim_success(self, mock_patch, manager):
-        mock_patch.return_value = FakeResponse(status_code=204)
+    def test_claim_success(self, manager):
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
         assert manager.claim_message(SAMPLE_STALE_MSG) is True
 
-    @patch("global_manager.requests.patch")
-    def test_claim_sets_global_id(self, mock_patch, manager):
-        mock_patch.return_value = FakeResponse(status_code=204)
+    def test_claim_sets_global_id(self, manager):
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
         manager.claim_message(SAMPLE_STALE_MSG)
-        body = mock_patch.call_args[1]["json"]
+        body = manager.dv.patch.call_args[1]["data"]
         assert body["cr_claimed_by"].startswith("global:")
 
-    @patch("global_manager.requests.patch")
-    def test_claim_uses_etag(self, mock_patch, manager):
-        """The ETag from the message must be sent as If-Match header."""
-        mock_patch.return_value = FakeResponse(status_code=204)
+    def test_claim_uses_etag(self, manager):
+        """The ETag from the message must be sent via the etag kwarg to dv.patch."""
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
         manager.claim_message(SAMPLE_STALE_MSG)
-        headers = mock_patch.call_args[1].get("headers") or mock_patch.call_args[0][0]
-        # Check that If-Match was set in the headers
-        call_kwargs = mock_patch.call_args
-        # The headers are passed as keyword arg
-        if "headers" in call_kwargs[1]:
-            assert call_kwargs[1]["headers"]["If-Match"] == 'W/"12345"'
+        call_kwargs = manager.dv.patch.call_args[1]
+        assert call_kwargs["etag"] == 'W/"12345"'
 
-    @patch("global_manager.requests.patch")
-    def test_claim_conflict_returns_false(self, mock_patch, manager):
-        """HTTP 412 Precondition Failed means another GM claimed it first."""
-        mock_patch.return_value = FakeResponse(status_code=412)
+    def test_claim_conflict_returns_false(self, manager):
+        """ETagConflictError means another GM claimed it first."""
+        from dv_client import ETagConflictError
+        manager.dv.patch.side_effect = ETagConflictError("412 conflict")
         assert manager.claim_message(SAMPLE_STALE_MSG) is False
 
     def test_claim_no_etag(self, manager):
@@ -600,11 +586,10 @@ class TestClaim:
         del msg["cr_shraga_conversationid"]
         assert manager.claim_message(msg) is False
 
-    @patch("global_manager.requests.patch")
-    def test_claim_sets_claimed_status(self, mock_patch, manager):
-        mock_patch.return_value = FakeResponse(status_code=204)
+    def test_claim_sets_claimed_status(self, manager):
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
         manager.claim_message(SAMPLE_STALE_MSG)
-        body = mock_patch.call_args[1]["json"]
+        body = manager.dv.patch.call_args[1]["data"]
         assert body["cr_status"] == "Claimed"
 
 
@@ -615,46 +600,39 @@ class TestClaim:
 class TestProcessMessage:
     """Message processing using Claude Code sessions."""
 
-    @patch("global_manager.requests.post")
-    @patch("global_manager.requests.patch")
-    def test_process_uses_claude_code_and_sends_response(self, mock_patch, mock_post, manager):
+    def test_process_uses_claude_code_and_sends_response(self, manager):
         """Claude Code is called and its response is sent to the user."""
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         with patch.object(manager, "_call_claude_code", return_value=("Hello! I can help you.", "sess-1")):
             manager.process_message(SAMPLE_STALE_MSG)
 
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         assert body["cr_message"] == "Hello! I can help you."
 
-    @patch("global_manager.requests.post")
-    @patch("global_manager.requests.patch")
-    def test_process_fallback_when_claude_unavailable(self, mock_patch, mock_post, manager):
+    def test_process_fallback_when_claude_unavailable(self, manager):
         """When Claude Code is unavailable, the single fallback message is sent."""
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         with patch.object(manager, "_call_claude_code", return_value=(None, "")):
             manager.process_message(SAMPLE_STALE_MSG)
 
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         assert body["cr_message"] == "The system is temporarily unavailable, please try again shortly."
 
-    @patch("global_manager.requests.patch")
-    def test_process_empty_message(self, mock_patch, manager):
+    def test_process_empty_message(self, manager):
         """Empty messages are just marked as processed."""
         empty_msg = {**SAMPLE_STALE_MSG, "cr_message": ""}
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
         manager.process_message(empty_msg)
-        mock_patch.assert_called_once()
+        manager.dv.patch.assert_called_once()
 
-    @patch("global_manager.requests.post")
-    @patch("global_manager.requests.patch")
-    def test_process_creates_session_for_conversation(self, mock_patch, mock_post, manager):
+    def test_process_creates_session_for_conversation(self, manager):
         """Processing a message creates a session keyed by mcs_conversation_id."""
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         with patch.object(manager, "_call_claude_code", return_value=("Hi!", "sess-hi")):
             manager.process_message(SAMPLE_STALE_MSG)
@@ -663,12 +641,10 @@ class TestProcessMessage:
         assert session is not None
         assert "session_id" in session
 
-    @patch("global_manager.requests.post")
-    @patch("global_manager.requests.patch")
-    def test_process_reuses_session_for_same_conversation(self, mock_patch, mock_post, manager):
+    def test_process_reuses_session_for_same_conversation(self, manager):
         """Second message in same conversation reuses the session."""
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         session_ids_passed = []
 
@@ -687,12 +663,10 @@ class TestProcessMessage:
         assert session_ids_passed[0] is None
         assert session_ids_passed[1] == "sess-reuse"
 
-    @patch("global_manager.requests.post")
-    @patch("global_manager.requests.patch")
-    def test_process_different_conversations_different_sessions(self, mock_patch, mock_post, manager):
+    def test_process_different_conversations_different_sessions(self, manager):
         """Different conversations get different sessions."""
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         call_counter = {"n": 0}
 
@@ -715,12 +689,10 @@ class TestProcessMessage:
         assert sess1 is not None and sess2 is not None
         assert sess1["session_id"] != sess2["session_id"], "Different conversations must use different sessions"
 
-    @patch("global_manager.requests.post")
-    @patch("global_manager.requests.patch")
-    def test_process_passes_user_context_in_prompt(self, mock_patch, mock_post, manager):
+    def test_process_passes_user_context_in_prompt(self, manager):
         """The prompt to Claude Code includes user email, row ID, and message."""
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         captured_prompts = []
 
@@ -738,20 +710,18 @@ class TestProcessMessage:
         assert SAMPLE_MCS_CONV_ID in prompt
         assert "hello, I want to create a task" in prompt
 
-    @patch("global_manager.requests.post")
-    @patch("global_manager.requests.patch")
-    def test_process_marks_message_processed(self, mock_patch, mock_post, manager):
+    def test_process_marks_message_processed(self, manager):
         """After processing, the inbound message is marked as Processed."""
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         with patch.object(manager, "_call_claude_code", return_value=("Done", "sess-done")):
             manager.process_message(SAMPLE_STALE_MSG)
 
         # Find the PATCH call that sets status to Processed
         found_processed = False
-        for c in mock_patch.call_args_list:
-            body = c[1].get("json", {})
+        for c in manager.dv.patch.call_args_list:
+            body = c[1].get("data", {})
             if body.get("cr_status") == "Processed":
                 found_processed = True
                 break
@@ -761,38 +731,34 @@ class TestProcessMessage:
 class TestNewUserFlow:
     """Verify new user handling through the thin wrapper."""
 
-    @patch("global_manager.requests.get")
-    def test_new_user_not_in_known_users(self, mock_get, manager):
+    def test_new_user_not_in_known_users(self, manager):
         """A new user who has never been seen should not be in _known_users."""
-        mock_get.return_value = FakeResponse(json_data={"value": []})
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
         is_known = manager._is_known_user("brand-new@example.com")
         assert is_known is False
         assert "brand-new@example.com" not in manager._known_users
 
-    @patch("global_manager.requests.get")
-    def test_known_user_detected(self, mock_get, manager):
+    def test_known_user_detected(self, manager):
         """A user found in DV users table is recognized as known."""
-        mock_get.return_value = FakeResponse(json_data={
+        manager.dv.get.return_value = FakeResponse(json_data={
             "value": [{"crb3b_shragauserid": "row-123"}]
         })
         is_known = manager._is_known_user("existing@example.com")
         assert is_known is True
         assert "existing@example.com" in manager._known_users
 
-    @patch("global_manager.requests.get")
-    def test_known_user_cached(self, mock_get, manager):
+    def test_known_user_cached(self, manager):
         """Once a user is known, subsequent checks don't hit DV."""
         manager._known_users.add("cached@example.com")
         is_known = manager._is_known_user("cached@example.com")
         assert is_known is True
-        mock_get.assert_not_called()
+        manager.dv.get.assert_not_called()
 
 
 class TestKnownUserFlow:
     """Verify known user (PM unavailable) flow through the thin wrapper."""
 
-    @patch("global_manager.requests.get")
-    def test_known_user_delayed_claiming(self, mock_get, manager):
+    def test_known_user_delayed_claiming(self, manager):
         """Known users' messages have a delayed claiming window."""
         # Return a known user from DV, then return the message
         def get_side_effect(url, **kwargs):
@@ -807,7 +773,7 @@ class TestKnownUserFlow:
                 return FakeResponse(json_data={"value": [recent_msg]})
             return FakeResponse(json_data={"value": []})
 
-        mock_get.side_effect = get_side_effect
+        manager.dv.get.side_effect = get_side_effect
         msgs = manager.poll_stale_unclaimed()
         # Recent messages from known users should NOT be returned
         assert len(msgs) == 0
@@ -818,22 +784,16 @@ class TestKnownUserFlow:
 # ============================================================================
 
 class TestAuth:
-    """Authentication tests."""
+    """Authentication tests -- token management is delegated to DataverseClient."""
 
-    def test_get_token_success(self, manager):
-        assert manager.get_token() == "fake-token-12345"
+    def test_has_dv_client(self, manager):
+        """Manager must have a dv attribute (DataverseClient or mock)."""
+        assert hasattr(manager, "dv")
 
-    def test_get_token_caches(self, manager):
-        manager.get_token()
-        manager.get_token()
-        # First call was in __init__ for credential verification
-        assert manager.credential.get_token.call_count == 1
-
-    def test_get_token_refreshes_expired(self, manager):
-        manager.get_token()
-        manager._token_expires = datetime.now(timezone.utc) - timedelta(minutes=1)
-        manager.get_token()
-        assert manager.credential.get_token.call_count == 2
+    def test_has_credential(self, manager):
+        """Manager must store the Azure credential for reference."""
+        assert hasattr(manager, "credential")
+        assert manager.credential is not None
 
 
 class TestConstructor:
@@ -881,23 +841,22 @@ class TestMarkProcessed:
     """Tests for mark_processed after thin-wrapper refactor.
 
     Verifies:
-      - PATCH call parameters (URL, headers, body, timeout)
+      - PATCH call parameters (URL, body, timeout)
       - Graceful handling of Dataverse failures (no exception propagated)
-      - Behaviour on HTTP 412 ETag conflict (silent degradation)
+      - Behaviour on ETagConflictError (silent degradation)
     """
 
-    @patch("global_manager.requests.patch")
-    def test_mark_processed_success(self, mock_patch, manager):
-        """Verify the PATCH call sends the correct URL, body, headers, and timeout."""
-        mock_patch.return_value = FakeResponse(status_code=204)
+    def test_mark_processed_success(self, manager):
+        """Verify the PATCH call sends the correct URL, body, and timeout."""
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
         row_id = "row-12345678-abcd-efgh-ijkl-9999"
         manager.mark_processed(row_id)
 
         # Called exactly once
-        mock_patch.assert_called_once()
+        manager.dv.patch.assert_called_once()
 
         # -- URL contains the conversations table and the row ID ---------------
-        call_args, call_kwargs = mock_patch.call_args
+        call_args, call_kwargs = manager.dv.patch.call_args
         url = call_args[0]
         from global_manager import CONVERSATIONS_TABLE, DATAVERSE_API, REQUEST_TIMEOUT
         assert CONVERSATIONS_TABLE in url, "URL must reference the conversations table"
@@ -905,83 +864,46 @@ class TestMarkProcessed:
         assert url == f"{DATAVERSE_API}/{CONVERSATIONS_TABLE}({row_id})"
 
         # -- Body sets status to Processed -------------------------------------
-        body = call_kwargs["json"]
+        body = call_kwargs["data"]
         assert body == {"cr_status": "Processed"}, (
             "Body must set cr_status to 'Processed' and nothing else"
-        )
-
-        # -- Headers include Authorization and Content-Type --------------------
-        headers = call_kwargs["headers"]
-        assert "Authorization" in headers, "Authorization header required"
-        assert headers["Authorization"].startswith("Bearer ")
-        assert headers.get("Content-Type") == "application/json"
-        # mark_processed must NOT send If-Match (no ETag-based concurrency)
-        assert "If-Match" not in headers, (
-            "mark_processed should not send If-Match -- it is a best-effort update"
         )
 
         # -- Timeout is the module-level REQUEST_TIMEOUT -----------------------
         assert call_kwargs["timeout"] == REQUEST_TIMEOUT
 
-    @patch("global_manager.requests.patch")
-    def test_mark_processed_dv_failure(self, mock_patch, manager):
-        """Dataverse failure (network error, HTTP 500, etc.) must not propagate.
+    def test_mark_processed_dv_failure(self, manager):
+        """Dataverse failure must not propagate.
 
         mark_processed is a fire-and-forget helper -- the message has already
         been answered, so a failure here should be logged but not raise.
         """
-        # Scenario 1: network-level exception
-        mock_patch.side_effect = Exception("network error")
-        manager.mark_processed("row-fail-network")  # must not raise
+        from dv_client import DataverseError, DataverseRetryExhausted
 
-        # Scenario 2: requests.ConnectionError
-        import requests as req
-        mock_patch.side_effect = req.exceptions.ConnectionError("connection refused")
-        manager.mark_processed("row-fail-conn")  # must not raise
-
-        # Scenario 3: requests.Timeout
-        mock_patch.side_effect = req.exceptions.Timeout("timed out")
-        manager.mark_processed("row-fail-timeout")  # must not raise
-
-        # Scenario 4: HTTP 500 response (raise_for_status not called by
-        # mark_processed, but if the implementation changes to call it,
-        # exceptions must still be caught)
-        mock_patch.side_effect = req.exceptions.HTTPError(
-            response=MagicMock(status_code=500, text="Internal Server Error")
-        )
+        # Scenario 1: DataverseError (non-retryable 4xx/5xx)
+        manager.dv.patch.side_effect = DataverseError("500 error", 500, "Internal Server Error")
         manager.mark_processed("row-fail-500")  # must not raise
 
-    @patch("global_manager.requests.patch")
-    def test_mark_processed_etag_conflict(self, mock_patch, manager):
-        """HTTP 412 Precondition Failed (ETag conflict) must not crash.
+        # Scenario 2: DataverseRetryExhausted (retry budget exhausted)
+        manager.dv.patch.side_effect = DataverseRetryExhausted("timeout")
+        manager.mark_processed("row-fail-timeout")  # must not raise
 
-        Although mark_processed does not send an If-Match header itself,
-        Dataverse may still return 412 if the row was concurrently deleted or
-        if server-side plugins enforce ETag checks.  The method must degrade
-        gracefully -- log a warning and return without raising.
+    def test_mark_processed_etag_conflict(self, manager):
+        """ETagConflictError must not crash.
+
+        Although mark_processed does not send an etag itself,
+        the DataverseClient may raise ETagConflictError in edge cases.
+        The method must degrade gracefully.
         """
-        mock_patch.return_value = FakeResponse(status_code=412)
-        # Must not raise; the method should return normally.
-        manager.mark_processed("row-etag-conflict")
+        from dv_client import DataverseError, DataverseRetryExhausted
 
-        # Verify the PATCH was still attempted (the call was made)
-        mock_patch.assert_called_once()
+        # DataverseError with 412 status
+        manager.dv.patch.side_effect = DataverseError("412 conflict", 412, "Precondition Failed")
+        manager.mark_processed("row-etag-conflict")  # must not raise
 
-        # Also test that if raise_for_status *were* triggered by a 412
-        # (future-proofing), the outer except still catches it.
-        import requests as req
-        mock_patch.reset_mock()
-        mock_patch.side_effect = req.exceptions.HTTPError(
-            response=MagicMock(status_code=412, text="Precondition Failed")
-        )
+        # DataverseRetryExhausted
+        manager.dv.patch.side_effect = DataverseRetryExhausted("exhausted")
         manager.mark_processed("row-etag-conflict-raised")  # must not raise
-
-    @patch("global_manager.requests.patch")
-    def test_mark_processed_no_headers_returns_early(self, mock_patch, manager):
-        """If token acquisition fails (_headers returns None), PATCH is never called."""
-        with patch.object(manager, "get_token", return_value=None):
-            manager.mark_processed("row-no-token")
-        mock_patch.assert_not_called()
 
 
 class TestSessionManagerEdgeCases:
