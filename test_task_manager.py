@@ -6,7 +6,6 @@ All tool dispatch code has been removed. Claude Code reads CLAUDE.md
 and runs scripts directly. These tests verify:
   - DV polling, claiming, response writing (preserved)
   - Session persistence (preserved and enhanced)
-  - Stale task detection (preserved)
   - Stale outbound cleanup (preserved)
   - Claude Code subprocess delegation (new)
   - No tool dispatch code remains (new)
@@ -68,6 +67,8 @@ def manager(mock_credential, monkeypatch, tmp_path):
     with patch("task_manager.DefaultAzureCredential", return_value=mock_credential):
         from task_manager import TaskManager
         mgr = TaskManager("testuser@example.com")
+    # Replace the real DataverseClient with a mock
+    mgr.dv = MagicMock()
     return mgr
 
 
@@ -164,78 +165,45 @@ class TestWrapperSize:
 # -- Auth Tests ----------------------------------------------------------------
 
 class TestAuth:
-    def test_get_token_success(self, manager):
-        token = manager.get_token()
-        assert token == "fake-token-12345"
+    def test_dv_client_exists(self, manager):
+        """TaskManager has a dv attribute (DataverseClient or mock)."""
+        assert hasattr(manager, "dv")
 
-    def test_get_token_caches(self, manager):
-        manager.get_token()
-        manager.get_token()
-        assert manager.credential.get_token.call_count == 1
-
-    def test_get_token_refreshes_when_expired(self, manager):
-        manager.get_token()
-        manager._token_expires = datetime.now(timezone.utc) - timedelta(minutes=1)
-        manager.get_token()
-        assert manager.credential.get_token.call_count == 2
-
-    def test_get_token_returns_none_on_error(self, manager):
-        manager.credential.get_token.side_effect = Exception("auth failed")
-        manager._token_cache = None
-        manager._token_expires = None
-        assert manager.get_token() is None
-
-    def test_headers_include_auth(self, manager):
-        headers = manager._headers()
-        assert headers is not None
-        assert "Bearer" in headers["Authorization"]
-
-    def test_headers_with_etag(self, manager):
-        headers = manager._headers(etag='W/"123"')
-        assert headers["If-Match"] == 'W/"123"'
-
-    def test_headers_returns_none_without_token(self, manager):
-        manager.credential.get_token.side_effect = Exception("no token")
-        manager._token_cache = None
-        manager._token_expires = None
-        assert manager._headers() is None
+    def test_credential_exists(self, manager):
+        """TaskManager has a credential attribute."""
+        assert hasattr(manager, "credential")
 
 
 # -- Conversation Polling Tests ------------------------------------------------
 
 class TestPolling:
-    @patch("task_manager.requests.get")
-    def test_poll_unclaimed_returns_messages(self, mock_get, manager):
-        mock_get.return_value = FakeResponse(json_data={"value": [SAMPLE_INBOUND_MSG]})
+    def test_poll_unclaimed_returns_messages(self, manager):
+        manager.dv.get.return_value = FakeResponse(json_data={"value": [SAMPLE_INBOUND_MSG]})
         msgs = manager.poll_unclaimed()
         assert len(msgs) == 1
         assert msgs[0]["cr_message"] == "create a task: fix the login CSS bug"
 
-    @patch("task_manager.requests.get")
-    def test_poll_unclaimed_filters_by_user(self, mock_get, manager):
-        mock_get.return_value = FakeResponse(json_data={"value": []})
+    def test_poll_unclaimed_filters_by_user(self, manager):
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
         manager.poll_unclaimed()
-        url = mock_get.call_args[0][0]
+        url = manager.dv.get.call_args[0][0]
         assert "testuser@example.com" in url
         assert "cr_direction eq 'Inbound'" in url
         assert "cr_status eq 'Unclaimed'" in url
 
-    @patch("task_manager.requests.get")
-    def test_poll_unclaimed_handles_timeout(self, mock_get, manager):
-        import requests as req
-        mock_get.side_effect = req.exceptions.Timeout()
+    def test_poll_unclaimed_handles_error(self, manager):
+        from dv_client import DataverseRetryExhausted
+        manager.dv.get.side_effect = DataverseRetryExhausted("timeout")
         msgs = manager.poll_unclaimed()
         assert msgs == []
 
-    @patch("task_manager.requests.get")
-    def test_poll_unclaimed_handles_error(self, mock_get, manager):
-        mock_get.side_effect = Exception("network error")
+    def test_poll_unclaimed_handles_generic_error(self, manager):
+        manager.dv.get.side_effect = Exception("network error")
         msgs = manager.poll_unclaimed()
         assert msgs == []
 
-    @patch("task_manager.requests.get")
-    def test_poll_unclaimed_returns_empty_on_no_messages(self, mock_get, manager):
-        mock_get.return_value = FakeResponse(json_data={"value": []})
+    def test_poll_unclaimed_returns_empty_on_no_messages(self, manager):
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
         msgs = manager.poll_unclaimed()
         assert msgs == []
 
@@ -243,22 +211,21 @@ class TestPolling:
 # -- Claim Tests ---------------------------------------------------------------
 
 class TestClaim:
-    @patch("task_manager.requests.patch")
-    def test_claim_message_success(self, mock_patch, manager):
-        mock_patch.return_value = FakeResponse(status_code=204)
+    def test_claim_message_success(self, manager):
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
         assert manager.claim_message(SAMPLE_INBOUND_MSG) is True
 
-    @patch("task_manager.requests.patch")
-    def test_claim_sends_correct_body(self, mock_patch, manager):
-        mock_patch.return_value = FakeResponse(status_code=204)
+    def test_claim_sends_correct_body(self, manager):
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
         manager.claim_message(SAMPLE_INBOUND_MSG)
-        body = mock_patch.call_args[1]["json"]
+        call_kwargs = manager.dv.patch.call_args[1]
+        body = call_kwargs["data"]
         assert body["cr_status"] == "Claimed"
         assert body["cr_claimed_by"].startswith("personal:testuser@example.com:")
 
-    @patch("task_manager.requests.patch")
-    def test_claim_fails_on_conflict(self, mock_patch, manager):
-        mock_patch.return_value = FakeResponse(status_code=412)
+    def test_claim_fails_on_conflict(self, manager):
+        from dv_client import ETagConflictError
+        manager.dv.patch.side_effect = ETagConflictError("412 conflict")
         assert manager.claim_message(SAMPLE_INBOUND_MSG) is False
 
     def test_claim_fails_without_etag(self, manager):
@@ -275,32 +242,31 @@ class TestClaim:
 # -- Response Tests ------------------------------------------------------------
 
 class TestResponse:
-    @patch("task_manager.requests.post")
-    def test_send_response_creates_outbound_row(self, mock_post, manager):
-        mock_post.return_value = FakeResponse(json_data={"cr_shraga_conversationid": "new-id"})
+    def test_send_response_creates_outbound_row(self, manager):
+        manager.dv.post.return_value = FakeResponse(json_data={"cr_shraga_conversationid": "new-id"})
         result = manager.send_response(
             in_reply_to=SAMPLE_CONVERSATION_ID,
             mcs_conversation_id=SAMPLE_MCS_CONV_ID,
             text="Task created!",
         )
         assert result is not None
-        body = mock_post.call_args[1]["json"]
+        call_kwargs = manager.dv.post.call_args[1]
+        body = call_kwargs["data"]
         assert body["cr_direction"] == "Outbound"
         assert body["cr_in_reply_to"] == SAMPLE_CONVERSATION_ID
         assert body["cr_message"] == "Task created!"
         assert body["cr_useremail"] == "testuser@example.com"
 
-    @patch("task_manager.requests.post")
-    def test_send_response_truncates_name(self, mock_post, manager):
-        mock_post.return_value = FakeResponse(json_data={})
+    def test_send_response_truncates_name(self, manager):
+        manager.dv.post.return_value = FakeResponse(json_data={})
         long_text = "x" * 500
         manager.send_response("id", "conv", long_text)
-        body = mock_post.call_args[1]["json"]
+        call_kwargs = manager.dv.post.call_args[1]
+        body = call_kwargs["data"]
         assert len(body["cr_name"]) == 100
 
-    @patch("task_manager.requests.post")
-    def test_send_response_returns_none_on_error(self, mock_post, manager):
-        mock_post.side_effect = Exception("network error")
+    def test_send_response_returns_none_on_error(self, manager):
+        manager.dv.post.side_effect = Exception("network error")
         result = manager.send_response("id", "conv", "text")
         assert result is None
 
@@ -373,9 +339,7 @@ class TestClaudeCodeSubprocess:
     """Test that process_message delegates to Claude Code via subprocess."""
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_process_message_calls_claude_cli(self, mock_patch, mock_post, mock_popen, manager):
+    def test_process_message_calls_claude_cli(self, mock_popen, manager):
         """process_message invokes claude CLI with --print and -p flags."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
@@ -384,8 +348,8 @@ class TestClaudeCodeSubprocess:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
@@ -401,11 +365,7 @@ class TestClaudeCodeSubprocess:
         assert "create a task: fix the login CSS bug" in p_arg
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_process_message_uses_resume_for_existing_session(
-        self, mock_patch, mock_post, mock_popen, manager
-    ):
+    def test_process_message_uses_resume_for_existing_session(self, mock_popen, manager):
         """When a session exists for the MCS conversation, --resume is used."""
         manager._sessions[SAMPLE_MCS_CONV_ID] = {
             "session_id": "existing-session-456",
@@ -418,8 +378,8 @@ class TestClaudeCodeSubprocess:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
@@ -429,11 +389,7 @@ class TestClaudeCodeSubprocess:
         assert cmd[resume_idx + 1] == "existing-session-456"
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_process_message_persists_new_session(
-        self, mock_patch, mock_post, mock_popen, manager, tmp_path
-    ):
+    def test_process_message_persists_new_session(self, mock_popen, manager, tmp_path):
         """New session IDs are persisted to disk."""
         manager._sessions_path = tmp_path / "test_sessions.json"
         mock_popen.return_value = _make_popen_mock(
@@ -443,8 +399,8 @@ class TestClaudeCodeSubprocess:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
@@ -454,11 +410,7 @@ class TestClaudeCodeSubprocess:
         assert manager._sessions_path.exists()
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_process_message_retries_on_resume_failure(
-        self, mock_patch, mock_post, mock_popen, manager
-    ):
+    def test_process_message_retries_on_resume_failure(self, mock_popen, manager):
         """When --resume fails, PM forgets session and retries fresh."""
         manager._sessions[SAMPLE_MCS_CONV_ID] = {
             "session_id": "stale-session-789",
@@ -476,8 +428,8 @@ class TestClaudeCodeSubprocess:
                 })
             ),
         ]
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
@@ -491,11 +443,7 @@ class TestClaudeCodeSubprocess:
         assert session_entry["session_id"] == "fresh-session-aaa"
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_process_message_injects_prev_session_context(
-        self, mock_patch, mock_post, mock_popen, manager
-    ):
+    def test_process_message_injects_prev_session_context(self, mock_popen, manager):
         """When session is from previous run, prev session ID is injected as context."""
         manager._sessions[SAMPLE_MCS_CONV_ID] = "stale-session-789"
 
@@ -506,8 +454,8 @@ class TestClaudeCodeSubprocess:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
@@ -516,61 +464,51 @@ class TestClaudeCodeSubprocess:
         p_idx = cmd.index("-p")
         prompt_text = cmd[p_idx + 1]
         assert "stale-session-789" in prompt_text
-        # Verify the response was sent
-        sent_body = mock_post.call_args[1]["json"]
-        assert "Hello again!" in sent_body["cr_message"]
+        # Verify the response was sent via dv.post
+        assert manager.dv.post.called
+        call_kwargs = manager.dv.post.call_args[1]
+        assert "Hello again!" in call_kwargs["data"]["cr_message"]
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_process_message_uses_fallback_on_timeout(
-        self, mock_patch, mock_post, mock_popen, manager
-    ):
+    def test_process_message_uses_fallback_on_timeout(self, mock_popen, manager):
         """When Claude CLI times out, fallback message is sent."""
         proc = _make_popen_mock()
         # First communicate() call raises timeout; second (reap after kill) returns empty
         proc.communicate.side_effect = [
-            subprocess.TimeoutExpired("claude", 300),
+            subprocess.TimeoutExpired("claude", 60),
             ("", ""),
         ]
         mock_popen.return_value = proc
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        sent_body = mock_post.call_args[1]["json"]
-        assert sent_body["cr_message"] == "The system is temporarily unavailable, please try again shortly."
+        call_kwargs = manager.dv.post.call_args[1]
+        assert call_kwargs["data"]["cr_message"] == "The system is temporarily unavailable, please try again shortly."
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_process_message_uses_fallback_on_cli_not_found(
-        self, mock_patch, mock_post, mock_popen, manager
-    ):
+    def test_process_message_uses_fallback_on_cli_not_found(self, mock_popen, manager):
         """When claude binary is not found, fallback message is sent."""
         mock_popen.side_effect = FileNotFoundError()
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        sent_body = mock_post.call_args[1]["json"]
-        assert sent_body["cr_message"] == "The system is temporarily unavailable, please try again shortly."
+        call_kwargs = manager.dv.post.call_args[1]
+        assert call_kwargs["data"]["cr_message"] == "The system is temporarily unavailable, please try again shortly."
 
     def test_process_empty_message(self, manager):
         """Empty messages should just be marked processed."""
         empty_msg = {**SAMPLE_INBOUND_MSG, "cr_message": ""}
-        with patch.object(manager, "mark_processed") as mock_mark:
-            manager.process_message(empty_msg)
-            mock_mark.assert_called_once()
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
+        manager.process_message(empty_msg)
+        # mark_processed calls dv.patch
+        assert manager.dv.patch.called
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_process_message_sends_response_to_dv(
-        self, mock_patch, mock_post, mock_popen, manager
-    ):
+    def test_process_message_sends_response_to_dv(self, mock_popen, manager):
         """Claude's response is written back to the conversations table."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
@@ -579,24 +517,21 @@ class TestClaudeCodeSubprocess:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        # Verify send_response was called (via requests.post)
-        assert mock_post.called
-        body = mock_post.call_args[1]["json"]
+        # Verify send_response was called (via dv.post)
+        assert manager.dv.post.called
+        call_kwargs = manager.dv.post.call_args[1]
+        body = call_kwargs["data"]
         assert body["cr_message"] == "Task created successfully!"
         assert body["cr_direction"] == "Outbound"
         assert body["cr_in_reply_to"] == SAMPLE_CONVERSATION_ID
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_process_message_marks_processed(
-        self, mock_patch, mock_post, mock_popen, manager
-    ):
+    def test_process_message_marks_processed(self, mock_popen, manager):
         """After processing, the inbound message is marked as Processed."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
@@ -605,14 +540,14 @@ class TestClaudeCodeSubprocess:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        # mark_processed calls requests.patch with status=Processed
-        patch_calls = mock_patch.call_args_list
-        processed_call = [c for c in patch_calls if c[1].get("json", {}).get("cr_status") == "Processed"]
+        # mark_processed calls dv.patch with status=Processed
+        patch_calls = manager.dv.patch.call_args_list
+        processed_call = [c for c in patch_calls if c[1].get("data", {}).get("cr_status") == "Processed"]
         assert len(processed_call) >= 1
 
     @patch("task_manager.subprocess.Popen")
@@ -688,215 +623,54 @@ SAMPLE_STALE_ROW_2 = {
 
 
 class TestStaleRowCleanup:
-    @patch("task_manager.requests.patch")
-    @patch("task_manager.requests.get")
-    def test_cleanup_marks_stale_rows_as_expired(self, mock_get, mock_patch, manager):
+    def test_cleanup_marks_stale_rows_as_expired(self, manager):
         """cleanup_stale_outbound patches each stale row with STATUS_EXPIRED."""
-        mock_get.return_value = FakeResponse(
+        manager.dv.get.return_value = FakeResponse(
             json_data={"value": [SAMPLE_STALE_ROW_1, SAMPLE_STALE_ROW_2]}
         )
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         cleaned = manager.cleanup_stale_outbound()
 
         assert cleaned == 2
-        assert mock_patch.call_count == 2
-        for c in mock_patch.call_args_list:
-            body = c[1]["json"]
+        assert manager.dv.patch.call_count == 2
+        for c in manager.dv.patch.call_args_list:
+            body = c[1]["data"]
             assert body["cr_status"] == "Expired"
 
-    @patch("task_manager.requests.patch")
-    @patch("task_manager.requests.get")
-    def test_cleanup_no_stale_rows(self, mock_get, mock_patch, manager):
-        mock_get.return_value = FakeResponse(json_data={"value": []})
+    def test_cleanup_no_stale_rows(self, manager):
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
         cleaned = manager.cleanup_stale_outbound()
         assert cleaned == 0
-        assert mock_patch.call_count == 0
+        assert manager.dv.patch.call_count == 0
 
-    @patch("task_manager.requests.get")
-    def test_cleanup_handles_query_error(self, mock_get, manager):
-        mock_get.side_effect = Exception("Dataverse unavailable")
+    def test_cleanup_handles_query_error(self, manager):
+        manager.dv.get.side_effect = Exception("Dataverse unavailable")
         cleaned = manager.cleanup_stale_outbound()
         assert cleaned == 0
 
-    @patch("task_manager.requests.patch")
-    @patch("task_manager.requests.get")
-    def test_cleanup_handles_patch_error(self, mock_get, mock_patch, manager):
-        mock_get.return_value = FakeResponse(
+    def test_cleanup_handles_patch_error(self, manager):
+        manager.dv.get.return_value = FakeResponse(
             json_data={"value": [SAMPLE_STALE_ROW_1]}
         )
-        mock_patch.side_effect = Exception("patch failed")
+        manager.dv.patch.side_effect = Exception("patch failed")
         cleaned = manager.cleanup_stale_outbound()
         assert cleaned == 0
 
-    @patch("task_manager.requests.get")
-    def test_cleanup_uses_correct_filter(self, mock_get, manager):
-        mock_get.return_value = FakeResponse(json_data={"value": []})
+    def test_cleanup_uses_correct_filter(self, manager):
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
         manager.cleanup_stale_outbound()
-        url = mock_get.call_args[0][0]
+        url = manager.dv.get.call_args[0][0]
         assert "cr_direction eq 'Outbound'" in url
         assert "cr_status eq 'Unclaimed'" in url
         assert "createdon lt" in url
-
-
-# -- Stale Task Detection Tests (Acceptance Criterion 4) -----------------------
-
-STALE_TASK_1 = {
-    "cr_shraga_taskid": "stale-task-0001-0002-0003-000000000001",
-    "cr_name": "Stale running task",
-    "cr_prompt": "do something long-running",
-    "cr_status": "Running",
-    "cr_result": "",
-    "crb3b_useremail": "testuser@example.com",
-    "modifiedon": "2026-02-15T08:00:00Z",
-}
-
-STALE_TASK_2 = {
-    "cr_shraga_taskid": "stale-task-0001-0002-0003-000000000002",
-    "cr_name": "Another stale task",
-    "cr_prompt": "another long-running thing",
-    "cr_status": "Running",
-    "cr_result": "",
-    "crb3b_useremail": "testuser@example.com",
-    "modifiedon": "2026-02-15T08:10:00Z",
-}
-
-
-STALE_CANCELING_TASK = {
-    "cr_shraga_taskid": "stale-task-0001-0002-0003-canceling-001",
-    "cr_name": "Stale canceling task",
-    "cr_prompt": "task stuck in canceling",
-    "cr_status": "Canceling",
-    "cr_result": "",
-    "crb3b_useremail": "testuser@example.com",
-    "modifiedon": "2026-02-15T07:30:00Z",
-}
-
-
-class TestSweepStaleTasks:
-    @patch("task_manager.requests.patch")
-    @patch("task_manager.requests.get")
-    def test_sweep_stale_tasks_marks_failed(self, mock_get, mock_patch, manager):
-        """sweep_stale_tasks marks Running tasks with stale modifiedon as Failed."""
-        def get_side_effect(url, **kwargs):
-            if "cr_status eq 5" in url:
-                return FakeResponse(json_data={"value": [STALE_TASK_1, STALE_TASK_2]})
-            return FakeResponse(json_data={"value": []})
-        mock_get.side_effect = get_side_effect
-        mock_patch.return_value = FakeResponse(status_code=204)
-
-        count = manager.sweep_stale_tasks()
-
-        assert count == 2
-        assert mock_patch.call_count == 2
-
-        expected_message = (
-            "Task failed: no progress detected for 30+ minutes "
-            "(likely worker crash or restart)"
-        )
-        for c in mock_patch.call_args_list:
-            body = c[1]["json"]
-            assert body["cr_status"] == 8
-            assert body["cr_result"] == expected_message
-
-        patched_urls = [c[0][0] for c in mock_patch.call_args_list]
-        assert any("stale-task-0001-0002-0003-000000000001" in u for u in patched_urls)
-        assert any("stale-task-0001-0002-0003-000000000002" in u for u in patched_urls)
-
-    @patch("task_manager.requests.patch")
-    @patch("task_manager.requests.get")
-    def test_sweep_stale_canceling_tasks(self, mock_get, mock_patch, manager):
-        """sweep_stale_tasks marks Canceling tasks stuck for 30+ min as Canceled."""
-        def get_side_effect(url, **kwargs):
-            if "cr_status eq 11" in url:
-                return FakeResponse(json_data={"value": [STALE_CANCELING_TASK]})
-            return FakeResponse(json_data={"value": []})
-        mock_get.side_effect = get_side_effect
-        mock_patch.return_value = FakeResponse(status_code=204)
-
-        count = manager.sweep_stale_tasks()
-
-        assert count == 1
-        assert mock_patch.call_count == 1
-
-        body = mock_patch.call_args[1]["json"]
-        assert body["cr_status"] == 9  # Canceled
-        assert "stuck in Canceling" in body["cr_result"]
-
-        patched_url = mock_patch.call_args[0][0]
-        assert "canceling-001" in patched_url
-
-    @patch("task_manager.requests.patch")
-    @patch("task_manager.requests.get")
-    def test_sweep_stale_tasks_both_running_and_canceling(self, mock_get, mock_patch, manager):
-        """sweep_stale_tasks handles both Running and Canceling stale tasks."""
-        def get_side_effect(url, **kwargs):
-            if "cr_status eq 5" in url:
-                return FakeResponse(json_data={"value": [STALE_TASK_1]})
-            elif "cr_status eq 11" in url:
-                return FakeResponse(json_data={"value": [STALE_CANCELING_TASK]})
-            return FakeResponse(json_data={"value": []})
-        mock_get.side_effect = get_side_effect
-        mock_patch.return_value = FakeResponse(status_code=204)
-
-        count = manager.sweep_stale_tasks()
-
-        assert count == 2
-        assert mock_patch.call_count == 2
-
-        # Verify both types of patches happened
-        bodies = [c[1]["json"] for c in mock_patch.call_args_list]
-        statuses = {b["cr_status"] for b in bodies}
-        assert 8 in statuses  # Failed (from Running)
-        assert 9 in statuses  # Canceled (from Canceling)
-
-    @patch("task_manager.requests.patch")
-    @patch("task_manager.requests.get")
-    def test_sweep_stale_tasks_ignores_recent(self, mock_get, mock_patch, manager):
-        mock_get.return_value = FakeResponse(json_data={"value": []})
-        count = manager.sweep_stale_tasks()
-        assert count == 0
-        assert mock_patch.call_count == 0
-
-        # Both Running and Canceling queries should be made
-        get_urls = [c[0][0] for c in mock_get.call_args_list]
-        assert any("cr_status eq 5" in u for u in get_urls)
-        assert any("cr_status eq 11" in u for u in get_urls)
-        assert all("modifiedon lt" in u for u in get_urls)
-
-    @patch("task_manager.requests.patch")
-    @patch("task_manager.requests.get")
-    def test_sweep_stale_tasks_filters_by_user(self, mock_get, mock_patch, manager):
-        mock_get.return_value = FakeResponse(json_data={"value": []})
-        manager.sweep_stale_tasks()
-        for call in mock_get.call_args_list:
-            url = call[0][0]
-            assert "crb3b_useremail eq 'testuser@example.com'" in url
-
-    @patch("task_manager.requests.get")
-    def test_sweep_stale_tasks_handles_query_error(self, mock_get, manager):
-        mock_get.side_effect = Exception("Dataverse unavailable")
-        count = manager.sweep_stale_tasks()
-        assert count == 0
-
-    @patch("task_manager.requests.patch")
-    @patch("task_manager.requests.get")
-    def test_sweep_stale_tasks_handles_patch_error(self, mock_get, mock_patch, manager):
-        mock_get.return_value = FakeResponse(
-            json_data={"value": [STALE_TASK_1]}
-        )
-        mock_patch.side_effect = Exception("patch failed")
-        count = manager.sweep_stale_tasks()
-        assert count == 0
 
 
 # -- Full Flow Integration Test ------------------------------------------------
 
 class TestFullFlow:
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_process_message_full_flow(self, mock_patch, mock_post, mock_popen, manager):
+    def test_process_message_full_flow(self, mock_popen, manager):
         """Test full flow: process_message -> claude CLI -> send_response -> mark_processed."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
@@ -905,8 +679,8 @@ class TestFullFlow:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
@@ -914,12 +688,12 @@ class TestFullFlow:
         assert mock_popen.called
 
         # Verify response was sent to DV
-        assert mock_post.called
-        body = mock_post.call_args[1]["json"]
-        assert body["cr_message"] == "I have created the task for you."
+        assert manager.dv.post.called
+        call_kwargs = manager.dv.post.call_args[1]
+        assert call_kwargs["data"]["cr_message"] == "I have created the task for you."
 
         # Verify message was marked processed
-        assert mock_patch.called
+        assert manager.dv.patch.called
 
         # Verify session was persisted (stored as dict with session_id and prev_session_id)
         entry = manager._sessions[SAMPLE_MCS_CONV_ID]
@@ -942,9 +716,7 @@ class _RemovedTestFollowupDetection:
     """
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_submitted_with_id_sets_followup_true(self, mock_patch, mock_post, mock_popen, manager):
+    def test_submitted_with_id_sets_followup_true(self, mock_popen, manager):
         """PM response 'Submitted! ID: <uuid>' must set cr_followup_expected='true'."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
@@ -953,19 +725,17 @@ class _RemovedTestFollowupDetection:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         assert body["cr_followup_expected"] == "true", \
             "PM must set followup_expected=true when response contains 'Submitted! ID:'"
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_submitted_id_lowercase_sets_followup(self, mock_patch, mock_post, mock_popen, manager):
+    def test_submitted_id_lowercase_sets_followup(self, mock_popen, manager):
         """Detection is case-insensitive."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
@@ -974,18 +744,16 @@ class _RemovedTestFollowupDetection:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         assert body["cr_followup_expected"] == "true"
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_status_check_does_not_trigger_followup(self, mock_patch, mock_post, mock_popen, manager):
+    def test_status_check_does_not_trigger_followup(self, mock_popen, manager):
         """Status messages mentioning 'Submitted' without 'ID:' must NOT trigger followup."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
@@ -994,19 +762,17 @@ class _RemovedTestFollowupDetection:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         assert body["cr_followup_expected"] == "", \
             "Status messages must not trigger followup"
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_cancel_submitted_does_not_trigger_followup(self, mock_patch, mock_post, mock_popen, manager):
+    def test_cancel_submitted_does_not_trigger_followup(self, mock_popen, manager):
         """Cancel messages about Submitted state must NOT trigger followup."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
@@ -1015,18 +781,16 @@ class _RemovedTestFollowupDetection:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         assert body["cr_followup_expected"] == ""
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_general_response_does_not_trigger_followup(self, mock_patch, mock_post, mock_popen, manager):
+    def test_general_response_does_not_trigger_followup(self, mock_popen, manager):
         """Non-task responses must NOT trigger followup."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
@@ -1035,18 +799,16 @@ class _RemovedTestFollowupDetection:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         assert body["cr_followup_expected"] == ""
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
-    def test_task_list_with_ids_does_not_trigger_followup(self, mock_patch, mock_post, mock_popen, manager):
+    def test_task_list_with_ids_does_not_trigger_followup(self, mock_popen, manager):
         """Task listing with short IDs must NOT trigger followup."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
@@ -1055,12 +817,12 @@ class _RemovedTestFollowupDetection:
                 "is_error": False,
             })
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        body = mock_post.call_args[1]["json"]
+        body = manager.dv.post.call_args[1]["data"]
         # This has "id:" but not "submitted", so should NOT trigger
         assert body["cr_followup_expected"] == ""
 
@@ -1292,10 +1054,8 @@ class TestSessionExpiry:
     """Tests for session expiry: stale sessions are forgotten on resume failure."""
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
     def test_stale_session_is_replaced_on_resume_failure(
-        self, mock_patch, mock_post, mock_popen, manager, tmp_path
+        self, mock_popen, manager, tmp_path
     ):
         """When --resume fails, the session is replaced with a new one."""
         manager._sessions_path = tmp_path / "sessions.json"
@@ -1316,8 +1076,8 @@ class TestSessionExpiry:
                 })
             ),
         ]
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
@@ -1330,10 +1090,8 @@ class TestSessionExpiry:
         assert on_disk[SAMPLE_MCS_CONV_ID]["session_id"] == "new-session-after-expiry"
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
     def test_expired_session_retry_does_not_use_resume(
-        self, mock_patch, mock_post, mock_popen, manager, tmp_path
+        self, mock_popen, manager, tmp_path
     ):
         """After resume fails, the retry call has no --resume flag."""
         manager._sessions_path = tmp_path / "sessions.json"
@@ -1352,8 +1110,8 @@ class TestSessionExpiry:
                 })
             ),
         ]
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
@@ -1364,10 +1122,8 @@ class TestSessionExpiry:
         assert "--resume" not in second_cmd
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
     def test_expired_session_response_sent_correctly(
-        self, mock_patch, mock_post, mock_popen, manager, tmp_path
+        self, mock_popen, manager, tmp_path
     ):
         """When a session expires and retry succeeds, response is sent."""
         manager._sessions_path = tmp_path / "sessions.json"
@@ -1386,19 +1142,17 @@ class TestSessionExpiry:
                 })
             ),
         ]
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        sent_body = mock_post.call_args[1]["json"]
+        sent_body = manager.dv.post.call_args[1]["data"]
         assert "Here is your answer." in sent_body["cr_message"]
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
     def test_both_resume_and_fresh_fail_uses_fallback(
-        self, mock_patch, mock_post, mock_popen, manager, tmp_path
+        self, mock_popen, manager, tmp_path
     ):
         """When both resume and fresh calls fail, the fallback message is sent."""
         manager._sessions_path = tmp_path / "sessions.json"
@@ -1411,19 +1165,17 @@ class TestSessionExpiry:
             _make_popen_mock(returncode=1, stderr="session not found"),
             _make_popen_mock(returncode=1, stderr="claude unavailable"),
         ]
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
-        sent_body = mock_post.call_args[1]["json"]
+        sent_body = manager.dv.post.call_args[1]["data"]
         assert sent_body["cr_message"] == "The system is temporarily unavailable, please try again shortly."
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
     def test_other_sessions_preserved_when_one_expires(
-        self, mock_patch, mock_post, mock_popen, manager, tmp_path
+        self, mock_popen, manager, tmp_path
     ):
         """When one session expires, other sessions remain intact on disk."""
         manager._sessions_path = tmp_path / "sessions.json"
@@ -1446,8 +1198,8 @@ class TestSessionExpiry:
                 })
             ),
         ]
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         manager.process_message(SAMPLE_INBOUND_MSG)
 
@@ -1465,54 +1217,26 @@ class TestSessionExpiry:
 # -- Post-Refactor: PM Monitor / Provision Delegation Tests (T045) ----------
 
 class TestMonitorTaskPostRefactor:
-    """Verify that task monitoring works through the post-refactor polling loop.
+    """Verify that the post-refactor polling loop calls poll and cleanup.
 
-    In the post-refactor architecture, the PM's run() loop calls
-    sweep_stale_tasks() on every polling cycle. This replaces any dedicated
-    monitoring threads. The test exercises a single iteration of the main loop
-    and asserts that:
+    After the sweep_stale_tasks removal, the PM's run() loop only calls
+    poll_unclaimed and cleanup_stale_outbound. This test exercises a single
+    iteration and asserts that:
       1. poll_unclaimed is called to check for new messages.
-      2. sweep_stale_tasks is called every cycle to detect stale Running tasks.
-      3. Stale tasks (Running with modifiedon > 30 min ago) are transitioned to
-         Failed with an appropriate result message.
-      4. cleanup_stale_outbound is called periodically (on startup and every 30m).
+      2. cleanup_stale_outbound is called on startup.
     """
 
     @patch("task_manager.time.sleep", side_effect=KeyboardInterrupt)
-    @patch("task_manager.requests.patch")
-    @patch("task_manager.requests.get")
-    def test_monitor_task_post_refactor(self, mock_get, mock_patch, mock_sleep, manager):
-        """The run() loop polls for messages and sweeps stale tasks every cycle.
+    def test_monitor_task_post_refactor(self, mock_sleep, manager):
+        """The run() loop polls for messages and cleans up stale outbound.
 
         This test simulates one full iteration of the main loop by having
         time.sleep raise KeyboardInterrupt on the first call. We verify
         that within that single iteration:
           - poll_unclaimed was invoked (the GET for unclaimed messages).
-          - sweep_stale_tasks was invoked (the GET for stale Running tasks).
           - cleanup_stale_outbound ran on startup (the GET for stale outbound).
-          - When stale tasks exist, they are PATCHed to Failed (status 8)
-            with the correct failure message.
         """
         # --- Arrange ---
-        # We need the GET mock to return different results for different URLs.
-        # The main loop will issue GETs for:
-        #   1. cleanup_stale_outbound (on startup) -- outbound unclaimed rows
-        #   2. poll_unclaimed -- inbound unclaimed messages
-        #   3. sweep_stale_tasks -- running tasks with stale modifiedon
-        #
-        # We'll make poll_unclaimed return 0 messages so no processing happens,
-        # and sweep_stale_tasks return 1 stale task so we can verify the PATCH.
-
-        stale_task = {
-            "cr_shraga_taskid": "stale-task-monitor-001",
-            "cr_name": "Stale monitored task",
-            "cr_prompt": "do something",
-            "cr_status": "Running",
-            "cr_result": "",
-            "crb3b_useremail": "testuser@example.com",
-            "modifiedon": "2026-02-15T07:00:00Z",
-        }
-
         def route_get(url, **kwargs):
             """Route GET requests based on URL content."""
             if "cr_direction eq 'Outbound'" in url and "cr_status eq 'Unclaimed'" in url:
@@ -1521,23 +1245,18 @@ class TestMonitorTaskPostRefactor:
             elif "cr_direction eq 'Inbound'" in url and "cr_status eq 'Unclaimed'" in url:
                 # poll_unclaimed query -- no new messages
                 return FakeResponse(json_data={"value": []})
-            elif "cr_status eq 5" in url and "modifiedon lt" in url:
-                # sweep_stale_tasks query -- one stale task
-                return FakeResponse(json_data={"value": [stale_task]})
             else:
                 return FakeResponse(json_data={"value": []})
 
-        mock_get.side_effect = route_get
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.get.side_effect = route_get
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         # --- Act ---
-        # run() will execute one full loop iteration, then time.sleep raises
-        # KeyboardInterrupt which triggers the graceful shutdown path.
         manager.run()
 
         # --- Assert ---
-        # 1. Verify GET requests were made (poll + sweep + cleanup)
-        get_urls = [c[0][0] for c in mock_get.call_args_list]
+        get_calls = manager.dv.get.call_args_list
+        get_urls = [c[0][0] for c in get_calls]
 
         # Check that poll_unclaimed was called (inbound unclaimed messages)
         poll_calls = [u for u in get_urls
@@ -1546,39 +1265,11 @@ class TestMonitorTaskPostRefactor:
             "poll_unclaimed should be called at least once per loop iteration"
         )
 
-        # Check that sweep_stale_tasks was called (running tasks with stale modifiedon)
-        sweep_calls = [u for u in get_urls if "cr_status eq 5" in u and "modifiedon lt" in u]
-        assert len(sweep_calls) >= 1, (
-            "sweep_stale_tasks should be called at least once per loop iteration"
-        )
-
         # Check that cleanup_stale_outbound was called on startup
         cleanup_calls = [u for u in get_urls
                          if "cr_direction eq 'Outbound'" in u and "cr_status eq 'Unclaimed'" in u]
         assert len(cleanup_calls) >= 1, (
             "cleanup_stale_outbound should be called on startup"
-        )
-
-        # 2. Verify the stale task was PATCHed to Failed
-        patch_calls_with_json = [
-            c for c in mock_patch.call_args_list
-            if c[1].get("json", {}).get("cr_status") == 8
-        ]
-        assert len(patch_calls_with_json) >= 1, (
-            "Stale running task should be PATCHed to Failed"
-        )
-
-        # 3. Verify the failure message on the patched task
-        failed_patch = patch_calls_with_json[0]
-        patch_body = failed_patch[1]["json"]
-        assert patch_body["cr_status"] == 8
-        assert "no progress detected" in patch_body["cr_result"]
-        assert "30+ minutes" in patch_body["cr_result"]
-
-        # 4. Verify the PATCH URL targets the correct task ID
-        patch_url = failed_patch[0][0]
-        assert "stale-task-monitor-001" in patch_url, (
-            "The PATCH should target the stale task's ID"
         )
 
 
@@ -1601,10 +1292,8 @@ class TestProvisionDelegationPostRefactor:
     """
 
     @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.requests.post")
-    @patch("task_manager.requests.patch")
     def test_provision_delegation_post_refactor(
-        self, mock_patch, mock_post, mock_popen, manager, tmp_path
+        self, mock_popen, manager, tmp_path
     ):
         """Provisioning is fully delegated to Claude Code via the CLI subprocess.
 
@@ -1650,8 +1339,8 @@ class TestProvisionDelegationPostRefactor:
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps(claude_response)
         )
-        mock_post.return_value = FakeResponse(json_data={})
-        mock_patch.return_value = FakeResponse(status_code=204)
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
 
         # --- Act ---
         manager.process_message(provision_msg)
@@ -1681,8 +1370,8 @@ class TestProvisionDelegationPostRefactor:
         )
 
         # 3. Verify Claude's response was forwarded to the user via send_response
-        assert mock_post.called, "send_response must be called to write outbound row"
-        sent_body = mock_post.call_args[1]["json"]
+        assert manager.dv.post.called, "send_response must be called to write outbound row"
+        sent_body = manager.dv.post.call_args[1]["data"]
         assert sent_body["cr_direction"] == "Outbound", (
             "Response must be an outbound message"
         )
@@ -1716,19 +1405,19 @@ class TestProvisionDelegationPostRefactor:
         )
 
         # 5. Verify the inbound message was marked as Processed
-        patch_calls = mock_patch.call_args_list
+        patch_calls = manager.dv.patch.call_args_list
         processed_patches = [
             c for c in patch_calls
-            if c[1].get("json", {}).get("cr_status") == "Processed"
+            if c[1].get("data", {}).get("cr_status") == "Processed"
         ]
         assert len(processed_patches) >= 1, (
             "The inbound message must be marked as Processed after handling"
         )
 
         # 6. Verify no direct DevCenter API calls were made
-        # All GET/POST/PATCH calls should be to the DV conversations table,
+        # All POST calls should be to the DV conversations table,
         # NOT to any DevCenter endpoint
-        for c in mock_post.call_args_list:
+        for c in manager.dv.post.call_args_list:
             url = c[0][0] if c[0] else ""
             assert "devcenter" not in url.lower(), (
                 "PM must NOT make direct DevCenter API calls -- "
