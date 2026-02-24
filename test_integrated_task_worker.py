@@ -2072,7 +2072,7 @@ class TestExecuteWithAutonomousAgent:
         )
 
         # Verify return values
-        assert success is True
+        assert success == "completed"
         assert "Task summary: everything works." in result
         assert "View in OneDrive" in result
         assert isinstance(transcript, str)
@@ -2169,7 +2169,7 @@ class TestExecuteWithAutonomousAgent:
             parsed_prompt_data=parsed_prompt,
         )
 
-        assert success is True
+        assert success == "completed"
         assert "Summary after retry" in result
 
         # Worker called twice
@@ -2217,7 +2217,7 @@ class TestExecuteWithAutonomousAgent:
         )
 
         # Returns failure
-        assert success is False
+        assert success == "failed"
         assert "Claude CLI process crashed" in result
         assert "Error during autonomous execution" in result
 
@@ -2267,7 +2267,7 @@ class TestExecuteWithAutonomousAgent:
             parsed_prompt_data=parsed_prompt,
         )
 
-        assert success is False
+        assert success == "failed"
         assert "Max iterations" in result
 
         # Worker and verifier each called 10 times
@@ -2313,7 +2313,7 @@ class TestExecuteWithAutonomousAgent:
             parsed_prompt_data=parsed_prompt,
         )
 
-        assert success is False
+        assert success == "canceled"
         assert "canceled" in result.lower()
 
         # Worker, verifier, summarizer NOT called
@@ -2400,7 +2400,7 @@ class TestExecuteWithAutonomousAgent:
             parsed_prompt_data=parsed_prompt,
         )
 
-        assert success is True
+        assert success == "completed"
         # Stats should be accumulated (our fake_merge sums total_cost_usd, etc.)
         assert stats.get("total_cost_usd", 0) > 0
         assert stats.get("total_duration_ms", 0) > 0
@@ -2907,7 +2907,7 @@ class TestSessionFolderEnrichment:
             parsed_prompt_data=parsed_prompt,
         )
 
-        assert success is True
+        assert success == "completed"
 
         # write_task_prompt_file was called with raw prompt and success criteria
         worker.write_task_prompt_file.assert_called_once_with(
