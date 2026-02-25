@@ -36,7 +36,7 @@ def _import_orchestrator(monkeypatch, tmp_path):
         import orchestrator as mod
 
     # Persist mock so Orchestrator() construction uses it (with block ended)
-    monkeypatch.setattr(mod, "create_credential", lambda log_fn=None, max_retries=2: mock_cred_inst)
+    monkeypatch.setattr(mod, "create_credential", lambda log_fn=None: mock_cred_inst)
     return mod, mock_cred_inst
 
 

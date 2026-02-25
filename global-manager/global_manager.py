@@ -236,6 +236,40 @@ class GlobalManager:
             _log(f"[ERROR] claim_message: {e}")
             return False
 
+    def cleanup_stale_claimed(self, max_age_minutes: int = 15):
+        """Mark stale Claimed inbound messages as Expired (drop them).
+
+        Runs on GM startup.  Messages stuck in Claimed longer than
+        max_age_minutes are from a previous crash — too old to respond to.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        url = (
+            f"{DATAVERSE_API}/{CONVERSATIONS_TABLE}"
+            f"?$filter=cr_direction eq '{DIRECTION_INBOUND}'"
+            f" and cr_status eq '{STATUS_CLAIMED}' and createdon lt {cutoff}"
+            f"&$top=50"
+            f"&$select=cr_shraga_conversationid"
+        )
+        try:
+            resp = self.dv.get(url, timeout=REQUEST_TIMEOUT)
+            rows = resp.json().get("value", [])
+            if not rows:
+                return
+            _log(f"[STALE_CLAIMED] Found {len(rows)} stale Claimed message(s), marking Expired")
+            for row in rows:
+                rid = row.get("cr_shraga_conversationid")
+                if rid:
+                    try:
+                        self.dv.patch(
+                            f"{DATAVERSE_API}/{CONVERSATIONS_TABLE}({rid})",
+                            data={"cr_status": "Expired"},
+                            timeout=REQUEST_TIMEOUT,
+                        )
+                    except Exception as e:
+                        _log(f"[WARN] Failed to expire {rid[:8]}: {e}")
+        except Exception as e:
+            _log(f"[WARN] cleanup_stale_claimed failed: {e}")
+
     def mark_processed(self, row_id: str):
         try:
             url = f"{DATAVERSE_API}/{CONVERSATIONS_TABLE}({row_id})"
@@ -425,6 +459,7 @@ class GlobalManager:
         _log(f"[CONFIG] Claim delay: new users={CLAIM_DELAY_NEW_USER}s, known users={CLAIM_DELAY_KNOWN_USER}s")
         _log(f"[CONFIG] Poll interval: {POLL_INTERVAL}s")
         _log(f"[CONFIG] Box: {self._box_name}")
+        self.cleanup_stale_claimed()
 
         while True:
             try:
