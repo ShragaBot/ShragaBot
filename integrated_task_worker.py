@@ -11,8 +11,6 @@ import sys
 import shutil
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from azure.identity import DefaultAzureCredential
-
 # Import the autonomous agent system (from same directory as this file)
 sys.path.insert(0, str(Path(__file__).parent))
 from autonomous_agent import AgentCLI, extract_phase_stats, merge_phase_stats
@@ -143,7 +141,8 @@ class IntegratedTaskWorker:
         self._current_session_folder = None
         self._current_transcript = ""
 
-        # Azure authentication
+        # Azure authentication (lazy import -- avoids WMI hang at module level)
+        from azure.identity import DefaultAzureCredential
         self.credential = DefaultAzureCredential()
         self.dv = DataverseClient(dataverse_url=DATAVERSE_URL, credential=self.credential, log_fn=_log)
 

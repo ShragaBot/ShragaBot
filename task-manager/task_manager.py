@@ -1,19 +1,24 @@
-"""PM thin wrapper: DV I/O + session persistence + stale detection.
-Claude Code handles all task management autonomously via CLAUDE.md."""
+"""PM thin wrapper: DV I/O + session resolution via Dataverse + stale detection.
+Claude Code handles all task management autonomously via CLAUDE.md.
+
+Session continuity is managed by session_utils.resolve_session(), which uses
+Dataverse (cr_processed_by column) as the single source of truth. No local
+session JSON files."""
 import socket, json, time, os, sys, subprocess, uuid
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from azure.identity import DefaultAzureCredential
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from version_check import get_my_version, should_exit
 from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
+from session_utils import resolve_session
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 os.environ.setdefault('DEVBOX_HOSTNAME', os.environ.get('COMPUTERNAME', socket.gethostname()))
 
 INSTANCE_ID = uuid.uuid4().hex[:8]
+AGENT_ROLE = "PM"
 
 # --- File logging ---
 _LOG_FILE = Path(__file__).parent / "pm.log"
@@ -38,6 +43,7 @@ def _log(msg: str):
         _file_logger.info(msg)
     except Exception:
         pass  # Never let logging crash the service
+
 DV_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynamics.com")
 DV_API = f"{DV_URL}/api/data/v9.2"
 CONV_TBL = os.environ.get("CONVERSATIONS_TABLE", "cr_shraga_conversations")
@@ -49,7 +55,6 @@ DIR_IN, DIR_OUT = "Inbound", "Outbound"
 ST_UNCLAIMED, ST_CLAIMED, ST_PROCESSED, ST_EXPIRED = "Unclaimed", "Claimed", "Processed", "Expired"
 FALLBACK_MESSAGE = "The system is temporarily unavailable, please try again shortly."
 WORKING_DIR = os.environ.get("WORKING_DIR", "")
-SESSIONS_FILE = os.environ.get("SESSIONS_FILE", "")
 
 
 class TaskManager:
@@ -57,67 +62,19 @@ class TaskManager:
         if not user_email:
             raise ValueError("USER_EMAIL is required")
         self.user_email = user_email
-        self.manager_id = f"personal:{user_email}"
         self.working_dir = working_dir or WORKING_DIR
+        from azure.identity import DefaultAzureCredential  # Lazy import -- avoids WMI hang at module level
         self.credential = DefaultAzureCredential()
         self.dv = DataverseClient(dataverse_url=DV_URL, credential=self.credential, log_fn=_log)
-        self._sessions_path = self._resolve_sessions_path()
-        self._sessions: dict[str, str] = self._load_sessions()
         # System prompt file path (passed via --system-prompt-file)
         prompt_file = Path(__file__).parent / "PM_SYSTEM_PROMPT.md"
         self._system_prompt_file = str(prompt_file) if prompt_file.exists() else ""
         # Version check for immutable releases
         self._my_version = get_my_version(__file__)
-
-    def _resolve_sessions_path(self) -> Path:
-        if SESSIONS_FILE: return Path(SESSIONS_FILE)
-        d = Path.home() / ".shraga"; d.mkdir(exist_ok=True)
-        return d / f"sessions_{self.user_email.replace('@','_at_').replace('.','_')}.json"
-
-    def _load_sessions(self) -> dict:
-        """Load sessions file. Each entry: { mcs_id: { session_id, prev_session_id } }
-        On startup, we keep the file for reference but mark all sessions as needing refresh.
-        """
-        try:
-            if self._sessions_path.exists():
-                d = json.loads(self._sessions_path.read_text(encoding="utf-8"))
-                if isinstance(d, dict):
-                    # On startup: keep prev session IDs for reference, clear current
-                    prev = {}
-                    for mcs_id, val in d.items():
-                        sid = val if isinstance(val, str) else val.get("session_id", "")
-                        if sid:
-                            prev[mcs_id] = {"prev_session_id": sid, "session_id": None}
-                    _log(f"[SESSIONS] Loaded {len(prev)} previous session(s)")
-                    return prev
-        except Exception as e: _log(f"[WARN] Failed to load sessions: {e}")
-        return {}
-
-    def _save_sessions(self):
-        try:
-            # Save in the new format: { mcs_id: { session_id, prev_session_id } }
-            self._sessions_path.write_text(json.dumps(self._sessions, indent=2), encoding="utf-8")
-        except Exception as e: _log(f"[WARN] Failed to save sessions: {e}")
-
-    def _get_recent_messages(self, mcs_conversation_id: str, count: int = 10) -> str:
-        """Fetch recent messages from DV for this conversation to provide context."""
-        try:
-            r = self.dv.get(
-                f"{DV_API}/{CONV_TBL}?$filter=cr_mcs_conversation_id eq '{mcs_conversation_id}'"
-                f" and cr_status eq '{ST_PROCESSED}'"
-                f"&$orderby=createdon desc&$top={count}",
-                timeout=REQ_TMO)
-            rows = r.json().get("value", [])
-            if not rows: return ""
-            lines = []
-            for row in reversed(rows):  # oldest first
-                direction = "User" if row.get("cr_direction") == DIR_IN else "Assistant"
-                msg = row.get("cr_message", "")[:500]
-                lines.append(f"{direction}: {msg}")
-            return "\n".join(lines)
-        except Exception as e:
-            _log(f"[WARN] Could not fetch recent messages: {e}")
-            return ""
+        # Box name for cr_claimed_by
+        self._box_name = os.environ.get("COMPUTERNAME", socket.gethostname())
+        # Track current session ID per mcs_conversation_id (within this process run)
+        self._current_sessions: dict[str, str] = {}
 
     def _set_onboarding_completed(self):
         """Set onboardingstep=completed for this user in DV on startup."""
@@ -138,13 +95,6 @@ class TaskManager:
         except Exception as e:
             _log(f"[WARN] Could not set onboarding state: {e}")
 
-    def _forget_session(self, mcs_id: str):
-        if mcs_id in self._sessions:
-            entry = self._sessions.pop(mcs_id)
-            sid = entry.get("session_id", "") if isinstance(entry, dict) else str(entry)
-            _log(f"[SESSIONS] Forgot session {sid[:8]}... for {mcs_id[:20]}...")
-            self._save_sessions()
-
     def poll_unclaimed(self) -> list[dict]:
         try:
             r = self.dv.get(f"{DV_API}/{CONV_TBL}?$filter=cr_useremail eq '{self.user_email}'"
@@ -159,10 +109,11 @@ class TaskManager:
         rid, etag = msg.get("cr_shraga_conversationid"), msg.get("@odata.etag")
         if not rid or not etag: _log("[WARN] Cannot claim message -- missing id or etag"); return False
         try:
+            claimed_by = f"{AGENT_ROLE.lower()}:{self._my_version}:{self._box_name}:{INSTANCE_ID}"
             self.dv.patch(f"{DV_API}/{CONV_TBL}({rid})",
-                data={"cr_status": ST_CLAIMED, "cr_claimed_by": f"{self.manager_id}:{INSTANCE_ID}"},
+                data={"cr_status": ST_CLAIMED, "cr_claimed_by": claimed_by},
                 etag=etag, timeout=REQ_TMO)
-            _log(f"[CLAIM] Claimed {rid[:8]} successfully"); return True
+            _log(f"[CLAIM] Claimed {rid[:8]} successfully (by {claimed_by})"); return True
         except ETagConflictError: _log(f"[INFO] Message {rid} already claimed"); return False
         except Exception as e: _log(f"[ERROR] claim_message: {e}"); return False
 
@@ -173,14 +124,25 @@ class TaskManager:
             _log(f"[DV] Marked {row_id[:8]} as Processed")
         except Exception as e: _log(f"[WARN] mark_processed failed: {e}")
 
-    def send_response(self, in_reply_to: str, mcs_conversation_id: str, text: str):
+    def send_response(self, in_reply_to: str, mcs_conversation_id: str, text: str,
+                      session_id: str = "", processed_by: str = ""):
+        """Write outbound response to DV. Adds [ROLE:session_short] prefix and
+        writes cr_processed_by on the outbound row."""
         try:
-            body = {"cr_name": text[:100], "cr_useremail": self.user_email,
-                    "cr_mcs_conversation_id": mcs_conversation_id, "cr_message": text,
+            # Add message prefix: [PM:xxxx] text
+            prefixed_text = text
+            if session_id:
+                session_short = session_id[:4]
+                prefixed_text = f"[{AGENT_ROLE}:{session_short}] {text}"
+
+            body = {"cr_name": prefixed_text[:100], "cr_useremail": self.user_email,
+                    "cr_mcs_conversation_id": mcs_conversation_id, "cr_message": prefixed_text,
                     "cr_direction": DIR_OUT, "cr_status": ST_UNCLAIMED,
                     "cr_in_reply_to": in_reply_to}
+            if processed_by:
+                body["cr_processed_by"] = processed_by
             r = self.dv.post(f"{DV_API}/{CONV_TBL}", data=body, timeout=REQ_TMO)
-            _log(f'[DV] Wrote outbound response (reply_to={in_reply_to[:8]}): "{text[:60]}..."')
+            _log(f'[DV] Wrote outbound response (reply_to={in_reply_to[:8]}): "{prefixed_text[:60]}..."')
             return {"cr_shraga_conversationid": "created"} if r.status_code == 204 else r.json()
         except Exception as e: _log(f"[ERROR] send_response: {e}"); return None
 
@@ -241,7 +203,7 @@ class TaskManager:
         if data.get("is_error"):
             _log(f"[WARN] Claude error: {data.get('result','')[:200]}"); return None, ""
         result = data.get("result", "")
-        # Guard: if Claude output raw JSON tool_calls, it's a malformed response - retry without session
+        # Guard: if Claude output raw JSON tool_calls, it's a malformed response - discard
         if result and result.strip().startswith('{"tool_calls"'):
             _log(f"[WARN] Claude returned raw tool_calls JSON instead of natural language - discarding")
             return None, data.get("session_id", "")
@@ -257,51 +219,71 @@ class TaskManager:
         if mcs:
             txt = f"[MCS_CONVERSATION_ID={mcs}]\n[INBOUND_ROW_ID={rid}]\n{txt}"
 
-        session_entry = self._sessions.get(mcs, {}) if mcs else {}
-        if isinstance(session_entry, str):
-            session_entry = {"prev_session_id": session_entry, "session_id": None}
-            self._sessions[mcs] = session_entry
-
-        sid = session_entry.get("session_id")  # Current session (within this run)
-        prev_sid = session_entry.get("prev_session_id")  # Previous run's session
+        # Check if we have a current session for this conversation (within this process run)
+        current_sid = self._current_sessions.get(mcs) if mcs else None
 
         try:
-            if sid:
-                # Within-run resume -- same model, same prompt
-                resp, new_sid = self._call_claude(txt, session_id=sid)
+            resp = None
+            new_sid = ""
+
+            if current_sid:
+                # Within-run resume -- same model, same prompt, same process
+                resp, new_sid = self._call_claude(txt, session_id=current_sid)
                 if resp is None:
-                    _log(f"[SESSIONS] Resume failed for {sid[:8]}..., starting fresh")
-                    sid = None  # Fall through to new session below
+                    _log(f"[SESSIONS] Within-run resume failed for {current_sid[:8]}..., falling back")
+                    current_sid = None  # Fall through to resolve_session below
 
-            if not sid:
-                # New session -- inject context from previous conversation
-                context_prefix = ""
-                parts = []
-                if prev_sid:
-                    parts.append(f"[Previous Claude session ID: {prev_sid}]")
-                if mcs:
-                    recent = self._get_recent_messages(mcs)
-                    if recent:
-                        parts.append(f"[Recent conversation history:\n{recent}\n]")
-                if parts:
-                    context_prefix = "\n".join(parts) + "\n\n"
+            if not current_sid:
+                # Use resolve_session to determine what to do
+                resolved_sid, context_prefix, prev_path = resolve_session(
+                    self.dv,
+                    mcs,
+                    my_version=self._my_version,
+                    my_role=AGENT_ROLE.lower(),
+                    log_fn=_log,
+                    dv_api=DV_API,
+                    conv_table=CONV_TBL,
+                    dir_in=DIR_IN,
+                    dir_out=DIR_OUT,
+                    st_processed=ST_PROCESSED,
+                    request_timeout=REQ_TMO,
+                )
 
-                full_text = context_prefix + txt if context_prefix else txt
-                resp, new_sid = self._call_claude(full_text, session_id=None)
+                if resolved_sid:
+                    # Resume a previous session from DV history
+                    full_text = context_prefix + txt if context_prefix else txt
+                    resp, new_sid = self._call_claude(full_text, session_id=resolved_sid)
+                    if resp is None:
+                        # Resume failed -- start completely fresh
+                        _log(f"[SESSIONS] Resume of {resolved_sid[:8]} failed, starting fresh")
+                        resp, new_sid = self._call_claude(txt, session_id=None)
+                else:
+                    # New session with optional context
+                    full_text = context_prefix + txt if context_prefix else txt
+                    resp, new_sid = self._call_claude(full_text, session_id=None)
 
             if resp is None: resp = FALLBACK_MESSAGE
-            if new_sid and mcs:
-                self._sessions[mcs] = {
-                    "session_id": new_sid,
-                    "prev_session_id": prev_sid
-                }
-                self._save_sessions()
-                if not sid: _log(f"[SESSIONS] New session {new_sid[:8]}... for {mcs[:20]}...")
 
-        except subprocess.TimeoutExpired: _log("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE
-        except FileNotFoundError: _log("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE
-        except Exception as e: _log(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE
-        self.send_response(in_reply_to=rid, mcs_conversation_id=mcs, text=resp)
+            # Track the session ID for within-run resume
+            if new_sid and mcs:
+                self._current_sessions[mcs] = new_sid
+                _log(f"[SESSIONS] Session {new_sid[:8]}... active for {mcs[:20]}...")
+
+            # Build processed_by value for the outbound row
+            active_sid = new_sid or current_sid or ""
+            processed_by = f"{AGENT_ROLE.lower()}:{self._my_version}:{active_sid}" if active_sid else ""
+
+        except subprocess.TimeoutExpired: _log("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE; processed_by = ""; active_sid = ""
+        except FileNotFoundError: _log("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE; processed_by = ""; active_sid = ""
+        except Exception as e: _log(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE; processed_by = ""; active_sid = ""
+
+        self.send_response(
+            in_reply_to=rid,
+            mcs_conversation_id=mcs,
+            text=resp,
+            session_id=active_sid,
+            processed_by=processed_by,
+        )
         self.mark_processed(rid)
         _log(f"[MSG] Responded: {resp[:80]}...")
 
@@ -320,8 +302,8 @@ class TaskManager:
             _log(f"[CRITICAL] Getting token failed: {e} -- Exiting.")
             _log("[CRITICAL] HINT: Run 'az login' on this dev box.")
             sys.exit(1)
-        _log(f"[START] PM for {self.user_email} | instance={INSTANCE_ID} | pid={os.getpid()}")
-        _log(f"[CONFIG] DV: {DV_URL} | Poll: {POLL_SEC}s")
+        _log(f"[START] PM for {self.user_email} | version={self._my_version} | instance={INSTANCE_ID} | pid={os.getpid()}")
+        _log(f"[CONFIG] DV: {DV_URL} | Poll: {POLL_SEC}s | Box: {self._box_name}")
         self._set_onboarding_completed()
         self.cleanup_stale_outbound()
         last_cleanup = time.time()
@@ -343,7 +325,9 @@ class TaskManager:
                 time.sleep(POLL_SEC)
             except KeyboardInterrupt: _log("\n[STOP] Shutting down."); break
             except Exception as e: _log(f"[ERROR] Main loop: {e}"); time.sleep(POLL_SEC * 2)
+
 def main():
     if not USER_EMAIL: _log("[CRITICAL] USER_EMAIL required."); sys.exit(1)
     TaskManager(USER_EMAIL, working_dir=WORKING_DIR).run()
+
 if __name__ == "__main__": main()

@@ -5,17 +5,17 @@ Polls the conversations table for any unclaimed inbound messages older than 15s.
 Handles new user onboarding (dev box provisioning) and users whose personal
 manager is down.
 
-Instead of a tool-wrapper architecture, the GM delegates all decision-making to
-a persistent Claude Code session.  Claude Code reads CLAUDE.md and runs scripts
-directly (get_user_state.py, update_user_state.py, check_devbox_status.py, etc.).
+Session continuity is managed by session_utils.resolve_session(), which uses
+Dataverse (cr_processed_by column) as the single source of truth. No local
+session JSON files.
 
 The GM's responsibilities are limited to:
   1. Poll DV for unclaimed Inbound messages
   2. Claim messages with ETag-based optimistic concurrency
-  3. Look up or create a Claude Code session for each conversation
+  3. Resolve session via DV-based session_utils
   4. Run `claude --resume {session_id} --print -p "{user_message}"`
-  5. Write Claude's response back to DV
-  6. Clean up expired sessions (24h TTL)
+  5. Write Claude's response back to DV with cr_processed_by
+  6. Add [GM:xxxx] message prefix for session tracking
 
 The ONLY hardcoded user-facing message is the single fallback for when Claude
 Code is completely unavailable:
@@ -27,20 +27,21 @@ import json
 import time
 import os
 import sys
+import socket
 import subprocess
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from azure.identity import DefaultAzureCredential
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from timeout_utils import call_with_timeout
 from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
+from session_utils import resolve_session
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 
 # Unique instance ID for this process (helps distinguish multiple GM instances)
 INSTANCE_ID = uuid.uuid4().hex[:8]
+AGENT_ROLE = "GM"
 
 # --- File logging ---
 _LOG_FILE = Path(__file__).parent / "gm.log"
@@ -74,11 +75,6 @@ POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "5"))  # seconds
 CLAIM_DELAY_NEW_USER = int(os.environ.get("CLAIM_DELAY_NEW_USER", "0"))  # immediate for new users
 CLAIM_DELAY_KNOWN_USER = int(os.environ.get("CLAIM_DELAY_KNOWN_USER", "30"))  # 30s for known users
 REQUEST_TIMEOUT = 30
-SESSION_EXPIRY_HOURS = int(os.environ.get("SESSION_EXPIRY_HOURS", "24"))
-
-# Session persistence file
-SESSIONS_DIR = Path(os.environ.get("SHRAGA_SESSIONS_DIR", Path.home() / ".shraga"))
-SESSIONS_FILE = SESSIONS_DIR / "gm_sessions.json"
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +97,7 @@ def get_credential():
     Requires a valid ``az login`` session or managed-identity / service-principal
     environment variables.  Returns a ``DefaultAzureCredential`` instance.
     """
+    from azure.identity import DefaultAzureCredential  # Lazy import -- avoids WMI hang at module level
     cred = DefaultAzureCredential()
     try:
         call_with_timeout(
@@ -120,116 +117,6 @@ def get_credential():
     return cred
 
 
-# ── Session Manager ──────────────────────────────────────────────────────
-
-class SessionManager:
-    """Manages Claude Code session persistence for conversation continuity.
-
-    Maps {mcs_conversation_id -> session_entry} where each session_entry is:
-        {
-            "session_id": str,      # Claude Code session ID (UUID)
-            "created_at": str,      # ISO timestamp
-            "last_used": str,       # ISO timestamp
-            "user_email": str,      # user this session is for
-        }
-
-    Sessions are persisted to ~/.shraga/gm_sessions.json and expire after
-    SESSION_EXPIRY_HOURS (default 24h).
-    """
-
-    def __init__(self, sessions_file: Path | None = None):
-        self._sessions_file = sessions_file or SESSIONS_FILE
-        self._sessions: dict[str, dict] = {}
-        self._load()
-
-    def _load(self):
-        """Load sessions from disk."""
-        try:
-            if self._sessions_file.exists():
-                data = json.loads(self._sessions_file.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    self._sessions = data
-                    logger.info("Loaded %d sessions from %s", len(self._sessions), self._sessions_file)
-        except Exception as e:
-            logger.warning("Failed to load sessions from %s: %s", self._sessions_file, e)
-            self._sessions = {}
-
-    def _save(self):
-        """Persist sessions to disk."""
-        try:
-            self._sessions_file.parent.mkdir(parents=True, exist_ok=True)
-            self._sessions_file.write_text(
-                json.dumps(self._sessions, indent=2, default=str),
-                encoding="utf-8",
-            )
-        except Exception as e:
-            logger.warning("Failed to save sessions to %s: %s", self._sessions_file, e)
-
-    def get_session(self, conversation_id: str) -> dict | None:
-        """Get session entry by conversation ID, or None if not found."""
-        entry = self._sessions.get(conversation_id)
-        if entry:
-            entry["last_used"] = datetime.now(timezone.utc).isoformat()
-            self._save()
-        return entry
-
-    def save_session(self, conversation_id: str, session_id: str, user_email: str = ""):
-        """Save a real session ID returned by Claude CLI."""
-        now = datetime.now(timezone.utc).isoformat()
-        is_new = conversation_id not in self._sessions
-        self._sessions[conversation_id] = {
-            "session_id": session_id,
-            "created_at": self._sessions.get(conversation_id, {}).get("created_at", now),
-            "last_used": now,
-            "user_email": user_email,
-        }
-        self._save()
-        if is_new:
-            _log(f"[SESSIONS] New session {session_id[:8]}... for {conversation_id[:20]}...")
-
-    def forget(self, conversation_id: str):
-        """Remove a session (e.g. after resume failure)."""
-        if conversation_id in self._sessions:
-            old = self._sessions.pop(conversation_id)
-            self._save()
-            _log(f"[SESSIONS] Forgot session {old['session_id'][:8]}... for {conversation_id[:20]}...")
-
-    def cleanup_expired(self, max_age_hours: int | None = None):
-        """Remove sessions older than max_age_hours (default SESSION_EXPIRY_HOURS).
-
-        Returns the number of sessions removed.
-        """
-        max_age = max_age_hours if max_age_hours is not None else SESSION_EXPIRY_HOURS
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age)
-        expired = []
-
-        for conv_id, entry in self._sessions.items():
-            last_used_str = entry.get("last_used", entry.get("created_at", ""))
-            try:
-                last_used = datetime.fromisoformat(last_used_str)
-                if last_used.tzinfo is None:
-                    last_used = last_used.replace(tzinfo=timezone.utc)
-                if last_used < cutoff:
-                    expired.append(conv_id)
-            except (ValueError, TypeError):
-                # Can't parse timestamp -- expire it
-                expired.append(conv_id)
-
-        for conv_id in expired:
-            del self._sessions[conv_id]
-
-        if expired:
-            self._save()
-            logger.info("Cleaned up %d expired sessions", len(expired))
-
-        return len(expired)
-
-    @property
-    def sessions(self) -> dict[str, dict]:
-        """Read-only access to the sessions dict (deep copy)."""
-        return json.loads(json.dumps(self._sessions))
-
-
 # ── Global Manager ───────────────────────────────────────────────────────
 
 class GlobalManager:
@@ -239,7 +126,7 @@ class GlobalManager:
     Claude Code reads CLAUDE.md and runs scripts directly.
     """
 
-    def __init__(self, sessions_file: Path | None = None):
+    def __init__(self):
         self.manager_id = "global"
         self.credential = get_credential()
         self.dv = DataverseClient(
@@ -248,7 +135,6 @@ class GlobalManager:
             log_fn=_log,
         )
         self._known_users: set[str] = set()
-        self.session_manager = SessionManager(sessions_file=sessions_file)
         # System prompt file path (passed via --system-prompt-file)
         prompt_file = Path(__file__).parent / "GM_SYSTEM_PROMPT.md"
         self._system_prompt_file = str(prompt_file) if prompt_file.exists() else ""
@@ -256,6 +142,12 @@ class GlobalManager:
             _log(f"[CONFIG] System prompt: {prompt_file} ({prompt_file.stat().st_size} bytes)")
         else:
             _log(f"[WARN] No system prompt found at {prompt_file}")
+        # Version and box info for cr_claimed_by
+        from version_check import get_my_version
+        self._my_version = get_my_version(__file__)
+        self._box_name = os.environ.get("COMPUTERNAME", socket.gethostname())
+        # Track current session ID per mcs_conversation_id (within this process run)
+        self._current_sessions: dict[str, str] = {}
 
     # ── User Lookup (for differential claiming delay) ─────────────────
 
@@ -332,9 +224,10 @@ class GlobalManager:
             return False
         try:
             url = f"{DATAVERSE_API}/{CONVERSATIONS_TABLE}({row_id})"
+            claimed_by = f"{AGENT_ROLE.lower()}:{self._my_version}:{self._box_name}:{INSTANCE_ID}"
             body = {
                 "cr_status": STATUS_CLAIMED,
-                "cr_claimed_by": f"{self.manager_id}:{INSTANCE_ID}",
+                "cr_claimed_by": claimed_by,
             }
             self.dv.patch(url, data=body, etag=etag, timeout=REQUEST_TIMEOUT)
             return True
@@ -356,21 +249,31 @@ class GlobalManager:
             _log(f"[WARN] mark_processed failed: {e}")
 
     def send_response(self, in_reply_to: str, mcs_conversation_id: str,
-                      user_email: str, text: str, followup_expected: bool = False):
+                      user_email: str, text: str, followup_expected: bool = False,
+                      session_id: str = "", processed_by: str = ""):
+        """Write outbound response to DV with [GM:xxxx] prefix and cr_processed_by."""
         try:
+            # Add message prefix: [GM:xxxx] text
+            prefixed_text = text
+            if session_id:
+                session_short = session_id[:4]
+                prefixed_text = f"[{AGENT_ROLE}:{session_short}] {text}"
+
             body = {
-                "cr_name": text[:100],
+                "cr_name": prefixed_text[:100],
                 "cr_useremail": user_email,
                 "cr_mcs_conversation_id": mcs_conversation_id,
-                "cr_message": text,
+                "cr_message": prefixed_text,
                 "cr_direction": DIRECTION_OUTBOUND,
                 "cr_status": STATUS_UNCLAIMED,
                 "cr_in_reply_to": in_reply_to,
                 "cr_followup_expected": "true" if followup_expected else "",
             }
+            if processed_by:
+                body["cr_processed_by"] = processed_by
             url = f"{DATAVERSE_API}/{CONVERSATIONS_TABLE}"
             resp = self.dv.post(url, data=body, timeout=REQUEST_TIMEOUT)
-            _log(f"[DV] Wrote outbound response to {user_email} (reply_to={in_reply_to[:8]}): \"{text[:60]}...\"")
+            _log(f"[DV] Wrote outbound response to {user_email} (reply_to={in_reply_to[:8]}): \"{prefixed_text[:60]}...\"")
             if resp.status_code == 204 or not resp.content:
                 return True
             return resp.json()
@@ -382,9 +285,6 @@ class GlobalManager:
 
     def _call_claude_code(self, user_message: str, session_id: str | None = None) -> tuple[str | None, str]:
         """Call Claude Code, optionally resuming an existing session.
-
-        On first call (session_id=None): starts a fresh session.
-        On subsequent calls: resumes the session with --resume.
 
         Uses --output-format json to capture the session_id from the response.
 
@@ -441,8 +341,8 @@ class GlobalManager:
     def process_message(self, msg: dict):
         """Process an orphaned message using a persistent Claude Code session.
 
-        Claude Code reads CLAUDE.md for instructions and uses scripts directly
-        to query/update Dataverse, check devbox status, etc.
+        Uses resolve_session() to determine whether to resume or start fresh.
+        Writes cr_processed_by on the outbound response row.
         """
         row_id = msg.get("cr_shraga_conversationid")
         user_email = msg.get("cr_useremail", "")
@@ -455,10 +355,6 @@ class GlobalManager:
 
         _log(f"[GLOBAL] Processing orphaned message from {user_email}: {user_text[:80]}...")
 
-        # Look up existing session (None if first message in this conversation)
-        existing = self.session_manager.get_session(mcs_conv_id)
-        session_id = existing["session_id"] if existing else None
-
         # Build the prompt with context for Claude Code
         prompt = (
             f"User email: {user_email}\n"
@@ -470,21 +366,56 @@ class GlobalManager:
             f"No JSON wrapping, no markdown -- just the plain text response."
         )
 
-        # Let Claude Code handle everything
-        response, new_sid = self._call_claude_code(prompt, session_id=session_id)
+        # Check if we have a current session for this conversation (within this process run)
+        current_sid = self._current_sessions.get(mcs_conv_id)
 
-        # If resume failed, retry without session
-        if response is None and session_id:
-            _log(f"[SESSIONS] Resume failed for {session_id[:8]}..., starting fresh")
-            self.session_manager.forget(mcs_conv_id)
-            response, new_sid = self._call_claude_code(prompt, session_id=None)
+        response = None
+        new_sid = ""
+
+        if current_sid:
+            # Within-run resume
+            response, new_sid = self._call_claude_code(prompt, session_id=current_sid)
+            if response is None:
+                _log(f"[SESSIONS] Within-run resume failed for {current_sid[:8]}..., falling back")
+                current_sid = None
+
+        if not current_sid:
+            # Use resolve_session to determine what to do
+            resolved_sid, context_prefix, prev_path = resolve_session(
+                self.dv,
+                mcs_conv_id,
+                my_version=self._my_version,
+                my_role=AGENT_ROLE.lower(),
+                log_fn=_log,
+                dv_api=DATAVERSE_API,
+                conv_table=CONVERSATIONS_TABLE,
+                dir_in=DIRECTION_INBOUND,
+                dir_out=DIRECTION_OUTBOUND,
+                st_processed=STATUS_PROCESSED,
+                request_timeout=REQUEST_TIMEOUT,
+            )
+
+            if resolved_sid:
+                full_prompt = context_prefix + prompt if context_prefix else prompt
+                response, new_sid = self._call_claude_code(full_prompt, session_id=resolved_sid)
+                if response is None:
+                    _log(f"[SESSIONS] Resume of {resolved_sid[:8]} failed, starting fresh")
+                    response, new_sid = self._call_claude_code(prompt, session_id=None)
+            else:
+                full_prompt = context_prefix + prompt if context_prefix else prompt
+                response, new_sid = self._call_claude_code(full_prompt, session_id=None)
 
         if not response:
             response = FALLBACK_MESSAGE
 
-        # Save the real session ID returned by Claude
+        # Track the session ID for within-run resume
         if new_sid and mcs_conv_id:
-            self.session_manager.save_session(mcs_conv_id, new_sid, user_email)
+            self._current_sessions[mcs_conv_id] = new_sid
+            _log(f"[SESSIONS] Session {new_sid[:8]}... active for {mcs_conv_id[:20]}...")
+
+        # Build processed_by value for the outbound row
+        active_sid = new_sid or current_sid or ""
+        processed_by = f"{AGENT_ROLE.lower()}:{self._my_version}:{active_sid}" if active_sid else ""
 
         _log(f"[PROCESS] Finished processing {row_id[:8]}. Sending response ({len(response)} chars)...")
         self.send_response(
@@ -492,6 +423,8 @@ class GlobalManager:
             mcs_conversation_id=mcs_conv_id,
             user_email=user_email,
             text=response,
+            session_id=active_sid,
+            processed_by=processed_by,
         )
         self.mark_processed(row_id)
         _log(f"[PROCESS] Done with {row_id[:8]}")
@@ -502,24 +435,15 @@ class GlobalManager:
         if sys.platform == "win32":
             sys.stdout.reconfigure(encoding='utf-8')
             sys.stderr.reconfigure(encoding='utf-8')
-        _log(f"[START] Global Manager (thin wrapper) | instance={INSTANCE_ID} | pid={os.getpid()}")
+        _log(f"[START] Global Manager (thin wrapper) | version={self._my_version} | instance={INSTANCE_ID} | pid={os.getpid()}")
         _log(f"[CONFIG] Dataverse: {DATAVERSE_URL}")
         _log(f"[CONFIG] Users table: {USERS_TABLE}")
         _log(f"[CONFIG] Claim delay: new users={CLAIM_DELAY_NEW_USER}s, known users={CLAIM_DELAY_KNOWN_USER}s")
         _log(f"[CONFIG] Poll interval: {POLL_INTERVAL}s")
-        _log(f"[CONFIG] Session expiry: {SESSION_EXPIRY_HOURS}h")
-        _log(f"[CONFIG] Sessions file: {SESSIONS_FILE}")
-
-        cleanup_counter = 0
+        _log(f"[CONFIG] Box: {self._box_name}")
 
         while True:
             try:
-                # Periodic session cleanup (every 100 poll cycles)
-                cleanup_counter += 1
-                if cleanup_counter >= 100:
-                    self.session_manager.cleanup_expired()
-                    cleanup_counter = 0
-
                 messages = self.poll_stale_unclaimed()
                 if messages:
                     _log(f"[POLL] Found {len(messages)} unclaimed message(s)")
