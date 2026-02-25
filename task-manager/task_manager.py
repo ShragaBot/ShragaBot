@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from version_check import get_my_version, should_exit
 from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError, create_credential
-from session_utils import resolve_session, _sanitize_odata
+from session_utils import resolve_session, sanitize_odata
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 os.environ.setdefault('DEVBOX_HOSTNAME', os.environ.get('COMPUTERNAME', socket.gethostname()))
@@ -62,7 +62,7 @@ class TaskManager:
         if not user_email:
             raise ValueError("USER_EMAIL is required")
         self.user_email = user_email
-        self._safe_email = _sanitize_odata(user_email)  # OData-safe for $filter queries
+        self._safe_email = sanitize_odata(user_email)  # OData-safe for $filter queries
         self.working_dir = working_dir or WORKING_DIR
         self.credential = create_credential(log_fn=_log)
         self.dv = DataverseClient(dataverse_url=DV_URL, credential=self.credential, log_fn=_log)

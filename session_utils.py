@@ -20,7 +20,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def _sanitize_odata(value: str) -> str:
+def sanitize_odata(value: str) -> str:
     """Escape single quotes for safe OData $filter interpolation."""
     return value.replace("'", "''")
 
@@ -153,7 +153,7 @@ def resolve_session(
     # ── Step 1: Fetch conversation history ──────────────────────────────
     # We need enough rows to find 10 outbound messages. Fetch up to 50 rows
     # (mix of inbound + outbound) to be safe.
-    safe_mcs_id = _sanitize_odata(mcs_conversation_id)
+    safe_mcs_id = sanitize_odata(mcs_conversation_id)
     rows = []
     try:
         url = (
@@ -233,7 +233,7 @@ def resolve_session(
         for i, row in enumerate(outbound_rows):
             pb = row.get("cr_processed_by") or ""
             pb_parts = pb.split(":", 2)
-            if len(pb_parts) >= 1 and pb_parts[0].lower() == my_role_lower:
+            if len(pb_parts) >= 3 and pb_parts[0].lower() == my_role_lower:
                 my_last_idx = i
                 break
 
@@ -260,7 +260,8 @@ def resolve_session(
             )
         if prev_path:
             context += f"[Your previous session transcript is available at: {prev_path}]\n"
-        context += "\n"
+        if context:
+            context += "\n"
         return (None, context, prev_path)
 
     else:
@@ -281,5 +282,6 @@ def resolve_session(
             )
         if prev_path:
             context += f"[Your previous session transcript is available at: {prev_path}]\n"
-        context += "\n"
+        if context:
+            context += "\n"
         return (None, context, prev_path)

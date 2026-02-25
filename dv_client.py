@@ -142,11 +142,11 @@ class DataverseClient:
         self.api_base = f"{self.dataverse_url}/api/data/{self.api_version}"
         self.request_timeout = request_timeout
         self.max_retry_seconds = max_retry_seconds
+        self.log_fn = log_fn or print
         if credential is not None:
             self.credential = credential
         else:
             self.credential = create_credential(log_fn=self.log_fn)
-        self.log_fn = log_fn or print
 
         # Token cache
         self._token: str | None = None

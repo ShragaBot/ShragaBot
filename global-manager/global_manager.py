@@ -35,7 +35,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from timeout_utils import call_with_timeout
 from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError, create_credential
-from session_utils import resolve_session, _sanitize_odata
+from session_utils import resolve_session, sanitize_odata
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 
@@ -157,7 +157,7 @@ class GlobalManager:
         try:
             url = (
                 f"{DATAVERSE_API}/{USERS_TABLE}"
-                f"?$filter=crb3b_useremail eq '{_sanitize_odata(user_email)}'"
+                f"?$filter=crb3b_useremail eq '{sanitize_odata(user_email)}'"
                 f"&$top=1&$select=crb3b_shragauserid"
             )
             resp = self.dv.get(url, timeout=REQUEST_TIMEOUT)
