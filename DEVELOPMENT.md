@@ -26,7 +26,7 @@ This automatically:
 3. Dev boxes detect the new branch within 5 minutes (ShragaUpdater scheduled task)
 4. Services restart automatically with the new code
 
-**Do NOT manually create release branches.** Always use the workflow.
+**Do NOT manually create release branches.** Always use the workflow. Release branches (`release/v*`) are protected by a GitHub ruleset -- only the workflow can create them, using an admin PAT stored as the `RELEASE_PAT` repo secret.
 
 ## How Dev Boxes Update
 
