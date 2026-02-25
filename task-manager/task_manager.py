@@ -177,17 +177,18 @@ class TaskManager:
             {"cr_status": ST_EXPIRED}, "CLEANUP")
 
     def cleanup_stale_claimed(self, max_age_minutes: int = 15):
-        """Mark stale Claimed inbound messages as Processed (drop them).
+        """Mark stale Claimed inbound messages as Expired (drop them).
 
         Runs on PM startup.  Messages stuck in Claimed longer than
         max_age_minutes are from a previous crash — too old to respond to.
-        Mark them Processed so they don't get picked up by anyone.
+        Uses Expired status (same as cleanup_stale_outbound) so they're
+        clearly distinguished from successfully processed messages.
         """
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
         return self._dv_batch_patch(CONV_TBL,
             f"cr_useremail eq '{self._safe_email}' and cr_direction eq '{DIR_IN}'"
             f" and cr_status eq 'Claimed' and createdon lt {cutoff}",
-            {"cr_status": ST_PROCESSED}, "STALE_CLAIMED")
+            {"cr_status": ST_EXPIRED}, "STALE_CLAIMED")
 
     def _call_claude(self, user_text: str, session_id: str | None = None) -> tuple[str | None, str]:
         cmd = ["claude", "--print", "--output-format", "json", "--dangerously-skip-permissions",
