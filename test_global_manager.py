@@ -9,7 +9,7 @@ Tests verify:
   - Response writing (Outbound rows) with [GM:xxxx] prefix
   - New user and known user flows
   - Fallback message when Claude Code is unavailable
-  - Session tracking via _current_sessions dict
+  - Session tracking via _last_session_id
   - cr_claimed_by format: gm:version:box:instance_id
   - cr_processed_by written on outbound rows
 """
@@ -117,10 +117,10 @@ class TestNoToolWrapperCode:
         assert not hasattr(manager, "session_manager"), \
             "session_manager attribute should be removed"
 
-    def test_has_current_sessions_dict(self, manager):
-        """Manager must have _current_sessions dict for within-run tracking."""
-        assert hasattr(manager, "_current_sessions")
-        assert isinstance(manager._current_sessions, dict)
+    def test_has_last_session_id(self, manager):
+        """Manager must have _last_session_id for processed_by tracking."""
+        assert hasattr(manager, "_last_session_id")
+        assert isinstance(manager._last_session_id, str)
 
 
 # ============================================================================
@@ -500,8 +500,8 @@ class TestProcessMessage:
         manager.process_message(empty_msg)
         manager.dv.patch.assert_called_once()
 
-    def test_process_tracks_session_for_reuse(self, manager):
-        """After processing, the session ID is stored in _current_sessions."""
+    def test_process_tracks_session_id(self, manager):
+        """After processing, the session ID is stored in _last_session_id."""
         manager.dv.post.return_value = FakeResponse(json_data={})
         manager.dv.patch.return_value = FakeResponse(status_code=204)
         manager.dv.get.return_value = FakeResponse(json_data={"value": []})
@@ -509,32 +509,7 @@ class TestProcessMessage:
         with patch.object(manager, "_call_claude_code", return_value=("Hi!", "sess-track")):
             manager.process_message(SAMPLE_STALE_MSG)
 
-        assert SAMPLE_MCS_CONV_ID in manager._current_sessions
-        assert manager._current_sessions[SAMPLE_MCS_CONV_ID] == "sess-track"
-
-    def test_process_reuses_session_for_same_conversation(self, manager):
-        """Second message in same conversation reuses the within-run session."""
-        manager.dv.post.return_value = FakeResponse(json_data={})
-        manager.dv.patch.return_value = FakeResponse(status_code=204)
-        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
-
-        session_ids_passed = []
-
-        def capture_session(prompt, session_id=None):
-            session_ids_passed.append(session_id)
-            return ("Response", "sess-reuse")
-
-        with patch.object(manager, "_call_claude_code", side_effect=capture_session):
-            manager.process_message(SAMPLE_STALE_MSG)
-            # Second message in same conversation
-            msg2 = {**SAMPLE_STALE_MSG, "cr_shraga_conversationid": "conv-0002"}
-            manager.process_message(msg2)
-
-        assert len(session_ids_passed) == 2
-        # First call has no session (no within-run session yet)
-        assert session_ids_passed[0] is None
-        # Second call reuses the within-run session
-        assert session_ids_passed[1] == "sess-reuse"
+        assert manager._last_session_id == "sess-track"
 
     def test_process_passes_user_context_in_prompt(self, manager):
         """The prompt to Claude Code includes user email, row ID, and message."""

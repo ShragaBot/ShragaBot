@@ -145,8 +145,8 @@ class GlobalManager:
         from version_check import get_my_version
         self._my_version = get_my_version(__file__)
         self._box_name = os.environ.get("COMPUTERNAME", socket.gethostname())
-        # Track current session ID per mcs_conversation_id (within this process run)
-        self._current_sessions: dict[str, str] = {}
+        # Last session ID from the most recent call (for processed_by)
+        self._last_session_id: str = ""
 
     # ── User Lookup (for differential claiming delay) ─────────────────
 
@@ -365,58 +365,40 @@ class GlobalManager:
             f"No JSON wrapping, no markdown -- just the plain text response."
         )
 
-        # Check if we have a current session for this conversation (within this process run)
-        current_sid = self._current_sessions.get(mcs_conv_id) if mcs_conv_id else None
-
         response = None
         new_sid = ""
 
-        if current_sid:
-            # Within-run resume
-            response, new_sid = self._call_claude_code(prompt, session_id=current_sid)
+        # Always call resolve_session to get correct cross-agent context
+        resolved_sid, context_prefix, prev_path = resolve_session(
+            self.dv,
+            mcs_conv_id,
+            my_version=self._my_version,
+            my_role=AGENT_ROLE.lower(),
+            log_fn=_log,
+            dv_api=DATAVERSE_API,
+            conv_table=CONVERSATIONS_TABLE,
+            dir_in=DIRECTION_INBOUND,
+            dir_out=DIRECTION_OUTBOUND,
+            st_processed=STATUS_PROCESSED,
+            request_timeout=REQUEST_TIMEOUT,
+        )
+
+        full_prompt = context_prefix + prompt if context_prefix else prompt
+        if resolved_sid:
+            response, new_sid = self._call_claude_code(full_prompt, session_id=resolved_sid)
             if response is None:
-                _log(f"[SESSIONS] Within-run resume failed for {current_sid[:8]}..., falling back")
-                # Clear stale entry to avoid repeated failures
-                if mcs_conv_id:
-                    self._current_sessions.pop(mcs_conv_id, None)
-                current_sid = None
-
-        if not current_sid:
-            # Use resolve_session to determine what to do
-            resolved_sid, context_prefix, prev_path = resolve_session(
-                self.dv,
-                mcs_conv_id,
-                my_version=self._my_version,
-                my_role=AGENT_ROLE.lower(),
-                log_fn=_log,
-                dv_api=DATAVERSE_API,
-                conv_table=CONVERSATIONS_TABLE,
-                dir_in=DIRECTION_INBOUND,
-                dir_out=DIRECTION_OUTBOUND,
-                st_processed=STATUS_PROCESSED,
-                request_timeout=REQUEST_TIMEOUT,
-            )
-
-            full_prompt = context_prefix + prompt if context_prefix else prompt
-            if resolved_sid:
-                response, new_sid = self._call_claude_code(full_prompt, session_id=resolved_sid)
-                if response is None:
-                    # Resume failed -- start fresh WITH context
-                    _log(f"[SESSIONS] Resume of {resolved_sid[:8]} failed, starting fresh with context")
-                    response, new_sid = self._call_claude_code(full_prompt, session_id=None)
-            else:
+                # Resume failed -- start fresh WITH context
+                _log(f"[SESSIONS] Resume of {resolved_sid[:8]} failed, starting fresh with context")
                 response, new_sid = self._call_claude_code(full_prompt, session_id=None)
+        else:
+            response, new_sid = self._call_claude_code(full_prompt, session_id=None)
 
         if not response:
             response = FALLBACK_MESSAGE
 
-        # Track the session ID for within-run resume
-        if new_sid and mcs_conv_id:
-            self._current_sessions[mcs_conv_id] = new_sid
-            _log(f"[SESSIONS] Session {new_sid[:8]}... active for {mcs_conv_id[:20]}...")
-
-        # Build processed_by value for the outbound row
-        active_sid = new_sid or current_sid or ""
+        # Track session for processed_by
+        active_sid = new_sid or ""
+        self._last_session_id = active_sid
         processed_by = f"{AGENT_ROLE.lower()}:{self._my_version}:{active_sid}" if active_sid else ""
 
         _log(f"[PROCESS] Finished processing {row_id[:8]}. Sending response ({len(response)} chars)...")

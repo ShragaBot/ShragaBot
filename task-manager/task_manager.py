@@ -73,8 +73,8 @@ class TaskManager:
         self._my_version = get_my_version(__file__)
         # Box name for cr_claimed_by
         self._box_name = os.environ.get("COMPUTERNAME", socket.gethostname())
-        # Track current session ID per mcs_conversation_id (within this process run)
-        self._current_sessions: dict[str, str] = {}
+        # Last session ID from the most recent call (for processed_by)
+        self._last_session_id: str = ""
 
     def _set_onboarding_completed(self):
         """Set onboardingstep=completed for this user in DV on startup."""
@@ -176,6 +176,18 @@ class TaskManager:
             f" and cr_status eq '{ST_UNCLAIMED}' and createdon lt {cutoff}",
             {"cr_status": ST_EXPIRED}, "CLEANUP")
 
+    def cleanup_stale_claimed(self, max_age_minutes: int = 15):
+        """Reset inbound messages stuck in Claimed from a previous crash.
+
+        Runs on PM startup.  Messages in Claimed longer than max_age_minutes
+        are reverted to Unclaimed so GM can pick them up.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return self._dv_batch_patch(CONV_TBL,
+            f"cr_useremail eq '{self._safe_email}' and cr_direction eq '{DIR_IN}'"
+            f" and cr_status eq 'Claimed' and createdon lt {cutoff}",
+            {"cr_status": ST_UNCLAIMED}, "STALE_CLAIMED")
+
     def _call_claude(self, user_text: str, session_id: str | None = None) -> tuple[str | None, str]:
         cmd = ["claude", "--print", "--output-format", "json", "--dangerously-skip-permissions",
                "--model", CHAT_MODEL or "sonnet", "--effort", "low"]
@@ -219,60 +231,42 @@ class TaskManager:
         if mcs:
             txt = f"[MCS_CONVERSATION_ID={mcs}]\n[INBOUND_ROW_ID={rid}]\n{txt}"
 
-        # Check if we have a current session for this conversation (within this process run)
-        current_sid = self._current_sessions.get(mcs) if mcs else None
-
         try:
             resp = None
             new_sid = ""
 
-            if current_sid:
-                # Within-run resume -- same model, same prompt, same process
-                resp, new_sid = self._call_claude(txt, session_id=current_sid)
+            # Always call resolve_session to get correct cross-agent context
+            resolved_sid, context_prefix, prev_path = resolve_session(
+                self.dv,
+                mcs,
+                my_version=self._my_version,
+                my_role=AGENT_ROLE.lower(),
+                log_fn=_log,
+                dv_api=DV_API,
+                conv_table=CONV_TBL,
+                dir_in=DIR_IN,
+                dir_out=DIR_OUT,
+                st_processed=ST_PROCESSED,
+                request_timeout=REQ_TMO,
+            )
+
+            full_text = context_prefix + txt if context_prefix else txt
+            if resolved_sid:
+                # Resume a previous session from DV history
+                resp, new_sid = self._call_claude(full_text, session_id=resolved_sid)
                 if resp is None:
-                    _log(f"[SESSIONS] Within-run resume failed for {current_sid[:8]}..., falling back")
-                    # Clear stale entry to avoid repeated failures
-                    if mcs:
-                        self._current_sessions.pop(mcs, None)
-                    current_sid = None  # Fall through to resolve_session below
-
-            if not current_sid:
-                # Use resolve_session to determine what to do
-                resolved_sid, context_prefix, prev_path = resolve_session(
-                    self.dv,
-                    mcs,
-                    my_version=self._my_version,
-                    my_role=AGENT_ROLE.lower(),
-                    log_fn=_log,
-                    dv_api=DV_API,
-                    conv_table=CONV_TBL,
-                    dir_in=DIR_IN,
-                    dir_out=DIR_OUT,
-                    st_processed=ST_PROCESSED,
-                    request_timeout=REQ_TMO,
-                )
-
-                full_text = context_prefix + txt if context_prefix else txt
-                if resolved_sid:
-                    # Resume a previous session from DV history
-                    resp, new_sid = self._call_claude(full_text, session_id=resolved_sid)
-                    if resp is None:
-                        # Resume failed -- start fresh WITH context (not without)
-                        _log(f"[SESSIONS] Resume of {resolved_sid[:8]} failed, starting fresh with context")
-                        resp, new_sid = self._call_claude(full_text, session_id=None)
-                else:
-                    # New session with optional context
+                    # Resume failed -- start fresh WITH context (not without)
+                    _log(f"[SESSIONS] Resume of {resolved_sid[:8]} failed, starting fresh with context")
                     resp, new_sid = self._call_claude(full_text, session_id=None)
+            else:
+                # New session with optional context
+                resp, new_sid = self._call_claude(full_text, session_id=None)
 
             if resp is None: resp = FALLBACK_MESSAGE
 
-            # Track the session ID for within-run resume
-            if new_sid and mcs:
-                self._current_sessions[mcs] = new_sid
-                _log(f"[SESSIONS] Session {new_sid[:8]}... active for {mcs[:20]}...")
-
-            # Build processed_by value for the outbound row
-            active_sid = new_sid or current_sid or ""
+            # Track session for processed_by
+            active_sid = new_sid or ""
+            self._last_session_id = active_sid
             processed_by = f"{AGENT_ROLE.lower()}:{self._my_version}:{active_sid}" if active_sid else ""
 
         except Exception as e: _log(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE; processed_by = ""; active_sid = ""
@@ -305,6 +299,7 @@ class TaskManager:
         _log(f"[START] PM for {self.user_email} | version={self._my_version} | instance={INSTANCE_ID} | pid={os.getpid()}")
         _log(f"[CONFIG] DV: {DV_URL} | Poll: {POLL_SEC}s | Box: {self._box_name}")
         self._set_onboarding_completed()
+        self.cleanup_stale_claimed()
         self.cleanup_stale_outbound()
         last_cleanup = time.time()
         while True:

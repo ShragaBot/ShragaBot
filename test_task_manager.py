@@ -6,7 +6,7 @@ All tool dispatch code has been removed. Claude Code reads CLAUDE.md
 and runs scripts directly. Session resolution uses Dataverse (cr_processed_by)
 as the single source of truth -- no local JSON files. These tests verify:
   - DV polling, claiming, response writing (preserved)
-  - Session resolution via resolve_session() and _current_sessions (new)
+  - Session resolution via resolve_session()
   - Stale outbound cleanup (preserved)
   - Claude Code subprocess delegation (preserved)
   - cr_claimed_by format: pm:version:box:instance_id (new)
@@ -321,10 +321,10 @@ class TestConstructor:
     def test_sets_user_email(self, manager):
         assert manager.user_email == "testuser@example.com"
 
-    def test_has_current_sessions_dict(self, manager):
-        """Manager must have _current_sessions dict for within-run tracking."""
-        assert hasattr(manager, "_current_sessions")
-        assert isinstance(manager._current_sessions, dict)
+    def test_has_last_session_id(self, manager):
+        """Manager must have _last_session_id for processed_by tracking."""
+        assert hasattr(manager, "_last_session_id")
+        assert isinstance(manager._last_session_id, str)
 
     def test_has_agent_role(self):
         """Module should have AGENT_ROLE constant."""
@@ -382,16 +382,12 @@ class TestModuleConstants:
 # -- Session Resolution Tests (replaces old TestSessionPersistence) -----------
 
 class TestSessionResolution:
-    """Verify session resolution via _current_sessions and resolve_session()."""
-
-    def test_current_sessions_dict_starts_empty(self, manager):
-        """_current_sessions should start empty on fresh manager."""
-        assert manager._current_sessions == {}
+    """Verify session resolution via resolve_session()."""
 
     @patch("task_manager.subprocess.Popen")
     @patch("task_manager.resolve_session")
-    def test_first_message_calls_resolve_session(self, mock_resolve, mock_popen, manager):
-        """First message for a conversation should call resolve_session."""
+    def test_message_always_calls_resolve_session(self, mock_resolve, mock_popen, manager):
+        """Every message should call resolve_session for correct cross-agent context."""
         mock_resolve.return_value = (None, "", None)  # New session, no context
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
@@ -406,61 +402,7 @@ class TestSessionResolution:
         manager.process_message(SAMPLE_INBOUND_MSG)
 
         mock_resolve.assert_called_once()
-        # Verify session is tracked in _current_sessions
-        assert SAMPLE_MCS_CONV_ID in manager._current_sessions
-        assert manager._current_sessions[SAMPLE_MCS_CONV_ID] == "new-sess-123"
-
-    @patch("task_manager.subprocess.Popen")
-    def test_second_message_reuses_within_run_session(self, mock_popen, manager):
-        """Second message in same conversation uses within-run session (skips resolve_session)."""
-        # Pre-populate the within-run session
-        manager._current_sessions[SAMPLE_MCS_CONV_ID] = "existing-sess-456"
-
-        mock_popen.return_value = _make_popen_mock(
-            stdout=json.dumps({
-                "result": "Here are your tasks.",
-                "session_id": "existing-sess-456",
-                "is_error": False,
-            })
-        )
-        manager.dv.post.return_value = FakeResponse(json_data={})
-        manager.dv.patch.return_value = FakeResponse(status_code=204)
-
-        manager.process_message(SAMPLE_INBOUND_MSG)
-
-        # Verify --resume was used with the existing session
-        cmd = mock_popen.call_args[0][0]
-        assert "--resume" in cmd
-        resume_idx = cmd.index("--resume")
-        assert cmd[resume_idx + 1] == "existing-sess-456"
-
-    @patch("task_manager.subprocess.Popen")
-    @patch("task_manager.resolve_session")
-    def test_within_run_resume_failure_falls_back_to_resolve(self, mock_resolve, mock_popen, manager):
-        """When within-run resume fails, falls back to resolve_session."""
-        manager._current_sessions[SAMPLE_MCS_CONV_ID] = "stale-sess-789"
-
-        # First call (resume) fails, second call (from resolve) succeeds
-        mock_popen.side_effect = [
-            _make_popen_mock(returncode=1, stderr="session not found"),
-            _make_popen_mock(
-                stdout=json.dumps({
-                    "result": "Fresh response.",
-                    "session_id": "fresh-sess-aaa",
-                    "is_error": False,
-                })
-            ),
-        ]
-        mock_resolve.return_value = (None, "", None)  # New session
-        manager.dv.post.return_value = FakeResponse(json_data={})
-        manager.dv.patch.return_value = FakeResponse(status_code=204)
-
-        manager.process_message(SAMPLE_INBOUND_MSG)
-
-        # resolve_session should have been called after within-run resume failed
-        mock_resolve.assert_called_once()
-        # Session should be updated with the new session id
-        assert manager._current_sessions[SAMPLE_MCS_CONV_ID] == "fresh-sess-aaa"
+        assert manager._last_session_id == "new-sess-123"
 
     @patch("task_manager.subprocess.Popen")
     @patch("task_manager.resolve_session")
@@ -775,9 +717,8 @@ class TestFullFlow:
         # Verify message was marked processed
         assert manager.dv.patch.called
 
-        # Verify session was tracked in _current_sessions
-        assert SAMPLE_MCS_CONV_ID in manager._current_sessions
-        assert manager._current_sessions[SAMPLE_MCS_CONV_ID] == "flow-session-123"
+        # Verify session was tracked
+        assert manager._last_session_id == "flow-session-123"
 
     @patch("task_manager.subprocess.Popen")
     @patch("task_manager.resolve_session", return_value=(None, "", None))
@@ -1020,7 +961,7 @@ class TestProvisionDelegationPostRefactor:
          invokes the `claude` CLI with --print and --dangerously-skip-permissions.
       3. Claude Code's response (which would include script execution results)
          is forwarded back to the user via send_response.
-      4. The session is tracked in _current_sessions for follow-up context.
+      4. The session is tracked for follow-up context.
     """
 
     @patch("task_manager.subprocess.Popen")
@@ -1035,7 +976,7 @@ class TestProvisionDelegationPostRefactor:
           1. Passes the message to Claude CLI (subprocess.run with 'claude').
           2. Claude Code reads CLAUDE.md and decides to run provisioning scripts.
           3. The CLI response (with provisioning results) is sent back to DV.
-          4. The session is tracked in _current_sessions for follow-up.
+          4. The session is tracked for follow-up.
 
         This test sends a provisioning request through process_message and
         verifies the entire delegation chain.
@@ -1117,11 +1058,8 @@ class TestProvisionDelegationPostRefactor:
             "Response must reference the original inbound message"
         )
 
-        # 4. Verify the session was tracked in _current_sessions for follow-up
-        assert "mcs-prov-abc" in manager._current_sessions, (
-            "Session must be tracked in _current_sessions for the MCS conversation"
-        )
-        assert manager._current_sessions["mcs-prov-abc"] == "prov-session-xyz", (
+        # 4. Verify the session was tracked for follow-up
+        assert manager._last_session_id == "prov-session-xyz", (
             "Session ID from Claude's response must be stored"
         )
 

@@ -159,7 +159,7 @@ def resolve_session(
         url = (
             f"{api_base}/{conv_table}"
             f"?$filter=cr_mcs_conversation_id eq '{safe_mcs_id}'"
-            f" and cr_status eq '{st_processed}'"
+            f" and (cr_status eq '{st_processed}' or cr_status eq 'Unclaimed')"
             f"&$orderby=createdon desc"
             f"&$top=50"
             f"&$select=cr_direction,cr_processed_by,cr_message,createdon"
