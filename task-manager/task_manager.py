@@ -11,7 +11,7 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from version_check import get_my_version, should_exit
-from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
+from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError, create_credential
 from session_utils import resolve_session
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
@@ -63,8 +63,7 @@ class TaskManager:
             raise ValueError("USER_EMAIL is required")
         self.user_email = user_email
         self.working_dir = working_dir or WORKING_DIR
-        from azure.identity import DefaultAzureCredential  # Lazy import -- avoids WMI hang at module level
-        self.credential = DefaultAzureCredential()
+        self.credential = create_credential(log_fn=_log)
         self.dv = DataverseClient(dataverse_url=DV_URL, credential=self.credential, log_fn=_log)
         # System prompt file path (passed via --system-prompt-file)
         prompt_file = Path(__file__).parent / "PM_SYSTEM_PROMPT.md"

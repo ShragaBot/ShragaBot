@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 # Import the autonomous agent system (from same directory as this file)
 sys.path.insert(0, str(Path(__file__).parent))
 from autonomous_agent import AgentCLI, extract_phase_stats, merge_phase_stats
-from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
+from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError, create_credential
 
 import os
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
@@ -141,9 +141,8 @@ class IntegratedTaskWorker:
         self._current_session_folder = None
         self._current_transcript = ""
 
-        # Azure authentication (lazy import -- avoids WMI hang at module level)
-        from azure.identity import DefaultAzureCredential
-        self.credential = DefaultAzureCredential()
+        # Azure authentication (with WMI hang protection)
+        self.credential = create_credential(log_fn=_log)
         self.dv = DataverseClient(dataverse_url=DATAVERSE_URL, credential=self.credential, log_fn=_log)
 
         # Version check for immutable releases

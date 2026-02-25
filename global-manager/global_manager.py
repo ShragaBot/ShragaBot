@@ -34,7 +34,7 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from timeout_utils import call_with_timeout
-from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
+from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError, create_credential
 from session_utils import resolve_session
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
@@ -97,8 +97,7 @@ def get_credential():
     Requires a valid ``az login`` session or managed-identity / service-principal
     environment variables.  Returns a ``DefaultAzureCredential`` instance.
     """
-    from azure.identity import DefaultAzureCredential  # Lazy import -- avoids WMI hang at module level
-    cred = DefaultAzureCredential()
+    cred = create_credential(log_fn=_log)
     try:
         call_with_timeout(
             lambda: cred.get_token(f"{DATAVERSE_URL}/.default"),

@@ -67,6 +67,42 @@ _RETRYABLE_EXCEPTIONS = (
 
 
 # ---------------------------------------------------------------------------
+# Credential creation with WMI hang protection
+# ---------------------------------------------------------------------------
+
+def create_credential(log_fn=None, max_retries=3, timeout_sec=30):
+    """Create a DefaultAzureCredential with retry and timeout protection.
+
+    DefaultAzureCredential() can hang indefinitely if WMI is stuck on Windows.
+    This wraps creation in call_with_timeout and retries on failure.
+
+    Returns a credential object, or calls sys.exit(1) after all retries fail.
+    """
+    import sys
+    _log = log_fn or print
+    for attempt in range(1, max_retries + 1):
+        try:
+            from azure.identity import DefaultAzureCredential
+            cred = call_with_timeout(DefaultAzureCredential, timeout_sec, "DefaultAzureCredential()")
+            if attempt > 1:
+                _log(f"[INFO] Credential created on attempt {attempt}")
+            return cred
+        except TimeoutError:
+            _log(f"[CRITICAL] Credential creation timed out (attempt {attempt}/{max_retries}) -- likely WMI hang")
+            if attempt < max_retries:
+                _log(f"[CRITICAL] Retrying in 10s...")
+                time.sleep(10)
+        except Exception as e:
+            _log(f"[CRITICAL] Credential creation failed (attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                _log(f"[CRITICAL] Retrying in 10s...")
+                time.sleep(10)
+    _log("[CRITICAL] All credential creation attempts failed. Exiting.")
+    _log("[CRITICAL] HINT: Run 'az login' or restart WMI service.")
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # DataverseClient
 # ---------------------------------------------------------------------------
 
@@ -109,8 +145,7 @@ class DataverseClient:
         if credential is not None:
             self.credential = credential
         else:
-            from azure.identity import DefaultAzureCredential
-            self.credential = DefaultAzureCredential()
+            self.credential = create_credential(log_fn=self.log_fn)
         self.log_fn = log_fn or print
 
         # Token cache
