@@ -79,10 +79,27 @@ def get_auth_header(
     if env_token:
         return {"Authorization": f"Bearer {env_token}"}
 
-    # Fall back to Azure CLI
     dv_url = dataverse_url or os.environ.get("DATAVERSE_URL", DEFAULT_DATAVERSE_URL)
     resource = f"{dv_url}/.default"
 
+    # Try DefaultAzureCredential first (most reliable on dev boxes)
+    try:
+        from azure.identity import DefaultAzureCredential
+        from timeout_utils import call_with_timeout
+
+        cred = DefaultAzureCredential()
+        access_token = call_with_timeout(
+            lambda: cred.get_token(resource),
+            timeout_sec=30,
+            description="DefaultAzureCredential.get_token()"
+        )
+        return {"Authorization": f"Bearer {access_token.token}"}
+    except TimeoutError:
+        logger.warning("DefaultAzureCredential.get_token() timed out after 30s")
+    except Exception as exc:
+        logger.debug("DefaultAzureCredential failed: %s", exc)
+
+    # Fall back to Azure CLI
     try:
         result = subprocess.run(
             [
@@ -104,23 +121,6 @@ def get_auth_header(
         logger.warning("Azure CLI token request timed out")
     except Exception as exc:
         logger.debug("Azure CLI token request failed: %s", exc)
-
-    # Try DefaultAzureCredential as a last resort
-    try:
-        from azure.identity import DefaultAzureCredential
-        from timeout_utils import call_with_timeout
-
-        cred = DefaultAzureCredential()
-        access_token = call_with_timeout(
-            lambda: cred.get_token(resource),
-            timeout_sec=30,
-            description="DefaultAzureCredential.get_token()"
-        )
-        return {"Authorization": f"Bearer {access_token.token}"}
-    except TimeoutError:
-        logger.warning("DefaultAzureCredential.get_token() timed out after 30s")
-    except Exception as exc:
-        logger.debug("DefaultAzureCredential failed: %s", exc)
 
     raise RuntimeError(
         "Could not obtain a Dataverse access token.  "
