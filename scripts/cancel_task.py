@@ -23,9 +23,7 @@ import argparse
 import json
 import sys
 
-import requests as http_requests
-
-from dv_helpers import DataverseClient
+from dv_helpers import DataverseClient, DataverseError
 
 TASKS_TABLE = "cr_shraga_tasks"
 
@@ -62,8 +60,8 @@ def cancel_task(task_id: str, email: str | None = None) -> dict:
             task_id,
             select="cr_shraga_taskid,cr_status,crb3b_shortdescription,crb3b_useremail",
         )
-    except http_requests.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
+    except DataverseError as exc:
+        if exc.status_code == 404:
             return {
                 "task_id": task_id,
                 "cancelable": False,

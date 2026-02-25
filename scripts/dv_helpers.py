@@ -1,14 +1,14 @@
 """
-Shared Dataverse helper module.
+Shared Dataverse helper module for scripts.
 
-Provides reusable functions for interacting with Microsoft Dataverse (CRM)
-tables via the OData v9.2 REST API.  All scripts and managers that talk to
-Dataverse should import from here instead of duplicating auth, header
-construction, and HTTP logic.
+Thin wrapper around dv_client.DataverseClient that provides a high-level
+CRUD API (get_rows, create_row, update_row, etc.) for standalone scripts.
+Auth and HTTP retry are handled by the service-level client -- this module
+adds OData query building and response parsing on top.
 
 Typical usage::
 
-    from scripts.dv_helpers import DataverseClient
+    from dv_helpers import DataverseClient
 
     dv = DataverseClient()
     rows = dv.get_rows("cr_shraga_conversations", filter="cr_status eq 'Unclaimed'", top=10)
@@ -19,156 +19,61 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
-import json
-from datetime import datetime, timezone, timedelta
+import sys
+import time
 from typing import Any
 
-import requests
+# ---------------------------------------------------------------------------
+# Ensure the workspace root is on sys.path so we can import dv_client
+# ---------------------------------------------------------------------------
+_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+_WORKSPACE_ROOT = os.path.dirname(_SCRIPTS_DIR)
+if _WORKSPACE_ROOT not in sys.path:
+    sys.path.insert(0, _WORKSPACE_ROOT)
+
+from dv_client import (
+    DataverseClient as _ServiceClient,
+    DataverseError,
+    DataverseRetryExhausted,
+    ETagConflictError,
+)
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Default configuration -- overridable via env vars or constructor params
+# Default configuration (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 DEFAULT_DATAVERSE_URL = "https://org3e79cdb1.crm3.dynamics.com"
 DEFAULT_API_VERSION = "v9.2"
-DEFAULT_REQUEST_TIMEOUT = 30  # seconds
+DEFAULT_REQUEST_TIMEOUT = 30
 
 
 # ---------------------------------------------------------------------------
-# Auth helpers
+# Static token credential for testing
 # ---------------------------------------------------------------------------
 
-def get_auth_header(
-    dataverse_url: str | None = None,
-    token: str | None = None,
-) -> dict[str, str]:
-    """Return an ``Authorization`` header dict for Dataverse API calls.
+class _StaticTokenCredential:
+    """Azure credential stub that always returns a fixed token. For testing."""
 
-    Resolution order for the bearer token:
+    def __init__(self, token: str):
+        self._token = token
 
-    1. *token* argument -- use directly if supplied.
-    2. ``DATAVERSE_TOKEN`` environment variable.
-    3. ``az account get-access-token`` CLI command (requires ``az login``).
-
-    Parameters
-    ----------
-    dataverse_url:
-        The Dataverse instance URL (e.g. ``https://org3e79cdb1.crm3.dynamics.com``).
-        Needed to request a token with the correct audience scope.  Falls back
-        to ``DATAVERSE_URL`` env var, then to the built-in default.
-    token:
-        Pre-fetched bearer token.  If provided, no CLI call is made.
-
-    Returns
-    -------
-    dict
-        ``{"Authorization": "Bearer <token>"}``
-
-    Raises
-    ------
-    RuntimeError
-        If no token can be obtained.
-    """
-    if token:
-        return {"Authorization": f"Bearer {token}"}
-
-    # Try env var
-    env_token = os.environ.get("DATAVERSE_TOKEN")
-    if env_token:
-        return {"Authorization": f"Bearer {env_token}"}
-
-    dv_url = dataverse_url or os.environ.get("DATAVERSE_URL", DEFAULT_DATAVERSE_URL)
-    resource = f"{dv_url}/.default"
-
-    # Try DefaultAzureCredential first (most reliable on dev boxes)
-    try:
-        from azure.identity import DefaultAzureCredential
-        from timeout_utils import call_with_timeout
-
-        cred = DefaultAzureCredential()
-        access_token = call_with_timeout(
-            lambda: cred.get_token(resource),
-            timeout_sec=30,
-            description="DefaultAzureCredential.get_token()"
-        )
-        return {"Authorization": f"Bearer {access_token.token}"}
-    except TimeoutError:
-        logger.warning("DefaultAzureCredential.get_token() timed out after 30s")
-    except Exception as exc:
-        logger.debug("DefaultAzureCredential failed: %s", exc)
-
-    # Fall back to Azure CLI
-    try:
-        result = subprocess.run(
-            [
-                "az", "account", "get-access-token",
-                "--resource", dv_url,
-                "--query", "accessToken",
-                "--output", "tsv",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            fetched = result.stdout.strip()
-            return {"Authorization": f"Bearer {fetched}"}
-    except FileNotFoundError:
-        logger.debug("Azure CLI (az) not found on PATH")
-    except subprocess.TimeoutExpired:
-        logger.warning("Azure CLI token request timed out")
-    except Exception as exc:
-        logger.debug("Azure CLI token request failed: %s", exc)
-
-    raise RuntimeError(
-        "Could not obtain a Dataverse access token.  "
-        "Provide a token directly, set DATAVERSE_TOKEN, "
-        "or run 'az login' first."
-    )
-
-
-def _build_odata_headers(
-    auth_header: dict[str, str],
-    content_type: str | None = None,
-    etag: str | None = None,
-    extra: dict[str, str] | None = None,
-) -> dict[str, str]:
-    """Construct the full OData header set expected by Dataverse.
-
-    Parameters
-    ----------
-    auth_header:
-        The ``{"Authorization": "Bearer ..."}`` dict.
-    content_type:
-        If given, sets ``Content-Type`` (e.g. ``application/json``).
-    etag:
-        If given, sets ``If-Match`` for optimistic concurrency control.
-    extra:
-        Additional headers to merge in (e.g. ``Prefer``).
-    """
-    headers = {
-        **auth_header,
-        "Accept": "application/json",
-        "OData-MaxVersion": "4.0",
-        "OData-Version": "4.0",
-    }
-    if content_type:
-        headers["Content-Type"] = content_type
-    if etag:
-        headers["If-Match"] = etag
-    if extra:
-        headers.update(extra)
-    return headers
+    def get_token(self, *scopes, **kwargs):
+        from collections import namedtuple
+        AccessToken = namedtuple("AccessToken", ["token", "expires_on"])
+        return AccessToken(token=self._token, expires_on=int(time.time()) + 3600)
 
 
 # ---------------------------------------------------------------------------
-# DataverseClient -- stateful client with token caching
+# DataverseClient -- high-level CRUD API backed by dv_client
 # ---------------------------------------------------------------------------
 
 class DataverseClient:
-    """High-level Dataverse OData client with auth caching and ETag support.
+    """High-level Dataverse CRUD client backed by dv_client.DataverseClient.
+
+    Same constructor signature and public API as the previous standalone
+    implementation, but auth and HTTP retry are delegated to the resilient
+    service-level client with WMI hang protection.
 
     Parameters
     ----------
@@ -179,7 +84,7 @@ class DataverseClient:
         OData API version string (default ``v9.2``).
     token:
         Pre-fetched bearer token.  If ``None``, the client will obtain one
-        via :func:`get_auth_header` on first request.
+        via ``create_credential()``.  Passing a token is useful for testing.
     timeout:
         HTTP request timeout in seconds.
     """
@@ -196,57 +101,26 @@ class DataverseClient:
             or os.environ.get("DATAVERSE_URL", DEFAULT_DATAVERSE_URL)
         )
         self.api_version = api_version
-        self.api_base = f"{self.dataverse_url}/api/data/{self.api_version}"
         self.timeout = timeout
 
-        # Token cache
-        self._token = token
-        self._token_expires: datetime | None = None
+        # Build the service-level client for auth + HTTP
+        kwargs: dict = {
+            "dataverse_url": self.dataverse_url,
+            "log_fn": logger.info,
+            "request_timeout": timeout,
+            "max_retry_seconds": 120,  # scripts use shorter retry budget
+        }
+        if token:
+            kwargs["credential"] = _StaticTokenCredential(token)
 
-    # -- internal helpers --------------------------------------------------
+        self._client = _ServiceClient(**kwargs)
 
-    def _get_auth_header(self) -> dict[str, str]:
-        """Return a cached or freshly-fetched auth header."""
-        # If caller pre-supplied a static token, always use it
-        if self._token and self._token_expires is None:
-            return {"Authorization": f"Bearer {self._token}"}
+        # Sync api_version if non-default was requested
+        if api_version != DEFAULT_API_VERSION:
+            self._client.api_version = api_version
+            self._client.api_base = f"{self.dataverse_url}/api/data/{api_version}"
 
-        # Check cache expiry
-        if (
-            self._token
-            and self._token_expires
-            and datetime.now(timezone.utc) < self._token_expires
-        ):
-            return {"Authorization": f"Bearer {self._token}"}
-
-        # Fetch fresh token
-        auth = get_auth_header(dataverse_url=self.dataverse_url)
-        self._token = auth["Authorization"].removeprefix("Bearer ")
-        # Cache for 50 minutes (tokens typically last 60-75 min)
-        self._token_expires = datetime.now(timezone.utc) + timedelta(minutes=50)
-        return auth
-
-    def _headers(
-        self,
-        content_type: str | None = None,
-        etag: str | None = None,
-        extra: dict[str, str] | None = None,
-    ) -> dict[str, str]:
-        """Build the full OData headers for a request."""
-        return _build_odata_headers(
-            auth_header=self._get_auth_header(),
-            content_type=content_type,
-            etag=etag,
-            extra=extra,
-        )
-
-    def _table_url(self, table: str) -> str:
-        """Return the base URL for a table (entity set)."""
-        return f"{self.api_base}/{table}"
-
-    def _row_url(self, table: str, row_id: str) -> str:
-        """Return the URL for a specific row."""
-        return f"{self.api_base}/{table}({row_id})"
+        self.api_base = self._client.api_base
 
     # -- Public CRUD -------------------------------------------------------
 
@@ -262,32 +136,7 @@ class DataverseClient:
     ) -> list[dict[str, Any]]:
         """Query rows from a Dataverse table.
 
-        Parameters
-        ----------
-        table:
-            Logical table name (e.g. ``cr_shraga_conversations``).
-        filter:
-            OData ``$filter`` expression.
-        select:
-            Comma-separated column list for ``$select``.
-        orderby:
-            OData ``$orderby`` expression.
-        top:
-            Maximum number of rows to return.
-        expand:
-            OData ``$expand`` expression.
-
-        Returns
-        -------
-        list[dict]
-            The ``value`` array from the OData response.  Each dict includes
-            ``@odata.etag`` which can be passed to :meth:`update_row` for
-            optimistic concurrency.
-
-        Raises
-        ------
-        requests.HTTPError
-            On non-2xx responses.
+        Returns the ``value`` array from the OData response.
         """
         params: list[str] = []
         if filter:
@@ -301,16 +150,11 @@ class DataverseClient:
         if expand:
             params.append(f"$expand={expand}")
 
-        url = self._table_url(table)
+        url = self._client.table_url(table)
         if params:
             url += "?" + "&".join(params)
 
-        resp = requests.get(
-            url,
-            headers=self._headers(),
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
+        resp = self._client.get(url, timeout=self.timeout, max_retry_seconds=120)
         return resp.json().get("value", [])
 
     def get_row(
@@ -320,37 +164,12 @@ class DataverseClient:
         *,
         select: str | None = None,
     ) -> dict[str, Any]:
-        """Fetch a single row by its primary key.
-
-        Parameters
-        ----------
-        table:
-            Logical table name.
-        row_id:
-            GUID primary key of the row.
-        select:
-            Optional comma-separated column list.
-
-        Returns
-        -------
-        dict
-            The row data including ``@odata.etag``.
-
-        Raises
-        ------
-        requests.HTTPError
-            On non-2xx responses (including 404 if not found).
-        """
-        url = self._row_url(table, row_id)
+        """Fetch a single row by its primary key."""
+        url = self._client.row_url(table, row_id)
         if select:
             url += f"?$select={select}"
 
-        resp = requests.get(
-            url,
-            headers=self._headers(),
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
+        resp = self._client.get(url, timeout=self.timeout, max_retry_seconds=120)
         return resp.json()
 
     def create_row(
@@ -362,46 +181,23 @@ class DataverseClient:
     ) -> dict[str, Any] | None:
         """Create a new row in a Dataverse table.
 
-        Parameters
-        ----------
-        table:
-            Logical table name.
-        data:
-            Column values to set on the new row.
-        return_representation:
-            If ``True`` (default), requests that Dataverse return the created
-            row in the response body (adds ``Prefer: return=representation``).
-
-        Returns
-        -------
-        dict or None
-            The created row (if ``return_representation`` is True and the
-            server responds with a body), or ``None`` on 204 No Content.
-            When the server returns 204 but includes an ``OData-EntityId``
-            header, a minimal dict with the extracted ID is returned.
-
-        Raises
-        ------
-        requests.HTTPError
-            On non-2xx responses.
+        Returns the created row dict, or ``None`` on 204 No Content.
+        When the server returns 204 with an ``OData-EntityId`` header,
+        a minimal dict with the extracted ID is returned.
         """
         extra = {}
         if return_representation:
             extra["Prefer"] = "return=representation"
 
-        resp = requests.post(
-            self._table_url(table),
-            headers=self._headers(
-                content_type="application/json",
-                extra=extra,
-            ),
-            json=data,
+        resp = self._client.post(
+            self._client.table_url(table),
+            data=data,
+            extra_headers=extra if extra else None,
             timeout=self.timeout,
+            max_retry_seconds=120,
         )
-        resp.raise_for_status()
 
         if resp.status_code == 204 or not resp.content:
-            # Try to extract the row ID from the OData-EntityId header
             entity_id_header = resp.headers.get("OData-EntityId", "")
             if "(" in entity_id_header:
                 extracted_id = entity_id_header.split("(")[-1].rstrip(")")
@@ -420,81 +216,35 @@ class DataverseClient:
     ) -> bool:
         """Update (PATCH) an existing row.
 
-        Parameters
-        ----------
-        table:
-            Logical table name.
-        row_id:
-            GUID primary key of the row to update.
-        data:
-            Column values to update.
-        etag:
-            If provided, sends ``If-Match: <etag>`` for optimistic concurrency.
-            The update will fail with HTTP 412 if the row has been modified
-            since the ETag was obtained.
-
-        Returns
-        -------
-        bool
-            ``True`` if the update succeeded, ``False`` if a concurrency
-            conflict occurred (HTTP 412).
-
-        Raises
-        ------
-        requests.HTTPError
-            On non-2xx responses other than 412.
+        Returns ``True`` on success, ``False`` on 412 concurrency conflict.
         """
-        resp = requests.patch(
-            self._row_url(table, row_id),
-            headers=self._headers(
-                content_type="application/json",
+        try:
+            self._client.patch(
+                self._client.row_url(table, row_id),
+                data=data,
                 etag=etag,
-            ),
-            json=data,
-            timeout=self.timeout,
-        )
-
-        if resp.status_code == 412:
+                timeout=self.timeout,
+                max_retry_seconds=120,
+            )
+            return True
+        except ETagConflictError:
             logger.info(
                 "Optimistic concurrency conflict on %s(%s) -- row was modified",
-                table,
-                row_id,
+                table, row_id,
             )
             return False
-
-        resp.raise_for_status()
-        return True
 
     def delete_row(
         self,
         table: str,
         row_id: str,
     ) -> bool:
-        """Delete a row from a Dataverse table.
-
-        Parameters
-        ----------
-        table:
-            Logical table name.
-        row_id:
-            GUID primary key of the row to delete.
-
-        Returns
-        -------
-        bool
-            ``True`` on success.
-
-        Raises
-        ------
-        requests.HTTPError
-            On non-2xx responses.
-        """
-        resp = requests.delete(
-            self._row_url(table, row_id),
-            headers=self._headers(),
+        """Delete a row from a Dataverse table."""
+        self._client.delete(
+            self._client.row_url(table, row_id),
             timeout=self.timeout,
+            max_retry_seconds=120,
         )
-        resp.raise_for_status()
         return True
 
     # -- Convenience methods -----------------------------------------------
@@ -537,18 +287,15 @@ class DataverseClient:
     ) -> bool:
         """Create-or-update a row using Dataverse UPSERT semantics.
 
-        Sends a PATCH without ``If-Match`` so that Dataverse creates the
-        row if it does not exist, or updates it if it does.
-
-        Returns ``True`` on success.
+        Sends a PATCH without ETag so that Dataverse creates the row if
+        it does not exist, or updates it if it does.
         """
-        resp = requests.patch(
-            self._row_url(table, row_id),
-            headers=self._headers(content_type="application/json"),
-            json=data,
+        self._client.patch(
+            self._client.row_url(table, row_id),
+            data=data,
             timeout=self.timeout,
+            max_retry_seconds=120,
         )
-        resp.raise_for_status()
         return True
 
 

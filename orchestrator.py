@@ -18,9 +18,8 @@ import traceback
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
-from azure.identity import DefaultAzureCredential
 import os
-from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
+from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError, create_credential
 
 # Import Dev Box manager
 try:
@@ -69,7 +68,7 @@ class Orchestrator:
         # Dataverse client (handles auth, retry, token caching)
         self.dv = DataverseClient(
             dataverse_url=DATAVERSE_URL,
-            credential=DefaultAzureCredential(),
+            credential=create_credential(log_fn=print),
             log_fn=print,
         )
 

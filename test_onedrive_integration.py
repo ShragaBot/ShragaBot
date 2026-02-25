@@ -40,8 +40,8 @@ def _import_worker(monkeypatch, tmp_path):
     mock_agent_module = MagicMock()
     monkeypatch.setitem(sys.modules, "autonomous_agent", mock_agent_module)
 
-    # Patch DefaultAzureCredential before import
-    with patch("azure.identity.DefaultAzureCredential") as mock_cred:
+    # Patch AzureCliCredential before import (create_credential uses AzureCliCredential)
+    with patch("azure.identity.AzureCliCredential") as mock_cred:
         mock_cred_inst = MagicMock()
         mock_cred_inst.get_token.return_value = MagicMock(
             token="fake-token",

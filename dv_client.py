@@ -70,35 +70,35 @@ _RETRYABLE_EXCEPTIONS = (
 # Credential creation with WMI hang protection
 # ---------------------------------------------------------------------------
 
-def create_credential(log_fn=None, max_retries=3, timeout_sec=30):
-    """Create a DefaultAzureCredential with retry and timeout protection.
+def create_credential(log_fn=None, max_retries=2):
+    """Create an AzureCliCredential for Dataverse API access.
 
-    DefaultAzureCredential() can hang indefinitely if WMI is stuck on Windows.
-    This wraps creation in call_with_timeout and retries on failure.
+    Uses AzureCliCredential directly instead of DefaultAzureCredential to
+    avoid WMI hangs on Windows.  DefaultAzureCredential probes ~8 credential
+    sources (SharedTokenCache, VSCode, etc.) that can trigger WMI calls which
+    hang indefinitely.  On dev boxes the only working source is the Azure CLI,
+    so we go straight to it.
 
-    Returns a credential object, or calls sys.exit(1) after all retries fail.
+    Requires ``az login`` to have been run beforehand.
+
+    Token verification is deferred to the first real API call -- the retry
+    engine handles 401 by refreshing the token automatically.
+
+    Returns a credential object, or calls sys.exit(1) after retries fail.
     """
     import sys
     _log = log_fn or print
     for attempt in range(1, max_retries + 1):
         try:
-            from azure.identity import DefaultAzureCredential
-            cred = call_with_timeout(DefaultAzureCredential, timeout_sec, "DefaultAzureCredential()")
-            if attempt > 1:
-                _log(f"[INFO] Credential created on attempt {attempt}")
-            return cred
-        except TimeoutError:
-            _log(f"[CRITICAL] Credential creation timed out (attempt {attempt}/{max_retries}) -- likely WMI hang")
-            if attempt < max_retries:
-                _log(f"[CRITICAL] Retrying in 10s...")
-                time.sleep(10)
+            from azure.identity import AzureCliCredential
+            return AzureCliCredential()
         except Exception as e:
-            _log(f"[CRITICAL] Credential creation failed (attempt {attempt}/{max_retries}): {e}")
+            _log(f"[CRITICAL] AzureCliCredential failed (attempt {attempt}/{max_retries}): {e}")
             if attempt < max_retries:
-                _log(f"[CRITICAL] Retrying in 10s...")
-                time.sleep(10)
+                _log("[CRITICAL] Retrying in 5s...")
+                time.sleep(5)
     _log("[CRITICAL] All credential creation attempts failed. Exiting.")
-    _log("[CRITICAL] HINT: Run 'az login' or restart WMI service.")
+    _log("[CRITICAL] HINT: Run 'az login' to authenticate.")
     sys.exit(1)
 
 
@@ -116,7 +116,7 @@ class DataverseClient:
         or the built-in default.
     credential:
         An ``azure.identity`` credential object.  If ``None``, a fresh
-        ``DefaultAzureCredential()`` is created.
+        ``AzureCliCredential`` is created via ``create_credential()``.
     log_fn:
         Logging callback ``(str) -> None``.  Defaults to ``print``.
     request_timeout:

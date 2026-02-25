@@ -198,7 +198,7 @@ class IntegratedTaskWorker:
             }, f, indent=2)
 
     def get_token(self):
-        """Get OAuth token using DefaultAzureCredential (secure, cached).
+        """Get OAuth token using AzureCliCredential (secure, cached).
 
         Thin wrapper around DataverseClient.get_token() that catches
         TimeoutError/Exception and calls sys.exit(1) for fatal failures.

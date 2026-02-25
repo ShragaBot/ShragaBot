@@ -25,16 +25,19 @@ def _import_orchestrator(monkeypatch, tmp_path):
     mock_devbox_module = MagicMock()
     monkeypatch.setitem(sys.modules, "orchestrator_devbox", mock_devbox_module)
 
-    with patch("azure.identity.DefaultAzureCredential") as mock_cred:
-        mock_cred_inst = MagicMock()
-        mock_cred_inst.get_token.return_value = MagicMock(
-            token="fake-token",
-            expires_on=(datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()
-        )
-        mock_cred.return_value = mock_cred_inst
+    mock_cred_inst = MagicMock()
+    mock_cred_inst.get_token.return_value = MagicMock(
+        token="fake-token",
+        expires_on=(datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()
+    )
 
+    with patch("azure.identity.AzureCliCredential") as mock_cred:
+        mock_cred.return_value = mock_cred_inst
         import orchestrator as mod
-        return mod, mock_cred_inst
+
+    # Persist mock so Orchestrator() construction uses it (with block ended)
+    monkeypatch.setattr(mod, "create_credential", lambda log_fn=None, max_retries=2: mock_cred_inst)
+    return mod, mock_cred_inst
 
 
 # ===========================================================================
