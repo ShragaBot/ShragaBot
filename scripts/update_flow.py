@@ -32,7 +32,7 @@ Known Shraga flows (7 total):
     TaskFailed:          a4b59d39-a30f-4f4b-a07f-23b5a513bd11  (flows/TaskFailed.json)
     TaskRunner:          ae21fda1-a415-4e88-8cd4-c90fb0321faf  (flows/TaskRunner.json)
     TaskCanceled:        6db87fc1-a341-4b5d-843b-dfcc68054194  (flows/TaskCanceled.json)
-    SendMessage:         f6144661-8f48-9528-f120-b1666abccea0  (flows/SendMessage.json)
+    SendMessage:         0e3f6ece-54a1-606e-e34b-5b1d5d4c536d  (flows/SendMessage.json)
     CancelTask:          8b0d9024-4b95-4b92-83aa-0b6db37040af  (flows/CancelTask.json)
 
 Connection references used:
@@ -101,10 +101,10 @@ FLOW_REGISTRY: dict[str, dict[str, str]] = {
                        "posts cancellation Adaptive Card to Teams.",
     },
     "SendMessage": {
-        "id": "f6144661-8f48-9528-f120-b1666abccea0",
+        "id": "0e3f6ece-54a1-606e-e34b-5b1d5d4c536d",
         "json_file": "flows/SendMessage.json",
-        "description": "Copilot Studio skill flow; sends a message "
-                       "to a user via the Dataverse messages table.",
+        "description": "Copilot Studio skill flow (ShragaRelay); relays messages "
+                       "between the bot and task managers via the conversations table.",
     },
     "CancelTask": {
         "id": "8b0d9024-4b95-4b92-83aa-0b6db37040af",
@@ -132,8 +132,9 @@ def get_token() -> str:
 
     Resolution order:
     1. ``PA_TOKEN`` environment variable (for CI/CD or pre-fetched tokens).
-    2. ``AzureCliCredential`` (requires ``az login``).
-    3. ``DefaultAzureCredential`` (managed identity, VS Code, etc.).
+    2. ``DefaultAzureCredential`` — controlled by the
+       ``AZURE_TOKEN_CREDENTIALS`` env var (e.g. ``AzureCliCredential`` on
+       dev boxes).
 
     Returns the raw token string.  Raises ``RuntimeError`` if all methods fail.
     """
@@ -142,21 +143,18 @@ def get_token() -> str:
     if env_token:
         return env_token
 
-    # 2. AzureCliCredential, 3. DefaultAzureCredential
-    from azure.identity import AzureCliCredential, DefaultAzureCredential
+    # 2. DefaultAzureCredential (AZURE_TOKEN_CREDENTIALS controls provider)
+    from azure.identity import DefaultAzureCredential
 
-    for cred_cls in [AzureCliCredential, DefaultAzureCredential]:
-        try:
-            cred = cred_cls()
-            token = cred.get_token("https://service.flow.microsoft.com/.default")
-            return token.token
-        except Exception:
-            continue
-
-    raise RuntimeError(
-        "Could not acquire a Power Automate API token.  "
-        "Set PA_TOKEN, or run 'az login' first."
-    )
+    try:
+        cred = DefaultAzureCredential()
+        token = cred.get_token("https://service.flow.microsoft.com/.default")
+        return token.token
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not acquire a Power Automate API token.  "
+            "Set PA_TOKEN, or run 'az login' first."
+        ) from exc
 
 
 # ---------------------------------------------------------------------------

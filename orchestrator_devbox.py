@@ -9,7 +9,7 @@ import time
 import json
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
-from azure.identity import AzureCliCredential
+from azure.identity import DefaultAzureCredential
 from dataclasses import dataclass
 from timeout_utils import call_with_timeout
 
@@ -47,8 +47,9 @@ class DevBoxManager:
         self.pool_name = pool_name
 
         # Use externally-provided credential if given (enables process-scoped auth).
-        # Otherwise fall back to the default credential chain (env vars, managed
-        # identity, Azure CLI, etc.).
+        # Otherwise use DefaultAzureCredential, controlled by the
+        # AZURE_TOKEN_CREDENTIALS env var (e.g. "AzureCliCredential" on dev
+        # boxes to skip WMI-triggering probes).
         #
         # NOTE: Device code auth was removed because Azure Conditional Access
         # policies block the device code grant flow in this tenant.  Run
@@ -57,7 +58,7 @@ class DevBoxManager:
         if credential is not None:
             self.credential = credential
         else:
-            self.credential = AzureCliCredential()
+            self.credential = DefaultAzureCredential()
 
         self.api_version = "2024-02-01"
 

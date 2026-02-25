@@ -31,7 +31,7 @@ def _import_orchestrator(monkeypatch, tmp_path):
         expires_on=(datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()
     )
 
-    with patch("azure.identity.AzureCliCredential") as mock_cred:
+    with patch("azure.identity.DefaultAzureCredential") as mock_cred:
         mock_cred.return_value = mock_cred_inst
         import orchestrator as mod
 

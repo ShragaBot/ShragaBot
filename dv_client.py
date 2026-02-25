@@ -71,15 +71,19 @@ _RETRYABLE_EXCEPTIONS = (
 # ---------------------------------------------------------------------------
 
 def create_credential(log_fn=None):
-    """Create an AzureCliCredential for Dataverse API access.
+    """Create a credential for Azure API access via ``DefaultAzureCredential``.
 
-    Uses AzureCliCredential directly instead of DefaultAzureCredential to
-    avoid WMI hangs on Windows.  DefaultAzureCredential probes ~8 credential
-    sources (SharedTokenCache, VSCode, etc.) that can trigger WMI calls which
-    hang indefinitely.  On dev boxes the only working source is the Azure CLI,
-    so we go straight to it.
+    Uses the standard ``DefaultAzureCredential`` from the ``azure-identity``
+    SDK.  The credential chain is controlled by the ``AZURE_TOKEN_CREDENTIALS``
+    environment variable (requires azure-identity >= 1.24.0):
 
-    Requires ``az login`` to have been run beforehand.
+    * On dev boxes set ``AZURE_TOKEN_CREDENTIALS=AzureCliCredential`` to skip
+      all probes and go straight to the Azure CLI (avoids WMI hangs on Windows).
+    * In Azure-hosted environments set it to ``ManagedIdentityCredential``.
+    * When unset, the full DefaultAzureCredential chain is used.
+
+    Requires ``az login`` to have been run beforehand when using
+    ``AzureCliCredential``.
 
     Token verification is deferred to the first real API call -- the retry
     engine handles 401 by refreshing the token automatically.
@@ -90,8 +94,8 @@ def create_credential(log_fn=None):
     import sys
     _log = log_fn or print
     try:
-        from azure.identity import AzureCliCredential
-        return AzureCliCredential()
+        from azure.identity import DefaultAzureCredential
+        return DefaultAzureCredential()
     except ImportError:
         _log("[CRITICAL] azure-identity package not installed.")
         _log("[CRITICAL] HINT: pip install azure-identity")

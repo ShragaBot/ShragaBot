@@ -239,7 +239,8 @@ Write-Step "7/7" "Starting Shraga Services" "Yellow"
 foreach ($varInfo in @(
     @{ Name = "USER_EMAIL"; Value = $userEmail },
     @{ Name = "WORKING_DIR"; Value = $WORKING_DIR },
-    @{ Name = "WEBHOOK_USER"; Value = $userEmail }
+    @{ Name = "WEBHOOK_USER"; Value = $userEmail },
+    @{ Name = "AZURE_TOKEN_CREDENTIALS"; Value = "AzureCliCredential" }
 )) {
     try {
         [System.Environment]::SetEnvironmentVariable($varInfo.Name, $varInfo.Value, "Machine")

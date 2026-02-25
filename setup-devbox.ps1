@@ -509,7 +509,8 @@ foreach ($ev in @(
     @{ Name = "USER_EMAIL"; Value = $userEmail },
     @{ Name = "WORKING_DIR"; Value = $WORKING_DIR },
     @{ Name = "WEBHOOK_USER"; Value = $userEmail },
-    @{ Name = "SHRAGA_ROOT"; Value = $SHRAGA_ROOT }
+    @{ Name = "SHRAGA_ROOT"; Value = $SHRAGA_ROOT },
+    @{ Name = "AZURE_TOKEN_CREDENTIALS"; Value = "AzureCliCredential" }
 )) {
     try { Set-EnvVar $ev.Name $ev.Value }
     catch { Write-Warning2 "Could not set $($ev.Name): $_"; $envOk = $false }
@@ -532,10 +533,10 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
     # Create a small wrapper .cmd for each service that sets env vars before running Python
     # This ensures the scheduled task always has the right environment
     $services = @(
-        @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker"; EnvVars = @{ WEBHOOK_USER = $userEmail } }
+        @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker"; EnvVars = @{ WEBHOOK_USER = $userEmail; AZURE_TOKEN_CREDENTIALS = "AzureCliCredential" } }
     )
     if (-not $WorkerOnly) {
-        $services += @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM"; EnvVars = @{ USER_EMAIL = $userEmail } }
+        $services += @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM"; EnvVars = @{ USER_EMAIL = $userEmail; AZURE_TOKEN_CREDENTIALS = "AzureCliCredential" } }
     } else {
         Write-Info "WorkerOnly mode -- skipping PM (runs on your first dev box)"
     }

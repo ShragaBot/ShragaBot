@@ -40,7 +40,7 @@ def _import_modules(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "orchestrator_devbox", mock_devbox)
     monkeypatch.setitem(sys.modules, "autonomous_agent", mock_agent)
 
-    with patch("azure.identity.AzureCliCredential") as mock_cred:
+    with patch("azure.identity.DefaultAzureCredential") as mock_cred:
         mock_cred_inst = MagicMock()
         mock_cred_inst.get_token.return_value = MagicMock(
             token="fake-token",

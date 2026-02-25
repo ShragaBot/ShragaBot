@@ -466,36 +466,32 @@ class TestGetToken:
         assert token == "env-pa-token-123"
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_azure_cli_credential(self):
-        """Should fall back to AzureCliCredential."""
+    def test_default_azure_credential(self):
+        """Should fall back to DefaultAzureCredential."""
         os.environ.pop("PA_TOKEN", None)
         mock_cred = MagicMock()
         mock_token = MagicMock()
-        mock_token.token = "cli-token-456"
+        mock_token.token = "default-token-456"
         mock_cred.get_token.return_value = mock_token
 
-        mock_cli_cred_cls = MagicMock(return_value=mock_cred)
+        mock_default_cred_cls = MagicMock(return_value=mock_cred)
 
-        # AzureCliCredential and DefaultAzureCredential are imported inside
-        # get_token() via a local import, so we patch at the azure.identity level
-        with patch("azure.identity.AzureCliCredential", mock_cli_cred_cls):
+        # DefaultAzureCredential is imported inside get_token() via a local
+        # import, so we patch at the azure.identity level
+        with patch("azure.identity.DefaultAzureCredential", mock_default_cred_cls):
             token = update_flow.get_token()
-        assert token == "cli-token-456"
+        assert token == "default-token-456"
 
     @patch.dict(os.environ, {}, clear=True)
     def test_all_methods_fail_raises(self):
         """Should raise RuntimeError when all auth methods fail."""
         os.environ.pop("PA_TOKEN", None)
         with patch(
-            "azure.identity.AzureCliCredential",
+            "azure.identity.DefaultAzureCredential",
             side_effect=Exception("fail"),
         ):
-            with patch(
-                "azure.identity.DefaultAzureCredential",
-                side_effect=Exception("fail"),
-            ):
-                with pytest.raises(RuntimeError, match="Could not acquire"):
-                    update_flow.get_token()
+            with pytest.raises(RuntimeError, match="Could not acquire"):
+                update_flow.get_token()
 
 
 # ---------------------------------------------------------------------------

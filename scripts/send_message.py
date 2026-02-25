@@ -27,9 +27,9 @@ STATUS_UNCLAIMED = "Unclaimed"
 
 
 def get_token() -> str:
-    """Authenticate via AzureCliCredential (no WMI hangs)."""
-    from azure.identity import AzureCliCredential
-    cred = AzureCliCredential()
+    """Authenticate via DefaultAzureCredential (AZURE_TOKEN_CREDENTIALS controls provider)."""
+    from azure.identity import DefaultAzureCredential
+    cred = DefaultAzureCredential()
     token = cred.get_token(f"{DATAVERSE_URL}/.default")
     return token.token
 
@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     followup = args.followup
 
     # --- Authenticate ---
-    print(f"[AUTH] Acquiring token via AzureCliCredential...")
+    print(f"[AUTH] Acquiring token via DefaultAzureCredential...")
     try:
         token = get_token()
     except Exception as e:

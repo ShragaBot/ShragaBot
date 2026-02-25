@@ -64,7 +64,7 @@ class FakeAccessToken:
 
 @pytest.fixture
 def mock_credential():
-    """Return a mock AzureCliCredential that always succeeds."""
+    """Return a mock Azure credential that always succeeds."""
     cred = MagicMock()
     cred.get_token.return_value = FakeAccessToken()
     return cred
