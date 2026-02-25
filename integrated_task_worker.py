@@ -3,7 +3,6 @@ Integrated Task Worker - Combines Dataverse polling with autonomous agent execut
 
 Polls Dataverse for tasks → Executes using Worker/Verifier loop → Updates Dataverse
 """
-import platform
 import socket
 import subprocess
 import time
@@ -62,7 +61,7 @@ STATE_FILE = ".integrated_worker_state.json"
 WEBHOOK_USER = os.environ.get("WEBHOOK_USER", "")
 from version_check import get_my_version, should_exit
 
-MACHINE_NAME = platform.node()  # This dev box's hostname
+MACHINE_NAME = socket.gethostname()  # This dev box's hostname (socket, not platform -- avoids WMI hang)
 
 # Status labels used in PATCH/POST bodies (Dataverse accepts string labels)
 STATUS_SUBMITTED = "Submitted"
@@ -747,7 +746,7 @@ JSON output:"""
             dict: The summary JSON structure
         """
         # Determine dev box name
-        dev_box = socket.gethostname() or platform.node() or "unknown"
+        dev_box = socket.gethostname() or "unknown"
 
         # Count unique models -> sub-agents heuristic
         model_usage = accumulated_stats.get("model_usage", {})

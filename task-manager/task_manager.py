@@ -1,6 +1,6 @@
 """PM thin wrapper: DV I/O + session persistence + stale detection.
 Claude Code handles all task management autonomously via CLAUDE.md."""
-import platform, json, time, os, sys, subprocess, uuid
+import socket, json, time, os, sys, subprocess, uuid
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -11,7 +11,7 @@ from version_check import get_my_version, should_exit
 from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
-os.environ.setdefault('DEVBOX_HOSTNAME', platform.node())
+os.environ.setdefault('DEVBOX_HOSTNAME', socket.gethostname())
 
 INSTANCE_ID = uuid.uuid4().hex[:8]
 
