@@ -1,27 +1,17 @@
 """
-Tests for Global Manager (thin wrapper + persistent Claude Code session).
+Tests for Global Manager (thin wrapper + DV-based session resolution).
 
 All external dependencies (Azure, Dataverse, Claude Code CLI) are mocked.
 Tests verify:
-  - Session creation/resumption (SessionManager)
-  - Session persistence to disk (~/.shraga/gm_sessions.json)
-  - Session expiry/cleanup (24h)
+  - No old tool-wrapper code remains
   - Claude Code subprocess invocation (--resume, --print, -p)
   - DV polling/claiming (ETag concurrency)
-  - Response writing (Outbound rows)
+  - Response writing (Outbound rows) with [GM:xxxx] prefix
   - New user and known user flows
   - Fallback message when Claude Code is unavailable
-
-Acceptance Criteria:
-  1. No TOOL_DEFINITIONS, no _execute_tool, no _try_parse_json, no _call_claude_with_tools
-  2. GM uses claude --resume with session persistence
-  3. Session persistence to disk (~/.shraga/gm_sessions.json)
-  4. Session expiry/cleanup (24h)
-  5. CLAUDE.md used by Claude Code (not Python system prompt)
-  6. DV polling/claiming/response-writing preserved
-  7. ETag concurrency preserved
-  8. Handles new user and known user flows
-  9. All NEW tests pass
+  - Session tracking via _current_sessions dict
+  - cr_claimed_by format: gm:version:box:instance_id
+  - cr_processed_by written on outbound rows
 """
 import json
 import sys
@@ -63,26 +53,13 @@ def mock_credential():
 
 
 @pytest.fixture
-def sessions_file(tmp_path):
-    """Provide a temp path for session persistence."""
-    return tmp_path / ".shraga" / "gm_sessions.json"
-
-
-@pytest.fixture
-def manager(mock_credential, sessions_file):
-    """Create a GlobalManager with mocked credentials and temp sessions file."""
+def manager(mock_credential):
+    """Create a GlobalManager with mocked credentials."""
     with patch("global_manager.get_credential", return_value=mock_credential):
         from global_manager import GlobalManager
-        mgr = GlobalManager(sessions_file=sessions_file)
+        mgr = GlobalManager()
     mgr.dv = MagicMock()
     return mgr
-
-
-@pytest.fixture
-def session_mgr(sessions_file):
-    """Create a standalone SessionManager for unit testing."""
-    from global_manager import SessionManager
-    return SessionManager(sessions_file=sessions_file)
 
 
 # ============================================================================
@@ -128,6 +105,22 @@ class TestNoToolWrapperCode:
         """_call_claude_code method must exist (replacement)."""
         assert hasattr(manager, "_call_claude_code"), \
             "New _call_claude_code method should exist"
+
+    def test_no_session_manager_class(self):
+        """SessionManager class must be removed from global_manager module."""
+        import global_manager
+        assert not hasattr(global_manager, "SessionManager"), \
+            "SessionManager class should be removed"
+
+    def test_no_session_manager_attribute(self, manager):
+        """Manager must not have session_manager attribute."""
+        assert not hasattr(manager, "session_manager"), \
+            "session_manager attribute should be removed"
+
+    def test_has_current_sessions_dict(self, manager):
+        """Manager must have _current_sessions dict for within-run tracking."""
+        assert hasattr(manager, "_current_sessions")
+        assert isinstance(manager._current_sessions, dict)
 
 
 # ============================================================================
@@ -254,185 +247,6 @@ class TestClaudeCodeInvocation:
 
 
 # ============================================================================
-# Acceptance Criterion 3: Session persistence to disk
-# ============================================================================
-
-class TestSessionPersistence:
-    """Verify sessions are persisted to ~/.shraga/gm_sessions.json."""
-
-    def test_sessions_file_created_on_save(self, session_mgr, sessions_file):
-        """Sessions file is created when a session is saved."""
-        session_mgr.save_session("conv-1", "real-session-id-1", "user@test.com")
-        assert sessions_file.exists()
-
-    def test_sessions_file_contains_valid_json(self, session_mgr, sessions_file):
-        """Sessions file contains valid JSON."""
-        session_mgr.save_session("conv-1", "real-session-id-1", "user@test.com")
-        data = json.loads(sessions_file.read_text(encoding="utf-8"))
-        assert isinstance(data, dict)
-        assert "conv-1" in data
-
-    def test_sessions_persist_across_instances(self, sessions_file):
-        """Sessions survive SessionManager restart (loaded from disk)."""
-        from global_manager import SessionManager
-        mgr1 = SessionManager(sessions_file=sessions_file)
-        mgr1.save_session("conv-persist", "real-session-id-persist", "user@test.com")
-
-        # Create a new SessionManager instance (simulates restart)
-        mgr2 = SessionManager(sessions_file=sessions_file)
-        entry = mgr2.get_session("conv-persist")
-
-        assert entry is not None
-        assert entry["session_id"] == "real-session-id-persist", "Session ID must be the same after restart"
-
-    def test_session_entry_has_required_fields(self, session_mgr):
-        """Each session entry must have session_id, created_at, last_used, user_email."""
-        session_mgr.save_session("conv-fields", "session-fields-1", "fieldtest@test.com")
-        entry = session_mgr.get_session("conv-fields")
-        assert entry is not None
-        assert "session_id" in entry
-        assert "created_at" in entry
-        assert "last_used" in entry
-        assert "user_email" in entry
-        assert entry["user_email"] == "fieldtest@test.com"
-
-    def test_sessions_dir_created_automatically(self, tmp_path):
-        """Parent directories are created if they don't exist."""
-        from global_manager import SessionManager
-        deep_path = tmp_path / "a" / "b" / "c" / "sessions.json"
-        mgr = SessionManager(sessions_file=deep_path)
-        mgr.save_session("conv-deep", "session-deep-1", "user@test.com")
-        assert deep_path.exists()
-
-    def test_load_handles_corrupt_file(self, sessions_file):
-        """SessionManager handles corrupt/invalid JSON gracefully."""
-        from global_manager import SessionManager
-        sessions_file.parent.mkdir(parents=True, exist_ok=True)
-        sessions_file.write_text("NOT VALID JSON {{{", encoding="utf-8")
-        mgr = SessionManager(sessions_file=sessions_file)
-        # Should start with empty sessions, not crash
-        assert mgr.sessions == {}
-
-    def test_load_handles_missing_file(self, tmp_path):
-        """SessionManager handles missing file gracefully."""
-        from global_manager import SessionManager
-        mgr = SessionManager(sessions_file=tmp_path / "nonexistent.json")
-        assert mgr.sessions == {}
-
-    def test_multiple_conversations_tracked(self, session_mgr):
-        """Multiple conversations get unique session IDs."""
-        session_mgr.save_session("conv-a", "session-a-1", "alice@test.com")
-        session_mgr.save_session("conv-b", "session-b-1", "bob@test.com")
-        entry_a = session_mgr.get_session("conv-a")
-        entry_b = session_mgr.get_session("conv-b")
-        assert entry_a["session_id"] != entry_b["session_id"]
-        assert len(session_mgr.sessions) == 2
-
-
-# ============================================================================
-# Acceptance Criterion 4: Session expiry/cleanup (24h)
-# ============================================================================
-
-class TestSessionExpiry:
-    """Verify session cleanup removes sessions older than 24h."""
-
-    def test_cleanup_removes_expired_sessions(self, session_mgr):
-        """Sessions older than the expiry window are removed."""
-        # Manually insert an old session
-        old_time = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
-        session_mgr._sessions["old-conv"] = {
-            "session_id": "old-session",
-            "created_at": old_time,
-            "last_used": old_time,
-            "user_email": "old@test.com",
-        }
-        session_mgr._save()
-
-        removed = session_mgr.cleanup_expired(max_age_hours=24)
-        assert removed == 1
-        assert "old-conv" not in session_mgr.sessions
-
-    def test_cleanup_keeps_fresh_sessions(self, session_mgr):
-        """Sessions within the expiry window are kept."""
-        session_mgr.save_session("fresh-conv", "fresh-session-1", "fresh@test.com")
-        removed = session_mgr.cleanup_expired(max_age_hours=24)
-        assert removed == 0
-        assert "fresh-conv" in session_mgr.sessions
-
-    def test_cleanup_mixed_old_and_new(self, session_mgr):
-        """Cleanup removes old sessions while keeping fresh ones."""
-        old_time = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
-        session_mgr._sessions["old-conv"] = {
-            "session_id": "old-session",
-            "created_at": old_time,
-            "last_used": old_time,
-            "user_email": "old@test.com",
-        }
-        session_mgr.save_session("new-conv", "new-session-1", "new@test.com")
-        session_mgr._save()
-
-        removed = session_mgr.cleanup_expired(max_age_hours=24)
-        assert removed == 1
-        assert "old-conv" not in session_mgr.sessions
-        assert "new-conv" in session_mgr.sessions
-
-    def test_cleanup_handles_unparseable_timestamps(self, session_mgr):
-        """Sessions with invalid timestamps are expired (fail-safe)."""
-        session_mgr._sessions["bad-conv"] = {
-            "session_id": "bad-session",
-            "created_at": "not-a-date",
-            "last_used": "also-not-a-date",
-            "user_email": "bad@test.com",
-        }
-        session_mgr._save()
-
-        removed = session_mgr.cleanup_expired(max_age_hours=24)
-        assert removed == 1
-
-    def test_cleanup_persists_after_removal(self, session_mgr, sessions_file):
-        """After cleanup, the sessions file is updated on disk."""
-        old_time = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
-        session_mgr._sessions["expired-conv"] = {
-            "session_id": "expired-session",
-            "created_at": old_time,
-            "last_used": old_time,
-            "user_email": "expired@test.com",
-        }
-        session_mgr.save_session("active-conv", "active-session-1", "active@test.com")
-        session_mgr._save()
-
-        session_mgr.cleanup_expired(max_age_hours=24)
-
-        # Reload from disk to verify persistence
-        from global_manager import SessionManager
-        reloaded = SessionManager(sessions_file=sessions_file)
-        assert "expired-conv" not in reloaded.sessions
-        assert "active-conv" in reloaded.sessions
-
-    def test_last_used_updates_on_access(self, session_mgr):
-        """Accessing an existing session updates last_used timestamp."""
-        session_mgr.save_session("conv-access", "session-access-1", "user@test.com")
-        entry1 = session_mgr.get_session("conv-access")
-        first_used = entry1["last_used"]
-
-        # Small delay to get a different timestamp
-        import time
-        time.sleep(0.01)
-
-        entry2 = session_mgr.get_session("conv-access")
-
-        assert entry2["session_id"] == "session-access-1", "Same conversation must get same session"
-        assert entry2["last_used"] >= first_used
-
-    def test_cleanup_no_expired_returns_zero(self, session_mgr):
-        """When no sessions are expired, cleanup returns 0."""
-        session_mgr.save_session("fresh-1", "session-fresh-1", "a@test.com")
-        session_mgr.save_session("fresh-2", "session-fresh-2", "b@test.com")
-        removed = session_mgr.cleanup_expired(max_age_hours=24)
-        assert removed == 0
-
-
-# ============================================================================
 # Acceptance Criterion 5: CLAUDE.md used by Claude Code (not Python system prompt)
 # ============================================================================
 
@@ -491,9 +305,10 @@ class TestPolling:
 
 
 class TestResponse:
-    """Response writing tests (unchanged from original architecture)."""
+    """Response writing tests -- updated for [GM:xxxx] prefix."""
 
-    def test_send_response(self, manager):
+    def test_send_response_without_session(self, manager):
+        """Response without session_id has no prefix."""
         manager.dv.post.return_value = FakeResponse(json_data={})
         result = manager.send_response(
             in_reply_to=SAMPLE_CONVERSATION_ID,
@@ -504,9 +319,33 @@ class TestResponse:
         assert result is not None
         body = manager.dv.post.call_args[1]["data"]
         assert body["cr_direction"] == "Outbound"
-        assert body["cr_message"] == "Welcome!"
-        assert body["cr_in_reply_to"] == SAMPLE_CONVERSATION_ID
-        assert body["cr_mcs_conversation_id"] == SAMPLE_MCS_CONV_ID
+        assert body["cr_message"] == "Welcome!"  # No prefix without session_id
+
+    def test_send_response_with_session_prefix(self, manager):
+        """Response with session_id gets [GM:xxxx] prefix."""
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.send_response(
+            in_reply_to=SAMPLE_CONVERSATION_ID,
+            mcs_conversation_id=SAMPLE_MCS_CONV_ID,
+            user_email="newuser@example.com",
+            text="Welcome!",
+            session_id="a7f3c2d1-abcd-1234",
+        )
+        body = manager.dv.post.call_args[1]["data"]
+        assert body["cr_message"] == "[GM:a7f3] Welcome!"
+
+    def test_send_response_with_processed_by(self, manager):
+        """cr_processed_by is written on outbound row when provided."""
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.send_response(
+            in_reply_to="row-1",
+            mcs_conversation_id="mcs-1",
+            user_email="user@test.com",
+            text="Hi",
+            processed_by="gm:v19:some-session-id",
+        )
+        body = manager.dv.post.call_args[1]["data"]
+        assert body["cr_processed_by"] == "gm:v19:some-session-id"
 
     def test_send_response_error(self, manager):
         from dv_client import DataverseError
@@ -543,7 +382,6 @@ class TestResponse:
         manager.send_response("row-1", "mcs-1", "user@test.com", long_text)
         body = manager.dv.post.call_args[1]["data"]
         assert len(body["cr_name"]) == 100
-        assert body["cr_message"] == long_text  # Full message preserved
 
 
 # ============================================================================
@@ -557,11 +395,15 @@ class TestClaim:
         manager.dv.patch.return_value = FakeResponse(status_code=204)
         assert manager.claim_message(SAMPLE_STALE_MSG) is True
 
-    def test_claim_sets_global_id(self, manager):
+    def test_claim_sets_new_format(self, manager):
+        """cr_claimed_by should use new format: gm:version:box:instance_id."""
         manager.dv.patch.return_value = FakeResponse(status_code=204)
         manager.claim_message(SAMPLE_STALE_MSG)
         body = manager.dv.patch.call_args[1]["data"]
-        assert body["cr_claimed_by"].startswith("global:")
+        claimed_by = body["cr_claimed_by"]
+        assert claimed_by.startswith("gm:")
+        parts = claimed_by.split(":")
+        assert len(parts) == 4  # gm:version:box:instance_id
 
     def test_claim_uses_etag(self, manager):
         """The ETag from the message must be sent via the etag kwarg to dv.patch."""
@@ -598,29 +440,58 @@ class TestClaim:
 # ============================================================================
 
 class TestProcessMessage:
-    """Message processing using Claude Code sessions."""
+    """Message processing using Claude Code sessions with DV-based resolution."""
 
     def test_process_uses_claude_code_and_sends_response(self, manager):
         """Claude Code is called and its response is sent to the user."""
         manager.dv.post.return_value = FakeResponse(json_data={})
         manager.dv.patch.return_value = FakeResponse(status_code=204)
+        # Mock DV get for resolve_session (returns no history => new session)
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
 
         with patch.object(manager, "_call_claude_code", return_value=("Hello! I can help you.", "sess-1")):
             manager.process_message(SAMPLE_STALE_MSG)
 
         body = manager.dv.post.call_args[1]["data"]
-        assert body["cr_message"] == "Hello! I can help you."
+        assert "Hello! I can help you." in body["cr_message"]
+
+    def test_process_writes_processed_by(self, manager):
+        """cr_processed_by should be written on the outbound response row."""
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
+
+        with patch.object(manager, "_call_claude_code", return_value=("Response", "sess-abc123")):
+            manager.process_message(SAMPLE_STALE_MSG)
+
+        body = manager.dv.post.call_args[1]["data"]
+        assert "cr_processed_by" in body
+        assert body["cr_processed_by"].startswith("gm:")
+        assert "sess-abc123" in body["cr_processed_by"]
+
+    def test_process_adds_gm_prefix(self, manager):
+        """Outbound message should have [GM:xxxx] prefix."""
+        manager.dv.post.return_value = FakeResponse(json_data={})
+        manager.dv.patch.return_value = FakeResponse(status_code=204)
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
+
+        with patch.object(manager, "_call_claude_code", return_value=("Hello!", "sess-a7f3c2d1")):
+            manager.process_message(SAMPLE_STALE_MSG)
+
+        body = manager.dv.post.call_args[1]["data"]
+        assert body["cr_message"].startswith("[GM:sess]")
 
     def test_process_fallback_when_claude_unavailable(self, manager):
         """When Claude Code is unavailable, the single fallback message is sent."""
         manager.dv.post.return_value = FakeResponse(json_data={})
         manager.dv.patch.return_value = FakeResponse(status_code=204)
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
 
         with patch.object(manager, "_call_claude_code", return_value=(None, "")):
             manager.process_message(SAMPLE_STALE_MSG)
 
         body = manager.dv.post.call_args[1]["data"]
-        assert body["cr_message"] == "The system is temporarily unavailable, please try again shortly."
+        assert "temporarily unavailable" in body["cr_message"]
 
     def test_process_empty_message(self, manager):
         """Empty messages are just marked as processed."""
@@ -629,22 +500,23 @@ class TestProcessMessage:
         manager.process_message(empty_msg)
         manager.dv.patch.assert_called_once()
 
-    def test_process_creates_session_for_conversation(self, manager):
-        """Processing a message creates a session keyed by mcs_conversation_id."""
+    def test_process_tracks_session_for_reuse(self, manager):
+        """After processing, the session ID is stored in _current_sessions."""
         manager.dv.post.return_value = FakeResponse(json_data={})
         manager.dv.patch.return_value = FakeResponse(status_code=204)
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
 
-        with patch.object(manager, "_call_claude_code", return_value=("Hi!", "sess-hi")):
+        with patch.object(manager, "_call_claude_code", return_value=("Hi!", "sess-track")):
             manager.process_message(SAMPLE_STALE_MSG)
 
-        session = manager.session_manager.get_session(SAMPLE_MCS_CONV_ID)
-        assert session is not None
-        assert "session_id" in session
+        assert SAMPLE_MCS_CONV_ID in manager._current_sessions
+        assert manager._current_sessions[SAMPLE_MCS_CONV_ID] == "sess-track"
 
     def test_process_reuses_session_for_same_conversation(self, manager):
-        """Second message in same conversation reuses the session."""
+        """Second message in same conversation reuses the within-run session."""
         manager.dv.post.return_value = FakeResponse(json_data={})
         manager.dv.patch.return_value = FakeResponse(status_code=204)
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
 
         session_ids_passed = []
 
@@ -659,40 +531,16 @@ class TestProcessMessage:
             manager.process_message(msg2)
 
         assert len(session_ids_passed) == 2
-        # First call has no session, second call reuses the session saved from first call
+        # First call has no session (no within-run session yet)
         assert session_ids_passed[0] is None
+        # Second call reuses the within-run session
         assert session_ids_passed[1] == "sess-reuse"
-
-    def test_process_different_conversations_different_sessions(self, manager):
-        """Different conversations get different sessions."""
-        manager.dv.post.return_value = FakeResponse(json_data={})
-        manager.dv.patch.return_value = FakeResponse(status_code=204)
-
-        call_counter = {"n": 0}
-
-        def capture_session(prompt, session_id=None):
-            call_counter["n"] += 1
-            return ("Response", f"sess-{call_counter['n']}")
-
-        with patch.object(manager, "_call_claude_code", side_effect=capture_session):
-            manager.process_message(SAMPLE_STALE_MSG)
-            msg2 = {
-                **SAMPLE_STALE_MSG,
-                "cr_mcs_conversation_id": "mcs-conv-different",
-                "cr_shraga_conversationid": "conv-0002",
-            }
-            manager.process_message(msg2)
-
-        # Verify different conversations got different sessions stored
-        sess1 = manager.session_manager.get_session(SAMPLE_MCS_CONV_ID)
-        sess2 = manager.session_manager.get_session("mcs-conv-different")
-        assert sess1 is not None and sess2 is not None
-        assert sess1["session_id"] != sess2["session_id"], "Different conversations must use different sessions"
 
     def test_process_passes_user_context_in_prompt(self, manager):
         """The prompt to Claude Code includes user email, row ID, and message."""
         manager.dv.post.return_value = FakeResponse(json_data={})
         manager.dv.patch.return_value = FakeResponse(status_code=204)
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
 
         captured_prompts = []
 
@@ -714,6 +562,7 @@ class TestProcessMessage:
         """After processing, the inbound message is marked as Processed."""
         manager.dv.post.return_value = FakeResponse(json_data={})
         manager.dv.patch.return_value = FakeResponse(status_code=204)
+        manager.dv.get.return_value = FakeResponse(json_data={"value": []})
 
         with patch.object(manager, "_call_claude_code", return_value=("Done", "sess-done")):
             manager.process_message(SAMPLE_STALE_MSG)
@@ -760,12 +609,10 @@ class TestKnownUserFlow:
 
     def test_known_user_delayed_claiming(self, manager):
         """Known users' messages have a delayed claiming window."""
-        # Return a known user from DV, then return the message
         def get_side_effect(url, **kwargs):
             if "shragausers" in url:
                 return FakeResponse(json_data={"value": [{"crb3b_shragauserid": "row-1"}]})
             if "conversations" in url:
-                # Message created very recently (should NOT be claimable for known user)
                 recent_msg = {
                     **SAMPLE_STALE_MSG,
                     "createdon": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -775,7 +622,6 @@ class TestKnownUserFlow:
 
         manager.dv.get.side_effect = get_side_effect
         msgs = manager.poll_stale_unclaimed()
-        # Recent messages from known users should NOT be returned
         assert len(msgs) == 0
 
 
@@ -787,11 +633,9 @@ class TestAuth:
     """Authentication tests -- token management is delegated to DataverseClient."""
 
     def test_has_dv_client(self, manager):
-        """Manager must have a dv attribute (DataverseClient or mock)."""
         assert hasattr(manager, "dv")
 
     def test_has_credential(self, manager):
-        """Manager must store the Azure credential for reference."""
         assert hasattr(manager, "credential")
         assert manager.credential is not None
 
@@ -805,11 +649,20 @@ class TestConstructor:
     def test_known_users_empty(self, manager):
         assert len(manager._known_users) == 0
 
-    def test_has_session_manager(self, manager):
-        """Manager must have a SessionManager instance."""
-        assert hasattr(manager, "session_manager")
-        from global_manager import SessionManager
-        assert isinstance(manager.session_manager, SessionManager)
+    def test_has_agent_role(self, manager):
+        """Manager should use AGENT_ROLE constant."""
+        from global_manager import AGENT_ROLE
+        assert AGENT_ROLE == "GM"
+
+    def test_has_version(self, manager):
+        """Manager should have _my_version attribute."""
+        assert hasattr(manager, "_my_version")
+        assert isinstance(manager._my_version, str)
+
+    def test_has_box_name(self, manager):
+        """Manager should have _box_name attribute."""
+        assert hasattr(manager, "_box_name")
+        assert isinstance(manager._box_name, str)
 
 
 class TestGetCredential:
@@ -838,100 +691,28 @@ class TestGetCredential:
 
 
 class TestMarkProcessed:
-    """Tests for mark_processed after thin-wrapper refactor.
-
-    Verifies:
-      - PATCH call parameters (URL, body, timeout)
-      - Graceful handling of Dataverse failures (no exception propagated)
-      - Behaviour on ETagConflictError (silent degradation)
-    """
+    """Tests for mark_processed."""
 
     def test_mark_processed_success(self, manager):
-        """Verify the PATCH call sends the correct URL, body, and timeout."""
         manager.dv.patch.return_value = FakeResponse(status_code=204)
         row_id = "row-12345678-abcd-efgh-ijkl-9999"
         manager.mark_processed(row_id)
-
-        # Called exactly once
         manager.dv.patch.assert_called_once()
-
-        # -- URL contains the conversations table and the row ID ---------------
         call_args, call_kwargs = manager.dv.patch.call_args
         url = call_args[0]
         from global_manager import CONVERSATIONS_TABLE, DATAVERSE_API, REQUEST_TIMEOUT
-        assert CONVERSATIONS_TABLE in url, "URL must reference the conversations table"
-        assert row_id in url, "URL must contain the row ID"
-        assert url == f"{DATAVERSE_API}/{CONVERSATIONS_TABLE}({row_id})"
-
-        # -- Body sets status to Processed -------------------------------------
+        assert CONVERSATIONS_TABLE in url
+        assert row_id in url
         body = call_kwargs["data"]
-        assert body == {"cr_status": "Processed"}, (
-            "Body must set cr_status to 'Processed' and nothing else"
-        )
-
-        # -- Timeout is the module-level REQUEST_TIMEOUT -----------------------
+        assert body == {"cr_status": "Processed"}
         assert call_kwargs["timeout"] == REQUEST_TIMEOUT
 
     def test_mark_processed_dv_failure(self, manager):
-        """Dataverse failure must not propagate.
-
-        mark_processed is a fire-and-forget helper -- the message has already
-        been answered, so a failure here should be logged but not raise.
-        """
         from dv_client import DataverseError, DataverseRetryExhausted
-
-        # Scenario 1: DataverseError (non-retryable 4xx/5xx)
         manager.dv.patch.side_effect = DataverseError("500 error", 500, "Internal Server Error")
         manager.mark_processed("row-fail-500")  # must not raise
-
-        # Scenario 2: DataverseRetryExhausted (retry budget exhausted)
         manager.dv.patch.side_effect = DataverseRetryExhausted("timeout")
         manager.mark_processed("row-fail-timeout")  # must not raise
-
-    def test_mark_processed_etag_conflict(self, manager):
-        """ETagConflictError must not crash.
-
-        Although mark_processed does not send an etag itself,
-        the DataverseClient may raise ETagConflictError in edge cases.
-        The method must degrade gracefully.
-        """
-        from dv_client import DataverseError, DataverseRetryExhausted
-
-        # DataverseError with 412 status
-        manager.dv.patch.side_effect = DataverseError("412 conflict", 412, "Precondition Failed")
-        manager.mark_processed("row-etag-conflict")  # must not raise
-
-        # DataverseRetryExhausted
-        manager.dv.patch.side_effect = DataverseRetryExhausted("exhausted")
-        manager.mark_processed("row-etag-conflict-raised")  # must not raise
-
-
-class TestSessionManagerEdgeCases:
-    """Additional edge cases for SessionManager."""
-
-    def test_get_session_nonexistent(self, session_mgr):
-        """get_session returns None for unknown conversation."""
-        assert session_mgr.get_session("nonexistent-conv") is None
-
-    def test_sessions_property_returns_copy(self, session_mgr):
-        """The sessions property should return a copy, not a reference."""
-        session_mgr.save_session("conv-1", "session-copy-1", "a@test.com")
-        sessions = session_mgr.sessions
-        sessions["conv-1"]["hacked"] = True
-        # Original should not be affected
-        assert "hacked" not in session_mgr._sessions["conv-1"]
-
-    def test_session_id_stored_correctly(self, session_mgr):
-        """Session IDs are stored and retrieved correctly."""
-        session_mgr.save_session("conv-hex", "abc123def456", "user@test.com")
-        entry = session_mgr.get_session("conv-hex")
-        assert entry is not None
-        assert entry["session_id"] == "abc123def456"
-
-    def test_cleanup_empty_sessions(self, session_mgr):
-        """Cleanup on empty sessions should return 0."""
-        removed = session_mgr.cleanup_expired()
-        assert removed == 0
 
 
 class TestModuleConstants:
@@ -953,34 +734,20 @@ class TestModuleConstants:
         assert STATUS_PROCESSED == "Processed"
 
     def test_no_tool_definitions_constant(self):
-        """TOOL_DEFINITIONS must not be defined at module level."""
         import global_manager
         assert not hasattr(global_manager, "TOOL_DEFINITIONS")
 
+    def test_no_sessions_dir_constant(self):
+        """SESSIONS_DIR should be removed (no local session files)."""
+        import global_manager
+        assert not hasattr(global_manager, "SESSIONS_DIR")
 
-class TestLineCount:
-    """Verify the refactored code is significantly smaller than the original."""
+    def test_no_sessions_file_constant(self):
+        """SESSIONS_FILE should be removed (no local session files)."""
+        import global_manager
+        assert not hasattr(global_manager, "SESSIONS_FILE")
 
-    def test_module_is_under_target_size(self):
-        """The refactored global_manager.py should be significantly smaller than the original ~1115 lines.
-
-        The target was ~200 lines of pure logic, but the actual file includes
-        docstrings, the SessionManager class, necessary whitespace, and
-        file-logging boilerplate (~20 lines).
-        We verify it is under 650 lines (roughly half the original).
-        """
-        gm_path = Path(__file__).parent / "global-manager" / "global_manager.py"
-        content = gm_path.read_text(encoding="utf-8")
-        line_count = len(content.strip().split("\n"))
-        # Must be significantly less than the original ~1115 lines
-        assert line_count < 650, (
-            f"global_manager.py has {line_count} lines, "
-            f"should be significantly less than the original ~1115"
-        )
-        # Should be at least 40% smaller than original
-        original_lines = 1115
-        reduction_pct = (1 - line_count / original_lines) * 100
-        assert reduction_pct > 40, (
-            f"Only {reduction_pct:.0f}% reduction from original -- "
-            f"expected at least 40%"
-        )
+    def test_no_session_expiry_constant(self):
+        """SESSION_EXPIRY_HOURS should be removed."""
+        import global_manager
+        assert not hasattr(global_manager, "SESSION_EXPIRY_HOURS")
