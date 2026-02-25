@@ -433,11 +433,10 @@ class TestE2EErrorHandling:
     def test_worker_handles_no_token(self, monkeypatch, tmp_path):
         """Worker exits when token cannot be obtained (scheduler restarts it)"""
         _, worker_mod, mock_cred = _import_modules(monkeypatch, tmp_path)
-        mock_cred.get_token.side_effect = Exception("Auth failed")
 
         worker = worker_mod.IntegratedTaskWorker()
-        worker._token_cache = None
-        worker._token_expires = None
+        # Mock dv.get_token directly (credential mock scope expired after import)
+        worker.dv.get_token = MagicMock(side_effect=Exception("Auth failed"))
 
         import pytest
         with pytest.raises(SystemExit) as exc_info:

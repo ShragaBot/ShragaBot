@@ -9,7 +9,7 @@ import time
 import json
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
-from azure.identity import DefaultAzureCredential
+from azure.identity import AzureCliCredential
 from dataclasses import dataclass
 from timeout_utils import call_with_timeout
 
@@ -57,7 +57,7 @@ class DevBoxManager:
         if credential is not None:
             self.credential = credential
         else:
-            self.credential = DefaultAzureCredential()
+            self.credential = AzureCliCredential()
 
         self.api_version = "2024-02-01"
 

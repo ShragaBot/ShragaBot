@@ -15,7 +15,7 @@ import os
 import sys
 import requests
 from datetime import datetime, timezone, timedelta
-from azure.identity import DefaultAzureCredential
+from azure.identity import AzureCliCredential
 
 DATAVERSE_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynamics.com")
 DATAVERSE_API = f"{DATAVERSE_URL}/api/data/v9.2"
@@ -29,8 +29,8 @@ STATUS_DELIVERED = "Delivered"
 
 
 def get_token() -> str:
-    """Authenticate via DefaultAzureCredential (same as all other components)."""
-    cred = DefaultAzureCredential()
+    """Authenticate via AzureCliCredential (no WMI hangs)."""
+    cred = AzureCliCredential()
     token = cred.get_token(f"{DATAVERSE_URL}/.default")
     return token.token
 
@@ -145,7 +145,7 @@ def main():
     print()
 
     # --- Authenticate ---
-    print("[AUTH] Acquiring token via DefaultAzureCredential...")
+    print("[AUTH] Acquiring token via AzureCliCredential...")
     try:
         token = get_token()
     except Exception as e:

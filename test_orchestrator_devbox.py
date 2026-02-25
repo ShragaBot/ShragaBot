@@ -50,7 +50,7 @@ class TestDeploymentConstants:
 
 class TestDevBoxManagerInit:
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     def test_default_credential(self, mock_cred):
         mgr = DevBoxManager(
             devcenter_endpoint="https://dc.example.com",
@@ -62,7 +62,7 @@ class TestDevBoxManagerInit:
         assert mgr.project_name == "proj"
         assert mgr.pool_name == "pool"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     def test_default_pool_name(self, mock_cred):
         mgr = DevBoxManager(
             devcenter_endpoint="https://dc.example.com",
@@ -71,9 +71,9 @@ class TestDevBoxManagerInit:
         assert mgr.pool_name == "botdesigner-pool-italynorth"
 
     def test_external_credential_skips_default(self):
-        """When an external credential is provided, DefaultAzureCredential is not used."""
+        """When an external credential is provided, AzureCliCredential is not used."""
         external_cred = MagicMock()
-        with patch("orchestrator_devbox.DefaultAzureCredential") as mock_default:
+        with patch("orchestrator_devbox.AzureCliCredential") as mock_default:
             mgr = DevBoxManager(
                 devcenter_endpoint="https://dc.example.com",
                 project_name="proj",
@@ -99,7 +99,7 @@ class TestDevBoxManagerInit:
 
 class TestProvisionDevbox:
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     @patch("orchestrator_devbox.requests.get")
     def test_provision_success(self, mock_get, mock_put, mock_cred):
@@ -128,7 +128,7 @@ class TestProvisionDevbox:
         assert "user-aad-id" in call_url
         assert "shraga-box-01" in call_url
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     @patch("orchestrator_devbox.requests.get")
     def test_provision_failure_raises(self, mock_get, mock_put, mock_cred):
@@ -147,7 +147,7 @@ class TestProvisionDevbox:
         with pytest.raises(Exception, match="Failed to provision"):
             mgr.provision_devbox("user-id", "bob@example.com")
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     @patch("orchestrator_devbox.requests.get")
     def test_devbox_name_uses_box_convention(self, mock_get, mock_put, mock_cred):
@@ -180,7 +180,7 @@ class TestProvisionDevbox:
 
 class TestGetDevboxStatus:
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_returns_devbox_info(self, mock_get, mock_cred):
         mock_cred_inst = MagicMock()
@@ -205,7 +205,7 @@ class TestGetDevboxStatus:
         assert info.status == "Running"
         assert info.provisioning_state == "Succeeded"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_status_failure_raises(self, mock_get, mock_cred):
         mock_cred_inst = MagicMock()
@@ -225,7 +225,7 @@ class TestGetDevboxStatus:
 
 class TestGetConnectionUrl:
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_returns_connection_url_string(self, mock_get, mock_cred):
         mock_cred_inst = MagicMock()
@@ -248,7 +248,7 @@ class TestGetConnectionUrl:
         assert "devbox.microsoft.com/connect" in url
         assert "shraga-test" in url
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_raises_when_devbox_not_found(self, mock_get, mock_cred):
         mock_cred_inst = MagicMock()
@@ -268,7 +268,7 @@ class TestGetConnectionUrl:
 
 class TestWaitForProvisioning:
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.time.sleep")
     @patch("orchestrator_devbox.time.time")
     @patch("orchestrator_devbox.requests.get")
@@ -294,7 +294,7 @@ class TestWaitForProvisioning:
         info = mgr.wait_for_provisioning("user-id", "box", timeout_minutes=5)
         assert info.provisioning_state == "Succeeded"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.time.sleep")
     @patch("orchestrator_devbox.time.time")
     @patch("orchestrator_devbox.requests.get")
@@ -317,7 +317,7 @@ class TestWaitForProvisioning:
         with pytest.raises(Exception, match="Dev Box provisioning failed"):
             mgr.wait_for_provisioning("user-id", "box", timeout_minutes=1)
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.time.sleep")
     @patch("orchestrator_devbox.time.time")
     @patch("orchestrator_devbox.requests.get")
@@ -341,7 +341,7 @@ class TestWaitForProvisioning:
 
         mock_sleep.assert_not_called()
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.time.sleep")
     @patch("orchestrator_devbox.time.time")
     @patch("orchestrator_devbox.requests.get")
@@ -373,7 +373,7 @@ class TestWaitForProvisioning:
         default = sig.parameters["timeout_minutes"].default
         assert default == 35, f"Expected default timeout_minutes=35 but got {default}"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.time.sleep")
     @patch("orchestrator_devbox.time.time")
     @patch("orchestrator_devbox.requests.get")
@@ -402,7 +402,7 @@ class TestWaitForProvisioning:
 
 class TestApplyCustomizations:
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_apply_success(self, mock_put, mock_cred):
         mock_cred_inst = MagicMock()
@@ -424,7 +424,7 @@ class TestApplyCustomizations:
         assert "shraga-alice" in call_url
         assert "customizationGroups/shraga-tools" in call_url
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_apply_sends_correct_tasks(self, mock_put, mock_cred):
         mock_cred_inst = MagicMock()
@@ -448,7 +448,7 @@ class TestApplyCustomizations:
         assert tasks[2]["name"] == "DevBox.Catalog/choco"
         assert tasks[2]["parameters"]["package"] == "python312"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_apply_uses_preview_api_version(self, mock_put, mock_cred):
         mock_cred_inst = MagicMock()
@@ -466,7 +466,7 @@ class TestApplyCustomizations:
         call_params = mock_put.call_args[1]["params"]
         assert call_params["api-version"] == "2025-04-01-preview"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_apply_409_already_exists_treated_as_success(self, mock_put, mock_cred):
         mock_cred_inst = MagicMock()
@@ -482,7 +482,7 @@ class TestApplyCustomizations:
         result = mgr.apply_customizations("uid", "box")
         assert result["status"] == "AlreadyExists"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_apply_failure_raises(self, mock_put, mock_cred):
         mock_cred_inst = MagicMock()
@@ -502,7 +502,7 @@ class TestApplyCustomizations:
 
 class TestGetCustomizationStatus:
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_returns_status(self, mock_get, mock_cred):
         mock_cred_inst = MagicMock()
@@ -522,7 +522,7 @@ class TestGetCustomizationStatus:
         assert "customizationGroups/shraga-tools" in call_url
         assert "aad-guid-123" in call_url
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_status_running(self, mock_get, mock_cred):
         mock_cred_inst = MagicMock()
@@ -538,7 +538,7 @@ class TestGetCustomizationStatus:
         result = mgr.get_customization_status("uid", "box")
         assert result["status"] == "Running"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_status_uses_preview_api_version(self, mock_get, mock_cred):
         mock_cred_inst = MagicMock()
@@ -556,7 +556,7 @@ class TestGetCustomizationStatus:
         call_params = mock_get.call_args[1]["params"]
         assert call_params["api-version"] == "2025-04-01-preview"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_status_failure_raises(self, mock_get, mock_cred):
         mock_cred_inst = MagicMock()
@@ -576,7 +576,7 @@ class TestGetCustomizationStatus:
 
 class TestRunCommandOnDevbox:
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     def test_returns_pending_status(self, mock_cred):
         mock_cred.return_value = MagicMock()
         mgr = DevBoxManager("https://dc.example.com", "proj", "pool")
@@ -613,7 +613,7 @@ class TestNextDevboxName:
     """Tests for the next_devbox_name() method that implements the
     shraga-box-{NN} auto-increment naming convention ported from setup.ps1."""
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_next_devbox_name_starts_at_01(self, mock_get, mock_cred):
         """When no dev boxes exist, the first name should be shraga-box-01."""
@@ -631,7 +631,7 @@ class TestNextDevboxName:
 
         assert name == "shraga-box-01"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_next_devbox_name_increments(self, mock_get, mock_cred):
         """When existing boxes are present, the next number is max+1
@@ -654,7 +654,7 @@ class TestNextDevboxName:
 
         assert name == "shraga-box-04"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_next_devbox_name_fills_gaps(self, mock_get, mock_cred):
         """When there are gaps in the numbering (e.g., 01 and 03 exist but not
@@ -677,7 +677,7 @@ class TestNextDevboxName:
 
         assert name == "shraga-box-02"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_next_devbox_name_ignores_non_matching_boxes(self, mock_get, mock_cred):
         """Boxes with names that don't match shraga-box-{NN} are ignored."""
@@ -700,7 +700,7 @@ class TestNextDevboxName:
         # Should return 02 because 01 is taken (non-matching names are ignored)
         assert name == "shraga-box-02"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_next_devbox_name_two_digit_format(self, mock_get, mock_cred):
         """Name should always use 2-digit zero-padded format."""
@@ -728,7 +728,7 @@ class TestNextDevboxName:
 class TestCliProvision:
     """Test the 'provision' CLI subcommand."""
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     @patch("orchestrator_devbox.requests.get")
     def test_cli_provision(self, mock_get, mock_put, mock_cred, capsys):
@@ -765,7 +765,7 @@ class TestCliProvision:
         assert "shraga-box-01" in captured.out
         assert "Provisioning" in captured.out
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     @patch("orchestrator_devbox.requests.get")
     def test_cli_provision_auto_name(self, mock_get, mock_put, mock_cred, capsys):
@@ -802,7 +802,7 @@ class TestCliProvision:
 class TestCliStatus:
     """Test the 'status' CLI subcommand."""
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_cli_status(self, mock_get, mock_cred, capsys):
         """python orchestrator_devbox.py status --name shraga-box-01 works."""
@@ -839,7 +839,7 @@ class TestCliStatus:
 class TestCliList:
     """Test the 'list' CLI subcommand."""
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_cli_list(self, mock_get, mock_cred, capsys):
         """python orchestrator_devbox.py list works."""
@@ -880,7 +880,7 @@ class TestCliList:
         assert "Running" in captured.out
         assert "Stopped" in captured.out
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_cli_list_empty(self, mock_get, mock_cred, capsys):
         """When no Dev Boxes exist, list prints a helpful message."""
@@ -945,7 +945,7 @@ class TestCliSubcommandHelp:
 class TestCliEnvVarFallback:
     """Test that CLI falls back to environment variables for common args."""
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.get")
     def test_env_var_fallback(self, mock_get, mock_cred, capsys, monkeypatch):
         """Common args can be passed via env vars instead of CLI flags."""
@@ -983,7 +983,7 @@ class TestApplyDeployCustomizations:
     """Tests for the deploy customization group (Group 2) that deploys code
     from a GitHub ZIP archive to the dev box."""
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_deploy_success(self, mock_put, mock_cred):
         mock_cred_inst = MagicMock()
@@ -1004,7 +1004,7 @@ class TestApplyDeployCustomizations:
         assert "customizationGroups/shraga-deploy" in call_url
         assert "aad-guid-123" in call_url
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_deploy_command_uses_zip_url_not_git_clone(self, mock_put, mock_cred):
         """The deploy command must download a GitHub ZIP archive,
@@ -1037,7 +1037,7 @@ class TestApplyDeployCustomizations:
         assert "onedrive" not in command.lower()
         assert "sharepoint" not in command.lower()
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_deploy_command_uses_auth_script_url(self, mock_put, mock_cred):
         """The deploy command should use the shared auth script URL constant."""
@@ -1058,7 +1058,7 @@ class TestApplyDeployCustomizations:
 
         assert SHRAGA_AUTH_SCRIPT_URL in command
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_deploy_command_extracts_zip_to_deploy_dir(self, mock_put, mock_cred):
         """The ZIP should be extracted to SHRAGA_DEPLOY_DIR."""
@@ -1082,7 +1082,7 @@ class TestApplyDeployCustomizations:
         # Verify deploy dir is referenced
         assert SHRAGA_DEPLOY_DIR.replace("\\", "\\\\") in command or SHRAGA_DEPLOY_DIR in command
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_deploy_409_already_exists_treated_as_success(self, mock_put, mock_cred):
         mock_cred_inst = MagicMock()
@@ -1099,7 +1099,7 @@ class TestApplyDeployCustomizations:
         assert result["status"] == "AlreadyExists"
         assert result["name"] == "shraga-deploy"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_deploy_failure_raises(self, mock_put, mock_cred):
         mock_cred_inst = MagicMock()
@@ -1112,7 +1112,7 @@ class TestApplyDeployCustomizations:
         with pytest.raises(Exception, match="Failed to apply deploy customizations"):
             mgr.apply_deploy_customizations("uid", "box")
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_deploy_uses_preview_api_version(self, mock_put, mock_cred):
         mock_cred_inst = MagicMock()
@@ -1130,7 +1130,7 @@ class TestApplyDeployCustomizations:
         call_params = mock_put.call_args[1]["params"]
         assert call_params["api-version"] == "2025-04-01-preview"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_deploy_command_cleans_up_temp_files(self, mock_put, mock_cred):
         """The deploy command should clean up temporary ZIP and extraction dir."""
@@ -1154,7 +1154,7 @@ class TestApplyDeployCustomizations:
         assert "shraga-worker.zip" in command
         assert "shraga-worker-extract" in command
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_deploy_command_resolves_python_dynamically(self, mock_put, mock_cred):
         """The deploy command should search for Python dynamically rather than
@@ -1182,7 +1182,7 @@ class TestApplyDeployCustomizations:
         assert "& $pyExe" in command, \
             "Deploy command should use the resolved $pyExe variable"
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_deploy_command_includes_pip_packages(self, mock_put, mock_cred):
         """The deploy command should install the required pip packages."""
@@ -1206,7 +1206,7 @@ class TestApplyDeployCustomizations:
         assert "azure-identity" in command
         assert "watchdog" in command
 
-    @patch("orchestrator_devbox.DefaultAzureCredential")
+    @patch("orchestrator_devbox.AzureCliCredential")
     @patch("orchestrator_devbox.requests.put")
     def test_deploy_command_includes_scheduled_task(self, mock_put, mock_cred):
         """The deploy command should register the ShragaWorker scheduled task."""

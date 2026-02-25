@@ -70,7 +70,7 @@ _RETRYABLE_EXCEPTIONS = (
 # Credential creation with WMI hang protection
 # ---------------------------------------------------------------------------
 
-def create_credential(log_fn=None, max_retries=2):
+def create_credential(log_fn=None):
     """Create an AzureCliCredential for Dataverse API access.
 
     Uses AzureCliCredential directly instead of DefaultAzureCredential to
@@ -84,22 +84,18 @@ def create_credential(log_fn=None, max_retries=2):
     Token verification is deferred to the first real API call -- the retry
     engine handles 401 by refreshing the token automatically.
 
-    Returns a credential object, or calls sys.exit(1) after retries fail.
+    Returns a credential object, or calls sys.exit(1) if azure-identity
+    is not installed.
     """
     import sys
     _log = log_fn or print
-    for attempt in range(1, max_retries + 1):
-        try:
-            from azure.identity import AzureCliCredential
-            return AzureCliCredential()
-        except Exception as e:
-            _log(f"[CRITICAL] AzureCliCredential failed (attempt {attempt}/{max_retries}): {e}")
-            if attempt < max_retries:
-                _log("[CRITICAL] Retrying in 5s...")
-                time.sleep(5)
-    _log("[CRITICAL] All credential creation attempts failed. Exiting.")
-    _log("[CRITICAL] HINT: Run 'az login' to authenticate.")
-    sys.exit(1)
+    try:
+        from azure.identity import AzureCliCredential
+        return AzureCliCredential()
+    except ImportError:
+        _log("[CRITICAL] azure-identity package not installed.")
+        _log("[CRITICAL] HINT: pip install azure-identity")
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

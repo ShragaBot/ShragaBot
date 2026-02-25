@@ -24,7 +24,7 @@ import sys
 from datetime import datetime, timezone
 
 import requests
-from azure.identity import DefaultAzureCredential
+from azure.identity import AzureCliCredential
 
 # ---------------------------------------------------------------------------
 # Configuration -- mirrors global_manager.py defaults
@@ -59,8 +59,8 @@ VALID_USER_FIELDS = frozenset({
 # ---------------------------------------------------------------------------
 
 def get_token() -> str:
-    """Authenticate via DefaultAzureCredential."""
-    cred = DefaultAzureCredential()
+    """Authenticate via AzureCliCredential (no WMI hangs)."""
+    cred = AzureCliCredential()
     token = cred.get_token(f"{DATAVERSE_URL}/.default")
     return token.token
 
