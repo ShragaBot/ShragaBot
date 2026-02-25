@@ -31,7 +31,7 @@ def get_current_version() -> str:
     """Read current version from file."""
     try:
         if VERSION_FILE.exists():
-            return VERSION_FILE.read_text().strip()
+            return VERSION_FILE.read_text(encoding="utf-8").strip()
     except Exception:
         pass
     return ""

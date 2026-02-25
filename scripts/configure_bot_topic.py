@@ -169,6 +169,9 @@ def disable_conversational_boosting():
         else:
             print("Already disabled.")
             return True
+    else:
+        print(f"WARN: Could not read Conversational boosting topic: {resp.status_code}")
+        return False
 
 
 if __name__ == "__main__":

@@ -67,7 +67,6 @@ def list_tasks(
     if status is not None:
         filter_parts.append(f"cr_status eq {status}")
 
-    dv = DataverseClient()
     rows = dv.get_rows(
         TASKS_TABLE,
         filter=" and ".join(filter_parts),

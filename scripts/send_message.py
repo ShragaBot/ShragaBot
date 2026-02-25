@@ -71,7 +71,7 @@ def send_message(
     mcs_conversation_id: str,
     message: str,
     followup: bool = False,
-) -> dict | None:
+) -> dict | bool:
     """Write an outbound row to the cr_shraga_conversations table.
 
     This is a standalone extraction of GlobalManager.send_response (lines 495-520

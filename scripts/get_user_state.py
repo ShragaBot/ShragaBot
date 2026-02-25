@@ -137,9 +137,11 @@ def get_user_state(email: str, token: str) -> dict[str, Any] | None:
     requests.exceptions.Timeout
         When the request exceeds ``REQUEST_TIMEOUT``.
     """
+    # Sanitize email to prevent OData injection (double single-quotes)
+    safe_email = email.replace("'", "''")
     url = (
         f"{DATAVERSE_API}/{USERS_TABLE}"
-        f"?$filter=crb3b_useremail eq '{email}'"
+        f"?$filter=crb3b_useremail eq '{safe_email}'"
         f"&$top=1"
     )
     headers = _build_headers(token)

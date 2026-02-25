@@ -49,6 +49,8 @@ VALID_USER_FIELDS = frozenset({
     "crb3b_managerstatus",
     "crb3b_onboardingstep",
     "crb3b_lastseen",
+    "crb3b_connectionurl",
+    "crb3b_authurl",
 })
 
 
@@ -81,9 +83,11 @@ def lookup_user(token: str, user_email: str) -> dict | None:
 
     Returns the first matching row as a dict, or None if the user is not found.
     """
+    # Sanitize email to prevent OData injection (double single-quotes)
+    safe_email = user_email.replace("'", "''")
     url = (
         f"{DATAVERSE_API}/{USERS_TABLE}"
-        f"?$filter=crb3b_useremail eq '{user_email}'"
+        f"?$filter=crb3b_useremail eq '{safe_email}'"
         f"&$top=1"
     )
     resp = requests.get(url, headers=build_headers(token), timeout=REQUEST_TIMEOUT)

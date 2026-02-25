@@ -63,7 +63,9 @@ def query_stale_rows(
         f"createdon lt {cutoff_iso}",
     ]
     if user_email:
-        filters.append(f"cr_useremail eq '{user_email}'")
+        # Sanitize to prevent OData injection (double single-quotes)
+        safe_email = user_email.replace("'", "''")
+        filters.append(f"cr_useremail eq '{safe_email}'")
 
     filter_str = " and ".join(filters)
     url = (

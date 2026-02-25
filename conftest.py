@@ -45,6 +45,8 @@ def _set_env_vars(monkeypatch, tmp_path):
     monkeypatch.setenv("WEBHOOK_USER", "testuser@example.com")
     monkeypatch.setenv("GIT_BRANCH", "main")
     monkeypatch.setenv("PROVISION_THRESHOLD", "5")
+    monkeypatch.setenv("CONVERSATIONS_TABLE", "cr_shraga_conversations")
+    monkeypatch.setenv("USERS_TABLE", "crb3b_shragausers")
     # Make state files use tmp_path so tests don't pollute repo
     monkeypatch.chdir(tmp_path)
 
@@ -87,11 +89,8 @@ class FakeResponse:
     def raise_for_status(self):
         if self.status_code >= 400:
             import requests
-            resp = MagicMock()
-            resp.status_code = self.status_code
-            resp.text = self.text
-            exc = requests.exceptions.HTTPError(response=resp)
-            exc.response = resp
+            exc = requests.exceptions.HTTPError(response=self)
+            exc.response = self
             raise exc
 
 

@@ -180,6 +180,10 @@ Each task gets an isolated session folder in OneDrive:
 | Script | Description |
 |--------|-------------|
 | `scripts/dv_helpers.py` | Shared Dataverse helper functions for scripts. |
+| `scripts/create_task.py` | Create a task in Dataverse with all required fields. |
+| `scripts/cancel_task.py` | Cancel a task (handles Pending/Running/Submitted states). |
+| `scripts/get_task_status.py` | Get task status by full UUID or short ID prefix. |
+| `scripts/list_tasks.py` | List recent tasks with optional status/email filters. |
 | `scripts/check_devbox_status.py` | Check dev box provisioning and health status. |
 | `scripts/cleanup_stale_rows.py` | Clean up stale/orphaned rows in Dataverse. |
 | `scripts/configure_bot_topic.py` | Configure Copilot Studio bot topic. |
