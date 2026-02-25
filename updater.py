@@ -218,7 +218,27 @@ def cleanup_old_releases(keep_count=10):
             _log(f"[WARN] Could not remove {folder.name}: {e}")
 
 
+def reenable_disabled_tasks():
+    """Re-enable and start any disabled scheduled tasks (Worker, PM)."""
+    for task_name in ["ShragaWorker", "ShragaPM"]:
+        try:
+            result = subprocess.run(
+                ["powershell", "-Command",
+                 f"$t = Get-ScheduledTask -TaskName '{task_name}' -EA 0; "
+                 f"if ($t -and $t.State -eq 'Disabled') {{ "
+                 f"Enable-ScheduledTask -TaskName '{task_name}'; "
+                 f"Start-ScheduledTask -TaskName '{task_name}'; "
+                 f"Write-Output 'Re-enabled {task_name}' }}"],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.stdout.strip():
+                _log(f"[UPDATER] {result.stdout.strip()}")
+        except Exception as e:
+            _log(f"[WARN] Failed to check task {task_name}: {e}")
+
+
 def main():
+    reenable_disabled_tasks()
     _log("[UPDATER] Checking for new releases...")
 
     latest = get_latest_release()
