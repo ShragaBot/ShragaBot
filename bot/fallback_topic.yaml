@@ -1,53 +1,54 @@
 kind: AdaptiveDialog
 beginDialog:
-  kind: OnUnknownIntent
+  kind: OnActivity
   id: main
+  type: Message
   actions:
     - kind: SetVariable
-      id: setVariable_isFollowup
-      variable: Topic.IsFollowup
+      id: setVariable_cwLQAj
+      variable: Topic.IsUserMessageSent
       value: =false
 
     - kind: InvokeFlowAction
-      id: invokeFlowAction_main
+      id: invokeFlowAction_02aKzx
       input:
         binding:
+          boolean: =Topic.IsUserMessageSent
           text: =System.User.Email
           text_1: =System.Conversation.Id
           text_2: =System.Activity.Text
-          boolean: =Topic.IsFollowup
 
       output:
         binding:
+          isfollowupexpecterd: Topic.Is_Followup_Expected
           responsetext: Topic.Response
-          isfollowupexpecterd: Topic.IsFollowupExpected
 
       # WARNING: This flow ID MUST match RELAY_FLOW_ID in scripts/configure_bot_topic.py.
       # SendMessage flow: 0e3f6ece-54a1-606e-e34b-5b1d5d4c536d
       flowId: 0e3f6ece-54a1-606e-e34b-5b1d5d4c536d
 
     - kind: SendActivity
-      id: sendActivity_response
+      id: sendActivity_ePCiZl
       activity: "{Topic.Response}"
 
     - kind: ConditionGroup
-      id: conditionGroup_followup
+      id: conditionGroup_avBqa5
       conditions:
-        - id: conditionItem_checkFollowup
-          condition: =Topic.IsFollowupExpected = PlainText("true")
+        - id: conditionItem_puL5pB
+          condition: =Topic.Is_Followup_Expected = true
 
       elseActions:
         - kind: EndDialog
-          id: endDialog_done
+          id: 6pGFeU
 
     - kind: SetVariable
-      id: setVariable_followupTrue
-      variable: Topic.IsFollowup
+      id: setVariable_Sse74G
+      variable: Topic.IsUserMessageSent
       value: =true
 
     - kind: GotoAction
-      id: gotoAction_loop
-      actionId: invokeFlowAction_main
+      id: Ju3RPV
+      actionId: invokeFlowAction_02aKzx
 
 inputType: {}
 outputType: {}
