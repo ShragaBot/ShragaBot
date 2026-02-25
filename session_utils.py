@@ -52,7 +52,7 @@ def _format_conversation_history(rows: list[dict], dir_in: str = "Inbound") -> s
     """
     lines = []
     for row in rows:
-        created = row.get("createdon", "")
+        created = (row.get("createdon") or "")
         # Format timestamp nicely if available
         ts = ""
         if created:
@@ -85,7 +85,7 @@ def _build_context_with_history(rows: list[dict], dir_in: str, note: str,
 
     Returns (context_prefix, prev_session_path_or_none).
     """
-    history_rows = list(reversed(rows[:20]))  # chronological order
+    history_rows = list(reversed(rows[:30]))  # chronological order
     history_text = _format_conversation_history(history_rows, dir_in=dir_in)
     context = ""
     prev_path = _find_session_file(prev_session_id) if prev_session_id else None

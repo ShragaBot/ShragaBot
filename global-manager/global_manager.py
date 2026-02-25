@@ -35,7 +35,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from timeout_utils import call_with_timeout
 from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError, create_credential
-from session_utils import resolve_session
+from session_utils import resolve_session, _sanitize_odata
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 
@@ -157,7 +157,7 @@ class GlobalManager:
         try:
             url = (
                 f"{DATAVERSE_API}/{USERS_TABLE}"
-                f"?$filter=crb3b_useremail eq '{user_email}'"
+                f"?$filter=crb3b_useremail eq '{_sanitize_odata(user_email)}'"
                 f"&$top=1&$select=crb3b_shragauserid"
             )
             resp = self.dv.get(url, timeout=REQUEST_TIMEOUT)
@@ -366,7 +366,7 @@ class GlobalManager:
         )
 
         # Check if we have a current session for this conversation (within this process run)
-        current_sid = self._current_sessions.get(mcs_conv_id)
+        current_sid = self._current_sessions.get(mcs_conv_id) if mcs_conv_id else None
 
         response = None
         new_sid = ""

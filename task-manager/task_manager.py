@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from version_check import get_my_version, should_exit
 from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError, create_credential
-from session_utils import resolve_session
+from session_utils import resolve_session, _sanitize_odata
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 os.environ.setdefault('DEVBOX_HOSTNAME', os.environ.get('COMPUTERNAME', socket.gethostname()))
@@ -62,6 +62,7 @@ class TaskManager:
         if not user_email:
             raise ValueError("USER_EMAIL is required")
         self.user_email = user_email
+        self._safe_email = _sanitize_odata(user_email)  # OData-safe for $filter queries
         self.working_dir = working_dir or WORKING_DIR
         self.credential = create_credential(log_fn=_log)
         self.dv = DataverseClient(dataverse_url=DV_URL, credential=self.credential, log_fn=_log)
@@ -96,7 +97,7 @@ class TaskManager:
 
     def poll_unclaimed(self) -> list[dict]:
         try:
-            r = self.dv.get(f"{DV_API}/{CONV_TBL}?$filter=cr_useremail eq '{self.user_email}'"
+            r = self.dv.get(f"{DV_API}/{CONV_TBL}?$filter=cr_useremail eq '{self._safe_email}'"
                 f" and cr_direction eq '{DIR_IN}' and cr_status eq '{ST_UNCLAIMED}'"
                 f"&$orderby=createdon asc&$top=1", timeout=REQ_TMO)
             m = r.json().get("value", [])
@@ -171,7 +172,7 @@ class TaskManager:
     def cleanup_stale_outbound(self, max_age_minutes: int = 10):
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
         return self._dv_batch_patch(CONV_TBL,
-            f"cr_useremail eq '{self.user_email}' and cr_direction eq '{DIR_OUT}'"
+            f"cr_useremail eq '{self._safe_email}' and cr_direction eq '{DIR_OUT}'"
             f" and cr_status eq '{ST_UNCLAIMED}' and createdon lt {cutoff}",
             {"cr_status": ST_EXPIRED}, "CLEANUP")
 
@@ -274,8 +275,6 @@ class TaskManager:
             active_sid = new_sid or current_sid or ""
             processed_by = f"{AGENT_ROLE.lower()}:{self._my_version}:{active_sid}" if active_sid else ""
 
-        except subprocess.TimeoutExpired: _log("[WARN] Claude CLI timed out"); resp = FALLBACK_MESSAGE; processed_by = ""; active_sid = ""
-        except FileNotFoundError: _log("[WARN] Claude CLI not found"); resp = FALLBACK_MESSAGE; processed_by = ""; active_sid = ""
         except Exception as e: _log(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE; processed_by = ""; active_sid = ""
 
         self.send_response(
