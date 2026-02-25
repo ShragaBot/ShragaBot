@@ -13,6 +13,8 @@ Requires: az login (DefaultAzureCredential)
 import sys
 sys.stdout.reconfigure(encoding="utf-8")
 
+from pathlib import Path
+
 import requests
 import json
 from azure.identity import DefaultAzureCredential
@@ -52,41 +54,10 @@ def get_headers():
     }
 
 
-# The new Fallback topic YAML: calls ShragaRelay flow on every unknown intent
-RELAY_TOPIC_YAML = f"""kind: AdaptiveDialog
-beginDialog:
-  kind: OnUnknownIntent
-  id: main
-  actions:
-    - kind: InvokeFlowAction
-      id: invokeFlowAction_relay
-      input:
-        binding:
-          text: =System.User.Email
-          text_1: =System.Conversation.Id
-          text_2: =System.Activity.Text
-
-      output:
-        binding:
-          responsetext: Topic.RelayResponse
-
-      flowId: {RELAY_FLOW_ID}
-
-    - kind: ConditionGroup
-      id: conditionGroup_hasResponse
-      conditions:
-        - id: conditionItem_hasText
-          condition: =!IsBlank(Topic.RelayResponse)
-          actions:
-            - kind: SendActivity
-              id: sendActivity_relayResponse
-              activity: "{{{{Topic.RelayResponse}}}}"
-
-      elseActions:
-        - kind: SendActivity
-          id: sendActivity_fallback
-          activity: Sorry, I couldn't process your message. Please try again.
-"""
+# Load the Fallback topic YAML from the repo (bot/fallback_topic.yaml).
+# This is the full version with follow-up conversation loop support.
+_TOPIC_YAML_PATH = Path(__file__).resolve().parent.parent / "bot" / "fallback_topic.yaml"
+RELAY_TOPIC_YAML = _TOPIC_YAML_PATH.read_text(encoding="utf-8")
 
 
 def update_fallback_topic():
