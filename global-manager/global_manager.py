@@ -376,6 +376,9 @@ class GlobalManager:
             response, new_sid = self._call_claude_code(prompt, session_id=current_sid)
             if response is None:
                 _log(f"[SESSIONS] Within-run resume failed for {current_sid[:8]}..., falling back")
+                # Clear stale entry to avoid repeated failures
+                if mcs_conv_id:
+                    self._current_sessions.pop(mcs_conv_id, None)
                 current_sid = None
 
         if not current_sid:
@@ -394,14 +397,14 @@ class GlobalManager:
                 request_timeout=REQUEST_TIMEOUT,
             )
 
+            full_prompt = context_prefix + prompt if context_prefix else prompt
             if resolved_sid:
-                full_prompt = context_prefix + prompt if context_prefix else prompt
                 response, new_sid = self._call_claude_code(full_prompt, session_id=resolved_sid)
                 if response is None:
-                    _log(f"[SESSIONS] Resume of {resolved_sid[:8]} failed, starting fresh")
-                    response, new_sid = self._call_claude_code(prompt, session_id=None)
+                    # Resume failed -- start fresh WITH context
+                    _log(f"[SESSIONS] Resume of {resolved_sid[:8]} failed, starting fresh with context")
+                    response, new_sid = self._call_claude_code(full_prompt, session_id=None)
             else:
-                full_prompt = context_prefix + prompt if context_prefix else prompt
                 response, new_sid = self._call_claude_code(full_prompt, session_id=None)
 
         if not response:

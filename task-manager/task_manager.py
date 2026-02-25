@@ -230,6 +230,9 @@ class TaskManager:
                 resp, new_sid = self._call_claude(txt, session_id=current_sid)
                 if resp is None:
                     _log(f"[SESSIONS] Within-run resume failed for {current_sid[:8]}..., falling back")
+                    # Clear stale entry to avoid repeated failures
+                    if mcs:
+                        self._current_sessions.pop(mcs, None)
                     current_sid = None  # Fall through to resolve_session below
 
             if not current_sid:
@@ -248,17 +251,16 @@ class TaskManager:
                     request_timeout=REQ_TMO,
                 )
 
+                full_text = context_prefix + txt if context_prefix else txt
                 if resolved_sid:
                     # Resume a previous session from DV history
-                    full_text = context_prefix + txt if context_prefix else txt
                     resp, new_sid = self._call_claude(full_text, session_id=resolved_sid)
                     if resp is None:
-                        # Resume failed -- start completely fresh
-                        _log(f"[SESSIONS] Resume of {resolved_sid[:8]} failed, starting fresh")
-                        resp, new_sid = self._call_claude(txt, session_id=None)
+                        # Resume failed -- start fresh WITH context (not without)
+                        _log(f"[SESSIONS] Resume of {resolved_sid[:8]} failed, starting fresh with context")
+                        resp, new_sid = self._call_claude(full_text, session_id=None)
                 else:
                     # New session with optional context
-                    full_text = context_prefix + txt if context_prefix else txt
                     resp, new_sid = self._call_claude(full_text, session_id=None)
 
             if resp is None: resp = FALLBACK_MESSAGE

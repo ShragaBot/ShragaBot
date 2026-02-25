@@ -333,13 +333,13 @@ class TestContextFormatting:
         assert _format_conversation_history([]) == ""
 
     def test_format_conversation_history_truncates_messages(self):
-        """Messages are truncated to 500 chars."""
+        """Messages are truncated to 2000 chars."""
         rows = [
-            _make_inbound_row(message="A" * 1000, createdon="2026-02-25T10:00:00Z"),
+            _make_inbound_row(message="A" * 5000, createdon="2026-02-25T10:00:00Z"),
         ]
         result = _format_conversation_history(rows)
-        # Message should be truncated
-        assert len(result.split(": ", 1)[1]) <= 500
+        # Message should be truncated to 2000 chars
+        assert len(result.split(": ", 1)[1]) <= 2000
 
 
 class TestRoleCaseInsensitivity:

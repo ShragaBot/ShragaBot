@@ -16,9 +16,13 @@ Usage (from PM or GM thin wrapper):
 from __future__ import annotations
 
 import os
-import glob
 from pathlib import Path
 from datetime import datetime
+
+
+def _sanitize_odata(value: str) -> str:
+    """Escape single quotes for safe OData $filter interpolation."""
+    return value.replace("'", "''")
 
 
 def _find_session_file(session_id: str) -> str | None:
@@ -27,6 +31,8 @@ def _find_session_file(session_id: str) -> str | None:
     Claude stores sessions under ~/.claude/projects/{encoded-cwd}/{session_id}.jsonl
     We search all project dirs since we don't know the exact encoded cwd.
     """
+    if not session_id or "/" in session_id or "\\" in session_id or ".." in session_id:
+        return None  # Guard against path traversal
     claude_dir = Path.home() / ".claude" / "projects"
     if not claude_dir.is_dir():
         return None
@@ -65,12 +71,38 @@ def _format_conversation_history(rows: list[dict], dir_in: str = "Inbound") -> s
                 speaker = parts[0].upper() if parts else "Assistant"
             else:
                 speaker = "Assistant"
-        msg = (row.get("cr_message") or "")[:500]
+        msg = (row.get("cr_message") or "")[:2000]
         if ts:
             lines.append(f"{ts} {speaker}: {msg}")
         else:
             lines.append(f"{speaker}: {msg}")
     return "\n".join(lines)
+
+
+def _build_context_with_history(rows: list[dict], dir_in: str, note: str,
+                                prev_session_id: str | None = None) -> tuple[str, str | None]:
+    """Build context prefix from conversation history rows.
+
+    Returns (context_prefix, prev_session_path_or_none).
+    """
+    history_rows = list(reversed(rows[:20]))  # chronological order
+    history_text = _format_conversation_history(history_rows, dir_in=dir_in)
+    context = ""
+    prev_path = _find_session_file(prev_session_id) if prev_session_id else None
+    if history_text:
+        n = len(history_rows)
+        context = (
+            f"[Previous conversation context -- {n} recent messages]\n"
+            f"{history_text}\n"
+            f"[End of context]\n"
+            f"[{note}"
+        )
+        if prev_path:
+            context += f" Previous session file may be at: {prev_path}"
+        context += "]\n\n"
+    elif prev_path:
+        context = f"[Previous session file may be at: {prev_path}]\n\n"
+    return context, prev_path
 
 
 def resolve_session(
@@ -113,17 +145,24 @@ def resolve_session(
 
     my_role_lower = my_role.lower()
 
+    # Guard: empty mcs_conversation_id
+    if not mcs_conversation_id:
+        _log("[SESSION] Empty mcs_conversation_id -> new session, no context")
+        return (None, "", None)
+
     # ── Step 1: Fetch conversation history ──────────────────────────────
     # We need enough rows to find 10 outbound messages. Fetch up to 50 rows
     # (mix of inbound + outbound) to be safe.
+    safe_mcs_id = _sanitize_odata(mcs_conversation_id)
     rows = []
     try:
         url = (
             f"{api_base}/{conv_table}"
-            f"?$filter=cr_mcs_conversation_id eq '{mcs_conversation_id}'"
+            f"?$filter=cr_mcs_conversation_id eq '{safe_mcs_id}'"
             f" and cr_status eq '{st_processed}'"
             f"&$orderby=createdon desc"
             f"&$top=50"
+            f"&$select=cr_direction,cr_processed_by,cr_message,createdon"
         )
         resp = dv.get(url, timeout=request_timeout)
         rows = resp.json().get("value", [])
@@ -148,25 +187,18 @@ def resolve_session(
     if not processed_by:
         # Old message without cr_processed_by -- treat as no previous session
         _log(f"[SESSION] Most recent outbound has no cr_processed_by -> new session with context")
-        # Provide context from the conversation
-        history_rows = list(reversed(rows[:20]))  # chronological order
-        history_text = _format_conversation_history(history_rows, dir_in=dir_in)
-        context = ""
-        if history_text:
-            n = len(history_rows)
-            context = (
-                f"[Previous conversation context -- {n} recent messages]\n"
-                f"{history_text}\n"
-                f"[End of context]\n"
-                f"[Note: You are starting a fresh session. Here is recent conversation context.]\n\n"
-            )
-        return (None, context, None)
+        context, prev_path = _build_context_with_history(
+            rows, dir_in, "Note: You are starting a fresh session. Here is recent conversation context.")
+        return (None, context, prev_path)
 
     # Parse: {role}:{version}:{session_id}
     parts = processed_by.split(":", 2)
     if len(parts) < 3:
-        _log(f"[SESSION] Malformed cr_processed_by '{processed_by}' -> new session")
-        return (None, "", None)
+        _log(f"[SESSION] Malformed cr_processed_by '{processed_by}' -> new session with context")
+        # Treat malformed the same as empty -- provide context
+        context, prev_path = _build_context_with_history(
+            rows, dir_in, "Note: You are starting a fresh session. Here is recent conversation context.")
+        return (None, context, prev_path)
 
     prev_role, prev_version, prev_session_id = parts[0], parts[1], parts[2]
 
@@ -186,24 +218,10 @@ def resolve_session(
         else:
             # Session file not found -- fall back to new session with context
             _log(f"[SESSION] Session file not found for {prev_session_id[:8]} -> fallback to new session")
-            history_rows = list(reversed(rows[:20]))
-            history_text = _format_conversation_history(history_rows, dir_in=dir_in)
-            context = ""
-            prev_path = None
-            if history_text:
-                n = len(history_rows)
-                context = (
-                    f"[Previous conversation context -- {n} recent messages]\n"
-                    f"{history_text}\n"
-                    f"[End of context]\n"
-                    f"[Note: Your previous session could not be resumed. Starting fresh with context from the last conversation."
-                )
-                # Check if file might be elsewhere
-                possible_path = _find_session_file(prev_session_id)
-                if possible_path:
-                    context += f" Previous session file may be at: {possible_path}"
-                    prev_path = possible_path
-                context += "]\n\n"
+            context, prev_path = _build_context_with_history(
+                rows, dir_in,
+                "Note: Your previous session could not be resumed. Starting fresh with context from the last conversation.",
+                prev_session_id=prev_session_id)
             return (None, context, prev_path)
 
     elif same_version and not same_role:
@@ -246,10 +264,9 @@ def resolve_session(
         return (None, context, prev_path)
 
     else:
-        # Different version (regardless of role): new session + last 10 outbound messages
+        # Different version (regardless of role): new session + context
         _log(f"[SESSION] Version change ({prev_version}->{my_version}) -> new session with context")
 
-        # Collect up to 10 outbound messages + their corresponding inbound context
         context_rows = list(reversed(rows[:30]))  # chronological
         history_text = _format_conversation_history(context_rows, dir_in=dir_in)
         context = ""
