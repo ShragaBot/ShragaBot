@@ -672,7 +672,7 @@ class TestGetCredential:
         fake_cred = MagicMock()
         fake_cred.get_token.return_value = FakeAccessToken()
 
-        with patch("global_manager.DefaultAzureCredential", return_value=fake_cred):
+        with patch("global_manager.create_credential", return_value=fake_cred):
             from global_manager import get_credential
             result = get_credential()
 
@@ -684,7 +684,7 @@ class TestGetCredential:
         broken_cred = MagicMock()
         broken_cred.get_token.side_effect = Exception("No credentials")
 
-        with patch("global_manager.DefaultAzureCredential", return_value=broken_cred):
+        with patch("global_manager.create_credential", return_value=broken_cred):
             from global_manager import get_credential
             with pytest.raises(SystemExit):
                 get_credential()

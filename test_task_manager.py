@@ -66,7 +66,7 @@ def mock_credential():
 def manager(mock_credential, monkeypatch, tmp_path):
     """Create a TaskManager with mocked credentials."""
     monkeypatch.setenv("USER_EMAIL", "testuser@example.com")
-    with patch("task_manager.DefaultAzureCredential", return_value=mock_credential):
+    with patch("task_manager.create_credential", return_value=mock_credential):
         from task_manager import TaskManager
         mgr = TaskManager("testuser@example.com")
     # Replace the real DataverseClient with a mock
@@ -313,7 +313,7 @@ class TestResponse:
 
 class TestConstructor:
     def test_requires_user_email(self, mock_credential):
-        with patch("task_manager.DefaultAzureCredential", return_value=mock_credential):
+        with patch("task_manager.create_credential", return_value=mock_credential):
             from task_manager import TaskManager
             with pytest.raises(ValueError, match="USER_EMAIL"):
                 TaskManager("")
