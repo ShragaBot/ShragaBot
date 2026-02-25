@@ -1971,6 +1971,8 @@ if __name__ == "__main__":
         worker.run()
     except KeyboardInterrupt:
         _log("[SHUTDOWN] Worker stopped by user (Ctrl+C)")
+    except SystemExit:
+        raise  # Let sys.exit() propagate with its original exit code
     except BaseException as e:
         # Last-resort logging before the process dies.
         # Capture as much context as possible for post-mortem debugging.
