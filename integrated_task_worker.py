@@ -1808,8 +1808,8 @@ Report what you reverted at the end.
                     # Poll every 10 seconds (autonomous agent takes longer)
                     time.sleep(10)
 
-                except KeyboardInterrupt:
-                    raise  # Let KeyboardInterrupt propagate to outer handler
+                except (KeyboardInterrupt, SystemExit):
+                    raise  # Let these propagate -- don't catch sys.exit() or Ctrl+C
                 except BaseException as e:
                     _log(f"\n[ERROR] Unexpected error in worker loop: {type(e).__name__}: {e}")
                     self._cleanup_in_progress_task(f"Worker loop error: {e}")
