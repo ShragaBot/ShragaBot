@@ -24,8 +24,8 @@ beginDialog:
           responsetext: Topic.Response
 
       # WARNING: This flow ID MUST match RELAY_FLOW_ID in scripts/configure_bot_topic.py.
-      # SendMessage flow: 0e3f6ece-54a1-606e-e34b-5b1d5d4c536d
-      flowId: 0e3f6ece-54a1-606e-e34b-5b1d5d4c536d
+      # SendMessage flow: dec9329f-8112-f111-8341-002248d570fd
+      flowId: dec9329f-8112-f111-8341-002248d570fd
 
     - kind: SendActivity
       id: sendActivity_ePCiZl

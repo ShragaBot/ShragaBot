@@ -27,13 +27,12 @@ DATAVERSE_API = f"{DATAVERSE_URL}/api/data/v9.2"
 # to keep them in sync. A mismatch will cause the bot topic to invoke a
 # nonexistent or wrong flow, silently breaking the relay pipeline.
 #
-# Current ShragaRelay flow ID (Power Automate):
-#   0e3f6ece-54a1-606e-e34b-5b1d5d4c536d
-# Corresponding workflowEntityId (Dataverse / Copilot Studio):
+# ShragaRelay workflow entity ID (used by Copilot Studio topic):
 #   dec9329f-8112-f111-8341-002248d570fd
-# Previous SendMessage flow ID (deleted during table recreation):
-#   f6144661-8f48-9528-f120-b1666abccea0
-RELAY_FLOW_ID = "0e3f6ece-54a1-606e-e34b-5b1d5d4c536d"
+# ShragaRelay Power Automate flow ID (used by update_flow.py):
+#   0e3f6ece-54a1-606e-e34b-5b1d5d4c536d
+# NOTE: Copilot Studio uses the Dataverse WORKFLOW ENTITY ID, not the PA flow ID.
+RELAY_FLOW_ID = "dec9329f-8112-f111-8341-002248d570fd"
 
 # Fallback topic component ID
 FALLBACK_COMPONENT_ID = "928c6921-eb36-450f-b2bc-9ad966b3f02e"
