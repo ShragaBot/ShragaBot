@@ -11,7 +11,7 @@ from version_check import get_my_version, should_exit
 from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
-os.environ.setdefault('DEVBOX_HOSTNAME', socket.gethostname())
+os.environ.setdefault('DEVBOX_HOSTNAME', os.environ.get('COMPUTERNAME', socket.gethostname()))
 
 INSTANCE_ID = uuid.uuid4().hex[:8]
 

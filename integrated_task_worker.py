@@ -61,7 +61,7 @@ STATE_FILE = ".integrated_worker_state.json"
 WEBHOOK_USER = os.environ.get("WEBHOOK_USER", "")
 from version_check import get_my_version, should_exit
 
-MACHINE_NAME = socket.gethostname()  # This dev box's hostname (socket, not platform -- avoids WMI hang)
+MACHINE_NAME = os.environ.get('COMPUTERNAME', socket.gethostname())  # env var first (instant, no WMI)
 
 # Status labels used in PATCH/POST bodies (Dataverse accepts string labels)
 STATUS_SUBMITTED = "Submitted"
