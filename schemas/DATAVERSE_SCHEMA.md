@@ -83,7 +83,7 @@ Tables must be created in this order due to conceptual dependencies (no formal D
 | 5 | `cr_message` | `cr_message` | Message | Multiple Lines of Text (Memo) | 100000 | Optional | Full message text (multiline) |
 | 6 | `cr_direction` | `cr_direction` | Direction | Single Line of Text (String) | 50 | Optional | Message direction. Values: `Inbound` or `Outbound` |
 | 7 | `cr_status` | `cr_status` | Status | Single Line of Text (String) | 50 | Optional | Processing status. Values: `Unclaimed`, `Claimed`, `Processed`, `Delivered` |
-| 8 | `cr_claimed_by` | `cr_claimed_by` | Claimed By | Single Line of Text (String) | 200 | Optional | Manager instance ID that claimed this message (e.g., `personal:sagik@microsoft.com` or `global`) |
+| 8 | `cr_claimed_by` | `cr_claimed_by` | Claimed By | Single Line of Text (String) | 200 | Optional | Agent instance ID that claimed this message (e.g., `ps:sagik@microsoft.com` or `gs`) |
 | 9 | `cr_in_reply_to` | `cr_in_reply_to` | In Reply To | Single Line of Text (String) | 100 | Optional | GUID of the inbound row this outbound message responds to. Used by the SendMessage flow to match responses |
 | 10 | `cr_followup_expected` | `cr_followup_expected` | Follow-up Expected | Single Line of Text (String) | 10 | Optional | Whether the bot should expect a follow-up message. Values: `"true"` or `""` (empty string). **MUST be String type, NOT Boolean** |
 | -- | `createdon` | `createdon` | Created On | DateTime | -- | Auto | Auto-set by Dataverse |
@@ -214,7 +214,7 @@ None (no formal Dataverse lookup relationships). Task ownership is tracked by `c
 | 1 | `cr_shragamessageid` | `cr_shragamessageid` | Shraga Message | Uniqueidentifier (GUID) | -- | Auto | Primary key, auto-generated |
 | 2 | `cr_name` | `cr_name` | Name | Single Line of Text (String) | 450 | Required (Business Required) | First line of message, truncated to ~450 chars (Dataverse primary name column limit) |
 | 3 | `cr_content` | `cr_content` | Content | Multiple Lines of Text (Memo) | 100000 | Optional | Full message content (tool call descriptions, progress text). No character limit |
-| 4 | `cr_from` | `cr_from` | From | Single Line of Text (String) | 200 | Optional | Source identifier (e.g., `Integrated Task Worker`, `worker`, `verifier`) |
+| 4 | `cr_from` | `cr_from` | From | Single Line of Text (String) | 200 | Optional | Source identifier (e.g., `Shraga Worker`, `worker`, `verifier`) |
 | 5 | `cr_to` | `cr_to` | To | Single Line of Text (String) | 200 | Optional | Target identifier (e.g., user email, `card`, `log`) |
 | 6 | `crb3b_taskid` | `crb3b_TaskId` | Task ID | Single Line of Text (String) | 200 | Optional | Task ID reference (plain string, NOT a formal lookup). Used by TaskProgressUpdater flow to correlate messages with Running cards |
 | -- | `createdon` | `createdon` | Created On | DateTime | -- | Auto | Auto-set by Dataverse. Used as timestamp for activity log ordering |
@@ -234,7 +234,7 @@ None (no formal Dataverse lookup relationships). The `crb3b_taskid` column store
 
 ## 7. Table: crb3b_shragausers
 
-**Purpose:** Tracks per-user onboarding progress, dev box assignment, and manager status. The Global Manager persists state here to survive restarts.
+**Purpose:** Tracks per-user onboarding progress, dev box assignment, and manager status. The Global Shraga persists state here to survive restarts.
 
 | Property | Value |
 |---|---|
@@ -292,9 +292,9 @@ None (no formal Dataverse lookup relationships).
 
 ### Key Usage Patterns
 
-- **User lookup:** Global Manager queries by `crb3b_useremail` to check onboarding state
-- **State persistence:** On every onboarding step change, Global Manager PATCHes the row
-- **New user creation:** Global Manager POSTs a new row when a user is first seen
+- **User lookup:** Global Shraga queries by `crb3b_useremail` to check onboarding state
+- **State persistence:** On every onboarding step change, Global Shraga PATCHes the row
+- **New user creation:** Global Shraga POSTs a new row when a user is first seen
 - **Last seen tracking:** Updated on every user interaction via `crb3b_lastseen`
 
 ---
@@ -364,14 +364,14 @@ Create two custom security roles:
 
 - When Python code writes rows via the Dataverse Web API using `DefaultAzureCredential`, the **owning user** of each row is the authenticated identity
 - For the Personal Task Manager: rows are created under the dev box user's identity, so `User` scope works correctly
-- For the Global Manager: rows are created under the service identity; ensure the GM's identity is the admin or uses the Shraga Admin role
+- For the Global Shraga: rows are created under the service identity; ensure the GS's identity is the admin or uses the Shraga Admin role
 - Power Automate flows create rows under the flow connection's identity; if flows need to read/write all rows, the connection identity needs the Shraga Admin role
 
 ### Configuration Steps in Power Apps
 
 1. Navigate to **Settings** > **Security** > **Security Roles** in the Power Platform admin center
 2. Create the two roles above
-3. Assign **Shraga Admin** to the admin user (Sagi) and to service accounts (Global Manager, Power Automate connections)
+3. Assign **Shraga Admin** to the admin user (Sagi) and to service accounts (Global Shraga, Power Automate connections)
 4. Assign **Shraga User** to all regular end users
 5. Ensure table ownership type is **User or Team** (not Organization) for all four tables -- this enables row-level security
 

@@ -1,16 +1,16 @@
 """
-Tests for Global Manager (thin wrapper + DV-based session resolution).
+Tests for Global Shraga (thin wrapper + DV-based session resolution).
 
 All external dependencies (Azure, Dataverse, Claude Code CLI) are mocked.
 Tests verify:
   - No old tool-wrapper code remains
   - Claude Code subprocess invocation (--resume, --print, -p)
   - DV polling/claiming (ETag concurrency)
-  - Response writing (Outbound rows) with [GM:xxxx] prefix
+  - Response writing (Outbound rows) with [GS:xxxx] prefix
   - New user and known user flows
   - Fallback message when Claude Code is unavailable
   - Session tracking via _last_session_id
-  - cr_claimed_by format: gm:version:box:instance_id
+  - cr_claimed_by format: gs:version:box:instance_id
   - cr_processed_by written on outbound rows
 """
 import json
@@ -251,23 +251,23 @@ class TestClaudeCodeInvocation:
 # ============================================================================
 
 class TestClaudeMdUsage:
-    """Verify GM does NOT have a Python-embedded system prompt."""
+    """Verify GS does NOT have a Python-embedded system prompt."""
 
     def test_no_system_prompt_builder(self, manager):
         """No _build_system_prompt method should exist."""
         assert not hasattr(manager, "_build_system_prompt")
 
     def test_system_prompt_exists(self):
-        """GM_SYSTEM_PROMPT.md must exist in the global-manager directory."""
-        prompt_file = Path(__file__).parent / "global-manager" / "GM_SYSTEM_PROMPT.md"
-        assert prompt_file.exists(), f"GM_SYSTEM_PROMPT.md not found at {prompt_file}"
+        """GS_SYSTEM_PROMPT.md must exist in the global-manager directory."""
+        prompt_file = Path(__file__).parent / "global-manager" / "GS_SYSTEM_PROMPT.md"
+        assert prompt_file.exists(), f"GS_SYSTEM_PROMPT.md not found at {prompt_file}"
 
     def test_system_prompt_has_content(self):
-        """GM_SYSTEM_PROMPT.md must have meaningful content (not empty)."""
-        prompt_file = Path(__file__).parent / "global-manager" / "GM_SYSTEM_PROMPT.md"
+        """GS_SYSTEM_PROMPT.md must have meaningful content (not empty)."""
+        prompt_file = Path(__file__).parent / "global-manager" / "GS_SYSTEM_PROMPT.md"
         content = prompt_file.read_text(encoding="utf-8")
-        assert len(content) > 100, "GM_SYSTEM_PROMPT.md should have substantial content"
-        assert "Global Manager" in content
+        assert len(content) > 100, "GS_SYSTEM_PROMPT.md should have substantial content"
+        assert "Global Shraga" in content
 
 
 # ============================================================================
@@ -305,7 +305,7 @@ class TestPolling:
 
 
 class TestResponse:
-    """Response writing tests -- updated for [GM:xxxx] prefix."""
+    """Response writing tests -- updated for [GS:xxxx] prefix."""
 
     def test_send_response_without_session(self, manager):
         """Response without session_id has no prefix."""
@@ -322,7 +322,7 @@ class TestResponse:
         assert body["cr_message"] == "Welcome!"  # No prefix without session_id
 
     def test_send_response_with_session_prefix(self, manager):
-        """Response with session_id gets [GM:xxxx] prefix."""
+        """Response with session_id gets [GS:xxxx] prefix."""
         manager.dv.post.return_value = FakeResponse(json_data={})
         manager.send_response(
             in_reply_to=SAMPLE_CONVERSATION_ID,
@@ -332,7 +332,7 @@ class TestResponse:
             session_id="a7f3c2d1-abcd-1234",
         )
         body = manager.dv.post.call_args[1]["data"]
-        assert body["cr_message"] == "[GM:a7f3] Welcome!"
+        assert body["cr_message"] == "[GS:a7f3] Welcome!"
 
     def test_send_response_with_processed_by(self, manager):
         """cr_processed_by is written on outbound row when provided."""
@@ -342,10 +342,10 @@ class TestResponse:
             mcs_conversation_id="mcs-1",
             user_email="user@test.com",
             text="Hi",
-            processed_by="gm:v19:some-session-id",
+            processed_by="gs:v19:some-session-id",
         )
         body = manager.dv.post.call_args[1]["data"]
-        assert body["cr_processed_by"] == "gm:v19:some-session-id"
+        assert body["cr_processed_by"] == "gs:v19:some-session-id"
 
     def test_send_response_error(self, manager):
         from dv_client import DataverseError
@@ -396,14 +396,14 @@ class TestClaim:
         assert manager.claim_message(SAMPLE_STALE_MSG) is True
 
     def test_claim_sets_new_format(self, manager):
-        """cr_claimed_by should use new format: gm:version:box:instance_id."""
+        """cr_claimed_by should use new format: gs:version:box:instance_id."""
         manager.dv.patch.return_value = FakeResponse(status_code=204)
         manager.claim_message(SAMPLE_STALE_MSG)
         body = manager.dv.patch.call_args[1]["data"]
         claimed_by = body["cr_claimed_by"]
-        assert claimed_by.startswith("gm:")
+        assert claimed_by.startswith("gs:")
         parts = claimed_by.split(":")
-        assert len(parts) == 4  # gm:version:box:instance_id
+        assert len(parts) == 4  # gs:version:box:instance_id
 
     def test_claim_uses_etag(self, manager):
         """The ETag from the message must be sent via the etag kwarg to dv.patch."""
@@ -413,7 +413,7 @@ class TestClaim:
         assert call_kwargs["etag"] == 'W/"12345"'
 
     def test_claim_conflict_returns_false(self, manager):
-        """ETagConflictError means another GM claimed it first."""
+        """ETagConflictError means another GS claimed it first."""
         from dv_client import ETagConflictError
         manager.dv.patch.side_effect = ETagConflictError("412 conflict")
         assert manager.claim_message(SAMPLE_STALE_MSG) is False
@@ -466,11 +466,11 @@ class TestProcessMessage:
 
         body = manager.dv.post.call_args[1]["data"]
         assert "cr_processed_by" in body
-        assert body["cr_processed_by"].startswith("gm:")
+        assert body["cr_processed_by"].startswith("gs:")
         assert "sess-abc123" in body["cr_processed_by"]
 
     def test_process_adds_gm_prefix(self, manager):
-        """Outbound message should have [GM:xxxx] prefix."""
+        """Outbound message should have [GS:xxxx] prefix."""
         manager.dv.post.return_value = FakeResponse(json_data={})
         manager.dv.patch.return_value = FakeResponse(status_code=204)
         manager.dv.get.return_value = FakeResponse(json_data={"value": []})
@@ -479,7 +479,7 @@ class TestProcessMessage:
             manager.process_message(SAMPLE_STALE_MSG)
 
         body = manager.dv.post.call_args[1]["data"]
-        assert body["cr_message"].startswith("[GM:sess]")
+        assert body["cr_message"].startswith("[GS:sess]")
 
     def test_process_fallback_when_claude_unavailable(self, manager):
         """When Claude Code is unavailable, the single fallback message is sent."""
@@ -580,7 +580,7 @@ class TestNewUserFlow:
 
 
 class TestKnownUserFlow:
-    """Verify known user (PM unavailable) flow through the thin wrapper."""
+    """Verify known user (PS unavailable) flow through the thin wrapper."""
 
     def test_known_user_delayed_claiming(self, manager):
         """Known users' messages have a delayed claiming window."""
@@ -619,7 +619,7 @@ class TestConstructor:
     """Constructor tests."""
 
     def test_manager_id(self, manager):
-        assert manager.manager_id == "global"
+        assert manager.manager_id == "gs"
 
     def test_known_users_empty(self, manager):
         assert len(manager._known_users) == 0
@@ -627,7 +627,7 @@ class TestConstructor:
     def test_has_agent_role(self, manager):
         """Manager should use AGENT_ROLE constant."""
         from global_manager import AGENT_ROLE
-        assert AGENT_ROLE == "GM"
+        assert AGENT_ROLE == "GS"
 
     def test_has_version(self, manager):
         """Manager should have _my_version attribute."""

@@ -8,9 +8,9 @@ Three agents, each a persistent Claude Code session:
 
 | Agent | Location | Model | Role |
 |-------|----------|-------|------|
-| **Global Manager (GM)** | `global-manager/` | Haiku | Onboards new users, guides setup |
-| **Personal Manager (PM)** | `task-manager/` | Sonnet | Task creation, status, cancellation |
-| **Worker** | `integrated_task_worker.py` | Opus | Executes coding tasks via Worker/Verifier loop |
+| **Global Shraga (GS)** | `global-manager/` | Haiku | Onboards new users, guides setup |
+| **Personal Shraga (PS)** | `task-manager/` | Sonnet | Task creation, status, cancellation |
+| **Shraga Worker (SW)** | `integrated_task_worker.py` | Opus | Executes coding tasks via Worker/Verifier loop |
 
 ## Setup
 
@@ -19,7 +19,7 @@ Three agents, each a persistent Claude Code session:
 2. RDP into the box via the web URL shown
 3. On the box: `irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex`
 
-**Additional dev box (Worker only):**
+**Additional Shraga Box (SW only):**
 `irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-workerbox.ps1 | iex`
 
 ## Deployment
@@ -56,7 +56,7 @@ Installs pip deps -> writes .deploy_complete sentinel
 Updates current_version.txt to "v3"
           |
           v
-Worker/PM: version_check.should_exit() returns True
+SW/PS: version_check.should_exit() returns True
           |
           v
 Services exit gracefully -> watchdog restarts via .cmd wrappers
@@ -84,13 +84,13 @@ Get-ScheduledTask | Where-Object { $_.TaskName -like "Shraga*" } | Format-Table 
 |------|-------------|
 | `setup.ps1` | Provisions a bare dev box (runs on user's machine) |
 | `setup-devbox.ps1` | All-in-one on-box setup: tools, code, auth, services |
-| `setup-workerbox.ps1` | Additional dev box setup (Worker only) |
+| `setup-workerbox.ps1` | Additional Shraga Box setup (SW only) |
 | `updater.py` | Release updater (checks GitHub every 5 min) |
 | `version_check.py` | Version comparison for graceful service restarts |
-| `integrated_task_worker.py` | Worker entry point |
-| `autonomous_agent.py` | Worker/Verifier/Summarizer loop |
-| `task-manager/task_manager.py` | PM entry point |
-| `global-manager/global_manager.py` | GM entry point |
+| `integrated_task_worker.py` | SW entry point |
+| `autonomous_agent.py` | SW Worker/Verifier/Summarizer loop |
+| `task-manager/task_manager.py` | PS entry point |
+| `global-manager/global_manager.py` | GS entry point |
 | `scripts/` | Standalone Dataverse/DevCenter utility scripts |
 
 ## Testing

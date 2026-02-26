@@ -232,8 +232,8 @@ def cleanup_old_releases(keep_count=10):
 
 
 def reenable_disabled_tasks():
-    """Re-enable and start any disabled scheduled tasks (Worker, PM)."""
-    for task_name in ["ShragaWorker", "ShragaPM"]:
+    """Re-enable and start any disabled scheduled tasks (SW, PS)."""
+    for task_name in ["ShragaSW", "ShragaPS"]:
         try:
             result = subprocess.run(
                 ["powershell", "-Command",

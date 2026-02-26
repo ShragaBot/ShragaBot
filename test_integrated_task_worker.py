@@ -512,12 +512,12 @@ class TestCleanupInProgressTask:
         worker.dv = MagicMock()
         worker.dv.patch.return_value = MagicMock()
         worker.current_task_id = "task-running-123"
-        worker._cleanup_in_progress_task("Worker interrupted")
+        worker._cleanup_in_progress_task("SW interrupted")
         # Should have called update_task which calls dv.patch with FAILED status
         call_args = worker.dv.patch.call_args
         sent_data = call_args[0][1]  # data is positional arg 2
         assert sent_data["cr_status"] == 8  # Failed (integer picklist)
-        assert "Worker interrupted" in sent_data["cr_statusmessage"]
+        assert "SW interrupted" in sent_data["cr_statusmessage"]
         # Should clear task ID after cleanup
         assert worker.current_task_id is None
 
@@ -1023,7 +1023,7 @@ class TestWriteSessionLog:
         worker.write_session_log(summary, session_folder)
 
         content = (session_folder / "SESSION_LOG.md").read_text(encoding="utf-8")
-        assert "Worker Version" in content
+        assert "SW Version" in content
 
     def test_contains_model_usage(self, monkeypatch, tmp_path):
         mod, _ = _import_worker(monkeypatch, tmp_path)

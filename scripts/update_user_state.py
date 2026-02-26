@@ -5,7 +5,7 @@ Dataverse table.
 
 Extracted from global-manager/global_manager.py for ad-hoc administrative
 use.  Supports field validation against the same VALID_USER_FIELDS allow-list
-used by the Global Manager at runtime.
+used by Global Shraga at runtime.
 
 Usage:
     python scripts/update_user_state.py --email user@example.com --field crb3b_onboardingstep=provisioning

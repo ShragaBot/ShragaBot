@@ -3,14 +3,14 @@
   "entity": "cr_shraga_conversation",
   "collection": "cr_shraga_conversations",
   "display_name": "Shraga Conversations",
-  "description": "Message bus between MCS bot and task managers. Each row is one message (inbound from user or outbound from manager).",
+  "description": "Message bus between MCS bot and Shraga agents. Each row is one message (inbound from user or outbound from manager).",
   "custom_attributes": [
     {
       "LogicalName": "cr_claimed_by",
       "SchemaName": "cr_claimed_by",
       "AttributeType": "String",
       "DisplayName": "Claimed By",
-      "description": "Identifier of the manager that claimed this message (e.g., 'personal:sagik@microsoft.com' or 'global')"
+      "description": "Identifier of the agent that claimed this message (e.g., 'ps:sagik@microsoft.com' or 'gs')"
     },
     {
       "LogicalName": "cr_direction",
@@ -74,9 +74,9 @@
   "notes": [
     "Inbound rows created by the MCS relay flow (direction='Inbound', status='Unclaimed')",
     "Task managers poll for status='Unclaimed' rows, claim atomically via ETag optimistic concurrency",
-    "Personal manager claims its user's messages within 3s",
-    "Global manager claims unclaimed messages older than 15s",
-    "Manager writes outbound row (direction='Outbound') with in_reply_to pointing to inbound row",
+    "Personal Shraga claims its user's messages within 3s",
+    "Global Shraga claims unclaimed messages older than 15s",
+    "Agent writes outbound row (direction='Outbound') with in_reply_to pointing to inbound row",
     "SendMessage flow polls for outbound row matching the inbound row ID, returns response to bot"
   ]
 }

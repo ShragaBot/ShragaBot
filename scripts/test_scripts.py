@@ -539,7 +539,7 @@ class TestETagWorkflow:
         result = client.update_row(
             TEST_TABLE,
             row_id,
-            {"cr_status": "Claimed", "cr_claimed_by": "personal:user@test.com"},
+            {"cr_status": "Claimed", "cr_claimed_by": "ps:user@test.com"},
             etag=etag,
         )
 

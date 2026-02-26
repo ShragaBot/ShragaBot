@@ -1,4 +1,4 @@
-"""PM thin wrapper: DV I/O + session resolution via Dataverse + stale detection.
+"""PS thin wrapper: DV I/O + session resolution via Dataverse + stale detection.
 Claude Code handles all task management autonomously via CLAUDE.md.
 
 Session continuity is managed by session_utils.resolve_session(), which uses
@@ -18,7 +18,7 @@ os.environ.setdefault('PYTHONUNBUFFERED', '1')
 os.environ.setdefault('DEVBOX_HOSTNAME', os.environ.get('COMPUTERNAME', socket.gethostname()))
 
 INSTANCE_ID = uuid.uuid4().hex[:8]
-AGENT_ROLE = "PM"
+AGENT_ROLE = "PS"
 
 # --- File logging ---
 _LOG_FILE = Path(__file__).parent / "pm.log"
@@ -75,7 +75,7 @@ class TaskManager:
         self.credential = create_credential(log_fn=_log)
         self.dv = DataverseClient(dataverse_url=DV_URL, credential=self.credential, log_fn=_log)
         # System prompt file path (passed via --system-prompt-file)
-        prompt_file = Path(__file__).parent / "PM_SYSTEM_PROMPT.md"
+        prompt_file = Path(__file__).parent / "PS_SYSTEM_PROMPT.md"
         self._system_prompt_file = str(prompt_file) if prompt_file.exists() else ""
         # Version check for immutable releases
         self._my_version = get_my_version(__file__)
@@ -137,7 +137,7 @@ class TaskManager:
         """Write outbound response to DV. Adds [ROLE:session_short] prefix and
         writes cr_processed_by on the outbound row."""
         try:
-            # Add message prefix: [PM:xxxx] text
+            # Add message prefix: [PS:xxxx] text
             prefixed_text = text
             if session_id:
                 session_short = session_id[:4]
@@ -187,7 +187,7 @@ class TaskManager:
     def cleanup_stale_claimed(self, max_age_minutes: int = 15):
         """Mark stale Claimed inbound messages as Expired (drop them).
 
-        Runs on PM startup.  Messages stuck in Claimed longer than
+        Runs on PS startup.  Messages stuck in Claimed longer than
         max_age_minutes are from a previous crash — too old to respond to.
         Uses Expired status (same as cleanup_stale_outbound) so they're
         clearly distinguished from successfully processed messages.
@@ -236,7 +236,7 @@ class TaskManager:
         mcs = msg.get("cr_mcs_conversation_id", "")
         txt = msg.get("cr_message", "").strip()
         if not txt: self.mark_processed(rid); return
-        _log(f"[MSG] Processing: {txt[:80]}...")
+        _log(f"[PS] Processing: {txt[:80]}...")
         # Inject IDs so Claude can pass them to create_task.py
         if mcs:
             txt = f"[MCS_CONVERSATION_ID={mcs}]\n[INBOUND_ROW_ID={rid}]\n{txt}"
@@ -289,7 +289,7 @@ class TaskManager:
             processed_by=processed_by,
         )
         self.mark_processed(rid)
-        _log(f"[MSG] Responded: {resp[:80]}...")
+        _log(f"[PS] Responded: {resp[:80]}...")
 
     def run(self):
         if sys.platform == "win32":
@@ -306,7 +306,7 @@ class TaskManager:
             _log(f"[CRITICAL] Getting token failed: {e} -- Exiting.")
             _log("[CRITICAL] HINT: Run 'az login' on this dev box.")
             sys.exit(1)
-        _log(f"[START] PM for {self.user_email} | version={self._my_version} | instance={INSTANCE_ID} | pid={os.getpid()}")
+        _log(f"[START] PS for {self.user_email} | version={self._my_version} | instance={INSTANCE_ID} | pid={os.getpid()}")
         _log(f"[CONFIG] DV: {DV_URL} | Poll: {POLL_SEC}s | Box: {self._box_name}")
         self._set_onboarding_completed()
         self.cleanup_stale_claimed()
@@ -320,7 +320,7 @@ class TaskManager:
                 _now_hb = time.time()
                 if _now_hb - _last_heartbeat > 60:
                     _uptime = int(_now_hb - _start_time)
-                    _log(f"[HEARTBEAT] PM alive | version={self._my_version} | uptime={_uptime}s | user={self.user_email}")
+                    _log(f"[HEARTBEAT] PS alive | version={self._my_version} | uptime={_uptime}s | user={self.user_email}")
                     _last_heartbeat = _now_hb
 
                 for m in self.poll_unclaimed():
@@ -338,7 +338,7 @@ class TaskManager:
                     sys.exit(0)
                 time.sleep(POLL_SEC)
             except KeyboardInterrupt: _log("\n[STOP] Shutting down."); break
-            except Exception as e: _log(f"[ERROR] Main loop: {e}"); _log_to_file(f"[ERROR] PM main loop traceback:\n{traceback.format_exc()}"); time.sleep(POLL_SEC * 2)
+            except Exception as e: _log(f"[ERROR] Main loop: {e}"); _log_to_file(f"[ERROR] PS main loop traceback:\n{traceback.format_exc()}"); time.sleep(POLL_SEC * 2)
 
 def main():
     if not USER_EMAIL: _log("[CRITICAL] USER_EMAIL required."); sys.exit(1)

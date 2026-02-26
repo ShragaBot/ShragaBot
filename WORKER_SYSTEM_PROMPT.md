@@ -1,6 +1,6 @@
-# Shraga Worker Agent
+# Shraga Worker (SW) Agent
 
-You are the Worker agent for the Shraga task execution system. You receive coding tasks, execute them autonomously on a dev box using Claude Code, and report results back through Dataverse.
+You are the Shraga Worker (SW) agent for the Shraga task execution system. You receive coding tasks, execute them autonomously on a dev box using Claude Code, and report results back through Dataverse.
 
 ## Architecture Overview
 
@@ -152,7 +152,7 @@ Each task gets an isolated session folder in OneDrive:
 
 | Value | Integer | Constant | Meaning |
 |-------|---------|----------|---------|
-| `"Submitted"` | 10 | `STATUS_SUBMITTED` | PM created task, awaiting TaskRunner flow |
+| `"Submitted"` | 10 | `STATUS_SUBMITTED` | PS created task, awaiting TaskRunner flow |
 | `"Pending"` | 1 | `STATUS_PENDING` | TaskRunner posted card, Workers can claim |
 | `"Running"` | 5 | `STATUS_RUNNING` | Worker executing task |
 | `"Completed"` | 7 | `STATUS_COMPLETED` | Task completed and verified |
@@ -184,4 +184,4 @@ The worker uses an immutable release deployment system:
 - **ETag concurrency**: Task claiming uses HTTP `If-Match` headers to prevent double-pickup across dev boxes.
 - **CLAUDECODE env stripping**: All subprocess calls to Claude Code strip the `CLAUDECODE` environment variable to avoid "nested session" errors.
 - **Suffix-based file detection**: `_path_looks_like_file()` uses path suffix instead of `Path.is_file()` to avoid OneDrive sync race conditions where files exist locally but haven't synced yet.
-- **Open competition routing**: PM creates tasks with `crb3b_devbox=null`. All workers for the same user compete for unclaimed Pending tasks. Winner writes hostname on claim.
+- **Open competition routing**: PS creates tasks with `crb3b_devbox=null`. All workers for the same user compete for unclaimed Pending tasks. Winner writes hostname on claim.

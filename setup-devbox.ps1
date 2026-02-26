@@ -7,7 +7,7 @@
 # Re-run:         Same command again (idempotent)
 
 param(
-    [switch]$WorkerOnly  # Skip PM -- used by setup-workerbox.ps1
+    [switch]$WorkerOnly  # Skip PS -- used by setup-workerbox.ps1
 )
 
 $ErrorActionPreference = "Continue"
@@ -309,7 +309,7 @@ if (Test-Path $sentinel) {
 }
 Write-Info "Version set to: $latestVersion"
 
-# Create updater .cmd wrapper (same pattern as Worker/PM -- reads current_version.txt dynamically)
+# Create updater .cmd wrapper (same pattern as SW/PS -- reads current_version.txt dynamically)
 $updaterWrapperDir = Join-Path $env:LOCALAPPDATA "Shraga"
 if (-not (Test-Path $updaterWrapperDir)) { New-Item -ItemType Directory -Force -Path $updaterWrapperDir | Out-Null }
 $updaterWrapperPath = Join-Path $updaterWrapperDir "ShragaUpdater.cmd"
@@ -531,12 +531,12 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
     # Create a small wrapper .cmd for each service that sets env vars before running Python
     # This ensures the scheduled task always has the right environment
     $services = @(
-        @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker"; EnvVars = @{ WEBHOOK_USER = $userEmail; AZURE_TOKEN_CREDENTIALS = "AzureCliCredential" } }
+        @{ Name = "ShragaSW"; Script = $WORKER_SCRIPT; Label = "SW"; EnvVars = @{ WEBHOOK_USER = $userEmail; AZURE_TOKEN_CREDENTIALS = "AzureCliCredential" } }
     )
     if (-not $WorkerOnly) {
-        $services += @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM"; EnvVars = @{ USER_EMAIL = $userEmail; AZURE_TOKEN_CREDENTIALS = "AzureCliCredential" } }
+        $services += @{ Name = "ShragaPS"; Script = $PM_SCRIPT; Label = "PS"; EnvVars = @{ USER_EMAIL = $userEmail; AZURE_TOKEN_CREDENTIALS = "AzureCliCredential" } }
     } else {
-        Write-Info "WorkerOnly mode -- skipping PM (runs on your first dev box)"
+        Write-Info "WorkerOnly mode -- skipping PS (runs on your first Shraga Box)"
     }
     foreach ($svc in $services) {
         # Check if this service's script exists
@@ -666,8 +666,8 @@ if ($azLoginSuccess -and -not [string]::IsNullOrWhiteSpace($userEmail)) {
 # Summary
 # =========================================================================
 # Check actual process state
-$workerRunning = (Get-ScheduledTask -TaskName "ShragaWorker" -ErrorAction SilentlyContinue).State -eq "Running"
-$pmRunning = if ($WorkerOnly) { $true } else { (Get-ScheduledTask -TaskName "ShragaPM" -ErrorAction SilentlyContinue).State -eq "Running" }
+$workerRunning = (Get-ScheduledTask -TaskName "ShragaSW" -ErrorAction SilentlyContinue).State -eq "Running"
+$pmRunning = if ($WorkerOnly) { $true } else { (Get-ScheduledTask -TaskName "ShragaPS" -ErrorAction SilentlyContinue).State -eq "Running" }
 
 $npmAuthOk = $false
 $userNpmrc = Join-Path $env:USERPROFILE ".npmrc"
@@ -685,11 +685,11 @@ Write-Host ""
 Write-Host "  Azure:       $userEmail" -ForegroundColor $(if ($azLoginSuccess) { "Green" } else { "Yellow" })
 Write-Host "  Claude Code: $(if ($claudeLoginSuccess) { 'Authenticated' } else { 'Needs: claude auth login' })" -ForegroundColor $(if ($claudeLoginSuccess) { "Green" } else { "Yellow" })
 Write-Host "  npm auth:    $(if ($npmAuthOk) { 'Configured (FE tasks OK)' } else { 'Not configured (FE tasks will fail)' })" -ForegroundColor $(if ($npmAuthOk) { "Green" } else { "Yellow" })
-Write-Host "  Worker:      $(if ($workerRunning) { 'Running' } else { 'Not running' })" -ForegroundColor $(if ($workerRunning) { "Green" } else { "Yellow" })
+Write-Host "  SW:          $(if ($workerRunning) { 'Running' } else { 'Not running' })" -ForegroundColor $(if ($workerRunning) { "Green" } else { "Yellow" })
 if ($WorkerOnly) {
-    Write-Host "  PM:          Skipped (WorkerOnly mode)" -ForegroundColor Gray
+    Write-Host "  PS:          Skipped (WorkerOnly mode)" -ForegroundColor Gray
 } else {
-    Write-Host "  PM:          $(if ($pmRunning) { 'Running' } else { 'Not running' })" -ForegroundColor $(if ($pmRunning) { "Green" } else { "Yellow" })
+    Write-Host "  PS:          $(if ($pmRunning) { 'Running' } else { 'Not running' })" -ForegroundColor $(if ($pmRunning) { "Green" } else { "Yellow" })
 }
 Write-Host ""
 if ($allGood) {

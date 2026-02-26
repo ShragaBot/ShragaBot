@@ -196,10 +196,10 @@ User: $env:USERNAME
     parameters:
       command: |
         Write-Host ""
-        Write-Host "=== Configuring Worker Auto-Start ===" -ForegroundColor Cyan
+        Write-Host "=== Configuring Shraga Worker Auto-Start ===" -ForegroundColor Cyan
 
         $workerPath = "C:\Dev\shraga-worker\integrated_task_worker.py"
-        $taskName = "ShragaWorker"
+        $taskName = "ShragaSW"
 
         # Resolve Python executable dynamically -- choco does not install to
         # C:\Python312.  Search well-known choco and standard install locations.
@@ -235,7 +235,7 @@ User: $env:USERNAME
         # Register task
         try {
           Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-          Write-Host "Worker configured to auto-start on boot" -ForegroundColor Green
+          Write-Host "Shraga Worker configured to auto-start on boot" -ForegroundColor Green
           Write-Host "   Task name: $taskName" -ForegroundColor Gray
         } catch {
           Write-Host "Failed to create scheduled task: $_" -ForegroundColor Red

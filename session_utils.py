@@ -1,16 +1,16 @@
 """
-Shared session resolution for PM and GM.
+Shared session resolution for PS and GS.
 
 Determines whether to resume an existing Claude Code session or start fresh,
 based on conversation history stored in Dataverse. DV is the single source
 of truth for session continuity -- no local JSON files.
 
-Usage (from PM or GM thin wrapper):
+Usage (from PS or GS thin wrapper):
 
     from session_utils import resolve_session
 
     session_id, context_prefix, prev_path = resolve_session(
-        dv, mcs_conversation_id, my_version="v19", my_role="pm"
+        dv, mcs_conversation_id, my_version="v19", my_role="ps"
     )
 """
 from __future__ import annotations
@@ -125,7 +125,7 @@ def resolve_session(
         dv: DataverseClient instance (from dv_client.py, has .get() method)
         mcs_conversation_id: the MCS conversation ID for this user
         my_version: current release version (e.g., "v19")
-        my_role: "pm" or "gm"
+        my_role: "ps" or "gs"
         log_fn: optional logging callback (str) -> None
         dv_api: Dataverse API base URL (if empty, uses dv.api_base)
         conv_table: conversations table name

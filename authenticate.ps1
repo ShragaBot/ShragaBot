@@ -261,8 +261,8 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 
     foreach ($svc in @(
-        @{ Name = "ShragaWorker"; Script = $WORKER_SCRIPT; Label = "Worker" },
-        @{ Name = "ShragaPM"; Script = $PM_SCRIPT; Label = "PM" }
+        @{ Name = "ShragaSW"; Script = $WORKER_SCRIPT; Label = "SW" },
+        @{ Name = "ShragaPS"; Script = $PM_SCRIPT; Label = "PS" }
     )) {
         try {
             $action = New-ScheduledTaskAction -Execute $pyExe -Argument $svc.Script -WorkingDirectory $WORKING_DIR
@@ -281,7 +281,7 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
         }
     }
 } else {
-    Write-Warn "Worker script not found at: $WORKER_SCRIPT"
+    Write-Warn "SW script not found at: $WORKER_SCRIPT"
     if (-not (Test-Path $WORKING_DIR)) {
         Write-Info "Try: git clone $REPO_URL $WORKING_DIR"
     }
@@ -298,8 +298,8 @@ Write-Host ""
 Write-Host "  Tools:       Git, Claude Code, Python" -ForegroundColor Green
 Write-Host "  Azure:       $userEmail" -ForegroundColor $(if ($azLoginSuccess) { "Green" } else { "Yellow" })
 Write-Host "  Claude Code: $(if ($claudeLoginSuccess) { 'Authenticated' } else { 'Needs: claude /login' })" -ForegroundColor $(if ($claudeLoginSuccess) { "Green" } else { "Yellow" })
-Write-Host "  Worker:      $(if (Test-Path $WORKER_SCRIPT) { 'Running' } else { 'Not deployed' })" -ForegroundColor $(if (Test-Path $WORKER_SCRIPT) { "Green" } else { "Yellow" })
-Write-Host "  PM:          $(if (Test-Path $PM_SCRIPT) { 'Running' } else { 'Not deployed' })" -ForegroundColor $(if (Test-Path $PM_SCRIPT) { "Green" } else { "Yellow" })
+Write-Host "  SW:          $(if (Test-Path $WORKER_SCRIPT) { 'Running' } else { 'Not deployed' })" -ForegroundColor $(if (Test-Path $WORKER_SCRIPT) { "Green" } else { "Yellow" })
+Write-Host "  PS:          $(if (Test-Path $PM_SCRIPT) { 'Running' } else { 'Not deployed' })" -ForegroundColor $(if (Test-Path $PM_SCRIPT) { "Green" } else { "Yellow" })
 Write-Host ""
 Write-Host "  Setup complete! Your Shraga Box is ready." -ForegroundColor Cyan
 Write-Host ""

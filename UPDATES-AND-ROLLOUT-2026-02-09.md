@@ -239,7 +239,7 @@ If one worker has issues:
 
 **Configured in YAML** (`userTasks` section):
 
-- **Task Name**: ShragaWorker
+- **Task Name**: ShragaSW
 - **Trigger**: At startup
 - **Action**: `python.exe C:\Dev\shraga-worker\worker.py`
 - **Working Directory**: `C:\Dev\shraga-worker`
@@ -249,22 +249,22 @@ If one worker has issues:
 
 **View task**:
 ```powershell
-Get-ScheduledTask -TaskName "ShragaWorker"
+Get-ScheduledTask -TaskName "ShragaSW"
 ```
 
 **Start task manually**:
 ```powershell
-Start-ScheduledTask -TaskName "ShragaWorker"
+Start-ScheduledTask -TaskName "ShragaSW"
 ```
 
 **Stop task**:
 ```powershell
-Stop-ScheduledTask -TaskName "ShragaWorker"
+Stop-ScheduledTask -TaskName "ShragaSW"
 ```
 
 **Disable auto-start**:
 ```powershell
-Disable-ScheduledTask -TaskName "ShragaWorker"
+Disable-ScheduledTask -TaskName "ShragaSW"
 ```
 
 ---
@@ -313,7 +313,7 @@ Disable-ScheduledTask -TaskName "ShragaWorker"
 
 **Check Task Scheduler**:
 ```powershell
-Get-ScheduledTask -TaskName "ShragaWorker" | Get-ScheduledTaskInfo
+Get-ScheduledTask -TaskName "ShragaSW" | Get-ScheduledTaskInfo
 ```
 
 **Check worker logs**:

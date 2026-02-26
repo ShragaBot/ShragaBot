@@ -1,7 +1,7 @@
 """
-Tests for Personal Task Manager -- Thin Wrapper Architecture + DV-based sessions.
+Tests for Personal Shraga -- Thin Wrapper Architecture + DV-based sessions.
 
-The PM is now a thin wrapper around a persistent Claude Code session.
+The PS is now a thin wrapper around a persistent Claude Code session.
 All tool dispatch code has been removed. Claude Code reads CLAUDE.md
 and runs scripts directly. Session resolution uses Dataverse (cr_processed_by)
 as the single source of truth -- no local JSON files. These tests verify:
@@ -9,9 +9,9 @@ as the single source of truth -- no local JSON files. These tests verify:
   - Session resolution via resolve_session()
   - Stale outbound cleanup (preserved)
   - Claude Code subprocess delegation (preserved)
-  - cr_claimed_by format: pm:version:box:instance_id (new)
+  - cr_claimed_by format: ps:version:box:instance_id (new)
   - cr_processed_by written on outbound rows (new)
-  - [PM:xxxx] message prefix (new)
+  - [PS:xxxx] message prefix (new)
   - No tool dispatch code remains (preserved)
 """
 import json
@@ -218,16 +218,16 @@ class TestClaim:
         assert manager.claim_message(SAMPLE_INBOUND_MSG) is True
 
     def test_claim_sends_correct_body(self, manager):
-        """cr_claimed_by should use new format: pm:version:box:instance_id."""
+        """cr_claimed_by should use new format: ps:version:box:instance_id."""
         manager.dv.patch.return_value = FakeResponse(status_code=204)
         manager.claim_message(SAMPLE_INBOUND_MSG)
         call_kwargs = manager.dv.patch.call_args[1]
         body = call_kwargs["data"]
         assert body["cr_status"] == "Claimed"
         claimed_by = body["cr_claimed_by"]
-        assert claimed_by.startswith("pm:")
+        assert claimed_by.startswith("ps:")
         parts = claimed_by.split(":")
-        assert len(parts) == 4  # pm:version:box:instance_id
+        assert len(parts) == 4  # ps:version:box:instance_id
 
     def test_claim_fails_on_conflict(self, manager):
         from dv_client import ETagConflictError
@@ -272,7 +272,7 @@ class TestResponse:
         assert body["cr_useremail"] == "testuser@example.com"
 
     def test_send_response_with_session_prefix(self, manager):
-        """Response with session_id gets [PM:xxxx] prefix."""
+        """Response with session_id gets [PS:xxxx] prefix."""
         manager.dv.post.return_value = FakeResponse(json_data={})
         manager.send_response(
             in_reply_to=SAMPLE_CONVERSATION_ID,
@@ -281,7 +281,7 @@ class TestResponse:
             session_id="a7f3c2d1-abcd-1234",
         )
         body = manager.dv.post.call_args[1]["data"]
-        assert body["cr_message"] == "[PM:a7f3] Task created!"
+        assert body["cr_message"] == "[PS:a7f3] Task created!"
 
     def test_send_response_with_processed_by(self, manager):
         """cr_processed_by is written on outbound row when provided."""
@@ -290,10 +290,10 @@ class TestResponse:
             in_reply_to="row-1",
             mcs_conversation_id="mcs-1",
             text="Hi",
-            processed_by="pm:v19:some-session-id",
+            processed_by="ps:v19:some-session-id",
         )
         body = manager.dv.post.call_args[1]["data"]
-        assert body["cr_processed_by"] == "pm:v19:some-session-id"
+        assert body["cr_processed_by"] == "ps:v19:some-session-id"
 
     def test_send_response_truncates_name(self, manager):
         manager.dv.post.return_value = FakeResponse(json_data={})
@@ -329,7 +329,7 @@ class TestConstructor:
     def test_has_agent_role(self):
         """Module should have AGENT_ROLE constant."""
         from task_manager import AGENT_ROLE
-        assert AGENT_ROLE == "PM"
+        assert AGENT_ROLE == "PS"
 
     def test_has_version(self, manager):
         """Manager should have _my_version attribute."""
@@ -376,7 +376,7 @@ class TestModuleConstants:
 
     def test_agent_role_constant(self):
         from task_manager import AGENT_ROLE
-        assert AGENT_ROLE == "PM"
+        assert AGENT_ROLE == "PS"
 
 
 # -- Session Resolution Tests (replaces old TestSessionPersistence) -----------
@@ -545,7 +545,7 @@ class TestClaudeCodeSubprocess:
         assert manager.dv.post.called
         call_kwargs = manager.dv.post.call_args[1]
         body = call_kwargs["data"]
-        # Message will have [PM:sess] prefix because session_id is "sess-123"
+        # Message will have [PS:sess] prefix because session_id is "sess-123"
         assert "Task created successfully!" in body["cr_message"]
         assert body["cr_direction"] == "Outbound"
         assert body["cr_in_reply_to"] == SAMPLE_CONVERSATION_ID
@@ -709,7 +709,7 @@ class TestFullFlow:
         # Verify Claude was called
         assert mock_popen.called
 
-        # Verify response was sent to DV (may have [PM:flow] prefix)
+        # Verify response was sent to DV (may have [PS:flow] prefix)
         assert manager.dv.post.called
         call_kwargs = manager.dv.post.call_args[1]
         assert "I have created the task for you." in call_kwargs["data"]["cr_message"]
@@ -738,13 +738,13 @@ class TestFullFlow:
 
         body = manager.dv.post.call_args[1]["data"]
         assert "cr_processed_by" in body
-        assert body["cr_processed_by"].startswith("pm:")
+        assert body["cr_processed_by"].startswith("ps:")
         assert "sess-abc123" in body["cr_processed_by"]
 
     @patch("task_manager.subprocess.Popen")
     @patch("task_manager.resolve_session", return_value=(None, "", None))
     def test_pm_prefix_on_outbound(self, mock_resolve, mock_popen, manager):
-        """Outbound message should have [PM:xxxx] prefix."""
+        """Outbound message should have [PS:xxxx] prefix."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
                 "result": "Hello!",
@@ -758,26 +758,26 @@ class TestFullFlow:
         manager.process_message(SAMPLE_INBOUND_MSG)
 
         body = manager.dv.post.call_args[1]["data"]
-        assert body["cr_message"].startswith("[PM:sess]")
+        assert body["cr_message"].startswith("[PS:sess]")
 
 
 # -- Follow-up Detection Tests -- T045 (REMOVED) ------------------------------
-# followup_expected detection was removed from the PM. Card link delivery is now
+# followup_expected detection was removed from the PS. Card link delivery is now
 # handled entirely by the TaskRunner Power Automate flow sending directly to the
-# MCS bot chat. The PM just sends its response -- fire and forget.
+# MCS bot chat. The PS just sends its response -- fire and forget.
 # -----------------------------------------------------------------------
 
 class _RemovedTestFollowupDetection:
     """REMOVED: Tests for the old task_created / followup_expected detection heuristic.
 
-    When the PM creates a task, Claude responds with "Submitted! ID: <uuid>".
-    The PM must detect this and set cr_followup_expected='true' so the MCS topic
+    When the PS creates a task, Claude responds with "Submitted! ID: <uuid>".
+    The PS must detect this and set cr_followup_expected='true' so the MCS topic
     loops back and calls SendMessage again to deliver the card link message.
     """
 
     @patch("task_manager.subprocess.Popen")
     def test_submitted_with_id_sets_followup_true(self, mock_popen, manager):
-        """PM response 'Submitted! ID: <uuid>' must set cr_followup_expected='true'."""
+        """PS response 'Submitted! ID: <uuid>' must set cr_followup_expected='true'."""
         mock_popen.return_value = _make_popen_mock(
             stdout=json.dumps({
                 "result": "Submitted! ID: 5bd5cda3-4a11-f111-8341-002248d570fd\n\nWorker will handle it.",
@@ -792,7 +792,7 @@ class _RemovedTestFollowupDetection:
 
         body = manager.dv.post.call_args[1]["data"]
         assert body["cr_followup_expected"] == "true", \
-            "PM must set followup_expected=true when response contains 'Submitted! ID:'"
+            "PS must set followup_expected=true when response contains 'Submitted! ID:'"
 
     @patch("task_manager.subprocess.Popen")
     def test_submitted_id_lowercase_sets_followup(self, mock_popen, manager):
@@ -887,12 +887,12 @@ class _RemovedTestFollowupDetection:
         assert body["cr_followup_expected"] == ""
 
 
-# -- Post-Refactor: PM Monitor / Provision Delegation Tests (T045) ----------
+# -- Post-Refactor: PS Monitor / Provision Delegation Tests (T045) ----------
 
 class TestMonitorTaskPostRefactor:
     """Verify that the post-refactor polling loop calls poll and cleanup.
 
-    After the sweep_stale_tasks removal, the PM's run() loop only calls
+    After the sweep_stale_tasks removal, the PS's run() loop only calls
     poll_unclaimed and cleanup_stale_outbound. This test exercises a single
     iteration and asserts that:
       1. poll_unclaimed is called to check for new messages.
@@ -949,9 +949,9 @@ class TestMonitorTaskPostRefactor:
 class TestProvisionDelegationPostRefactor:
     """Verify that provisioning is delegated to Claude Code after the refactor.
 
-    Pre-refactor, the PM had a _tool_provision_devbox method that directly
+    Pre-refactor, the PS had a _tool_provision_devbox method that directly
     called the DevCenter API and ran customization scripts. Post-refactor,
-    the PM is a thin wrapper: it sends the user's message to Claude Code
+    the PS is a thin wrapper: it sends the user's message to Claude Code
     via subprocess, and Claude Code autonomously decides to run provisioning
     scripts (scripts/get_user_state.py, etc.) based on CLAUDE.md instructions.
 
@@ -971,7 +971,7 @@ class TestProvisionDelegationPostRefactor:
     ):
         """Provisioning is fully delegated to Claude Code via the CLI subprocess.
 
-        When a user says 'provision a dev box', the PM does NOT have its own
+        When a user says 'provision a dev box', the PS does NOT have its own
         provisioning logic. Instead it:
           1. Passes the message to Claude CLI (subprocess.run with 'claude').
           2. Claude Code reads CLAUDE.md and decides to run provisioning scripts.
@@ -1022,7 +1022,7 @@ class TestProvisionDelegationPostRefactor:
 
         # 1. Verify that _tool_provision_devbox does NOT exist (delegation, not direct)
         assert not hasattr(manager, "_tool_provision_devbox"), (
-            "Post-refactor PM must NOT have _tool_provision_devbox -- "
+            "Post-refactor PS must NOT have _tool_provision_devbox -- "
             "provisioning is delegated to Claude Code"
         )
 
@@ -1079,7 +1079,7 @@ class TestProvisionDelegationPostRefactor:
         for c in manager.dv.post.call_args_list:
             url = c[0][0] if c[0] else ""
             assert "devcenter" not in url.lower(), (
-                "PM must NOT make direct DevCenter API calls -- "
+                "PS must NOT make direct DevCenter API calls -- "
                 "provisioning is delegated to Claude Code"
             )
 

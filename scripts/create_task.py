@@ -2,7 +2,7 @@
 """
 Create a task in Dataverse with all required fields set deterministically.
 
-This script is the ONLY way the PM should create tasks. It ensures all
+This script is the ONLY way the PS should create tasks. It ensures all
 fields are set correctly and waits for the TaskRunner flow to post the
 Adaptive Card before returning (synchronous).
 

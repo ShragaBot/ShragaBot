@@ -1,5 +1,5 @@
-# Shraga Worker Box Setup (additional dev box — Worker only, no PM)
-# Use this for your 2nd, 3rd, etc. dev boxes. PM stays on your main box.
+# Shraga Worker Box Setup (additional Shraga Box — SW only, no PS)
+# Use this for your 2nd, 3rd, etc. Shraga Boxes. PS stays on your main box.
 #
 # Usage: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-workerbox.ps1 | iex
 

@@ -1,5 +1,5 @@
 """
-Integrated Task Worker - Combines Dataverse polling with autonomous agent execution
+Integrated Shraga Worker - Combines Dataverse polling with autonomous agent execution
 
 Polls Dataverse for tasks → Executes using Worker/Verifier loop → Updates Dataverse
 """
@@ -676,7 +676,7 @@ JSON output:"""
 
         data = {
             "cr_name": title,
-            "cr_from": "Integrated Task Worker",
+            "cr_from": "Shraga Worker",
             "cr_to": WEBHOOK_USER,
             "cr_content": message  # Full message, no character limit
         }
@@ -699,7 +699,7 @@ JSON output:"""
                 truncated_message = message[:10000] + "\n\n... (truncated - full result saved in task record)"
                 truncated_data = {
                     "cr_name": title,
-                    "cr_from": "Integrated Task Worker",
+                    "cr_from": "Shraga Worker",
                     "cr_to": WEBHOOK_USER,
                     "cr_content": truncated_message
                 }
@@ -1091,7 +1091,7 @@ JSON output:"""
                 f"| Terminal Status | **{terminal_status}** |",
                 f"| Timestamp | {timestamp} |",
                 f"| Dev Box | `{dev_box}` |",
-                f"| Worker Version | `{self._my_version}` |",
+                f"| SW Version | `{self._my_version}` |",
                 f"| Claude Session ID | `{session_id}` |",
                 f"| Working Directory | `{working_dir}` |",
             ]
@@ -1758,16 +1758,16 @@ Report what you reverted at the end.
                 _log("[FATAL] Could not identify user")
                 return
 
-        _log(f"Worker started for user: {self.current_user_id}")
+        _log(f"Shraga Worker started for user: {self.current_user_id}")
         _log(f"Current version: {self._my_version}")
 
         # Clean up any tasks left in Running from a previous crash
         self._cleanup_orphaned_tasks()
 
-        _log("\n[POLLING] Monitoring for pending tasks...\n")
+        _log("\n[SW] Monitoring for pending tasks...\n")
 
         # Send startup notification
-        self.send_to_webhook(f"Worker started (v{self._my_version}) on {MACHINE_NAME}")
+        self.send_to_webhook(f"Shraga Worker started (v{self._my_version}) on {MACHINE_NAME}")
 
         # Heartbeat tracking
         last_heartbeat = 0
@@ -1782,7 +1782,7 @@ Report what you reverted at the end.
                     _now_hb = time.time()
                     if _now_hb - _last_log_heartbeat > 60:
                         _uptime = int(_now_hb - _start_time)
-                        _log(f"[HEARTBEAT] Worker alive | version={self._my_version} | uptime={_uptime}s | box={MACHINE_NAME}")
+                        _log(f"[HEARTBEAT] SW alive | version={self._my_version} | uptime={_uptime}s | box={MACHINE_NAME}")
                         _last_log_heartbeat = _now_hb
 
                     # Poll for pending tasks
@@ -1838,10 +1838,10 @@ Report what you reverted at the end.
                     raise  # Let these propagate -- don't catch sys.exit() or Ctrl+C
                 except BaseException as e:
                     _log(f"\n[ERROR] Unexpected error in worker loop: {type(e).__name__}: {e}")
-                    _log_to_file(f"[ERROR] Worker loop traceback:\n{traceback.format_exc()}")
-                    self._cleanup_in_progress_task(f"Worker loop error: {e}")
+                    _log_to_file(f"[ERROR] SW loop traceback:\n{traceback.format_exc()}")
+                    self._cleanup_in_progress_task(f"SW loop error: {e}")
                     try:
-                        self.send_to_webhook(f"Worker error (recovering): {type(e).__name__}: {e}")
+                        self.send_to_webhook(f"SW error (recovering): {type(e).__name__}: {e}")
                     except Exception:
                         pass
                     time.sleep(60)
@@ -1849,13 +1849,13 @@ Report what you reverted at the end.
 
         except KeyboardInterrupt:
             _log("\n\n[INTERRUPT] Stopping worker...")
-            self._cleanup_in_progress_task("Worker interrupted by user")
+            self._cleanup_in_progress_task("SW interrupted by user")
             try:
                 self.send_to_webhook("Task worker stopped")
             except Exception:
                 pass
 
-        _log("[SHUTDOWN] Worker stopped")
+        _log("[SHUTDOWN] SW stopped")
 
     def _cleanup_in_progress_task(self, reason: str):
         """Mark the current in-progress task as failed so it doesn't stay stuck in RUNNING.
@@ -1874,7 +1874,7 @@ Report what you reverted at the end.
             self.update_task(
                 self.current_task_id,
                 status=STATUS_FAILED,
-                status_message=f"Worker shutdown: {reason}",
+                status_message=f"SW shutdown: {reason}",
                 result=f"Error: {full_error[:5000]}"
             )
 
@@ -1950,7 +1950,7 @@ Report what you reverted at the end.
             _log(f"[WARN] Could not check for orphaned tasks: {e}")
             return
 
-        error_msg = "Worker process died while executing this task. The task was left in Running state and has been marked as failed on restart."
+        error_msg = "Shraga Worker process died while executing this task. The task was left in Running state and has been marked as failed on restart."
 
         for task in orphans:
             tid = task.get("cr_shraga_taskid")
@@ -1997,7 +1997,7 @@ if __name__ == "__main__":
         worker = IntegratedTaskWorker()
         worker.run()
     except KeyboardInterrupt:
-        _log("[SHUTDOWN] Worker stopped by user (Ctrl+C)")
+        _log("[SHUTDOWN] SW stopped by user (Ctrl+C)")
     except SystemExit:
         raise  # Let sys.exit() propagate with its original exit code
     except BaseException as e:
@@ -2005,7 +2005,7 @@ if __name__ == "__main__":
         # Capture as much context as possible for post-mortem debugging.
         import traceback
         tb = traceback.format_exc()
-        _log(f"[CRITICAL] Worker process dying: {type(e).__name__}: {e}")
+        _log(f"[CRITICAL] SW process dying: {type(e).__name__}: {e}")
         _log(f"[CRITICAL] Traceback:\n{tb}")
         _log(f"[CRITICAL] Version: {getattr(worker, '_my_version', 'unknown') if 'worker' in dir() else 'unknown'}")
         _log(f"[CRITICAL] Current task: {getattr(worker, 'current_task_id', 'none') if 'worker' in dir() else 'unknown'}")

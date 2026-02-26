@@ -34,7 +34,7 @@ This automatically:
 2. `updater.py` checks GitHub for `release/v*` branches via `git ls-remote --heads`
 3. If a higher version exists, downloads as zip, extracts to `C:\Dev\Shraga\releases\vN\`
 4. Updates `C:\Dev\Shraga\current_version.txt`
-5. Worker/PM detect version mismatch on next poll cycle, exit gracefully
+5. SW/PS detect version mismatch on next poll cycle, exit gracefully
 6. Watchdog (scheduled task) restarts them from the new release folder via `.cmd` wrappers
 
 ## Running Tests
@@ -54,7 +54,7 @@ All tests must pass before pushing. Currently 651+ tests.
 | Source repo (GitHub) | `github.com/ShragaBot/ShragaBot` |
 | Dev box releases | `C:\Dev\Shraga\releases\vN\` |
 | Current version | `C:\Dev\Shraga\current_version.txt` |
-| Service wrappers | `%LOCALAPPDATA%\Shraga\ShragaWorker.cmd` etc. |
+| Service wrappers | `%LOCALAPPDATA%\Shraga\ShragaSW.cmd` etc. |
 
 ## Checking Dev Box Status
 
@@ -62,12 +62,12 @@ On the dev box:
 
 ```powershell
 # Version and service status
-Get-Content C:\Dev\Shraga\current_version.txt; Get-ScheduledTask ShragaWorker,ShragaPM | Select TaskName,State | Format-Table
+Get-Content C:\Dev\Shraga\current_version.txt; Get-ScheduledTask ShragaSW,ShragaPS | Select TaskName,State | Format-Table
 
 # Force updater to run now
 Start-ScheduledTask -TaskName ShragaUpdater
 
-# Check Worker logs
+# Check SW logs
 Get-Content $env:TEMP\shraga-worker.log -Tail 50
 ```
 

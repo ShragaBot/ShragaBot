@@ -86,13 +86,13 @@ class TestSameVersionSameRole:
         """Should resume the previous session when file exists on disk."""
         mock_find.return_value = "/home/user/.claude/projects/abc/sess-123.jsonl"
         rows = [
-            _make_outbound_row(processed_by="pm:v19:sess-123-full-uuid", createdon="2026-02-25T10:01:00Z"),
+            _make_outbound_row(processed_by="ps:v19:sess-123-full-uuid", createdon="2026-02-25T10:01:00Z"),
             _make_inbound_row(createdon="2026-02-25T10:00:00Z"),
         ]
         dv = _make_dv_mock(rows)
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         assert session_id == "sess-123-full-uuid"
@@ -104,13 +104,13 @@ class TestSameVersionSameRole:
         """Should start new session with context when file is missing."""
         mock_find.return_value = None
         rows = [
-            _make_outbound_row(processed_by="pm:v19:sess-gone-uuid", createdon="2026-02-25T10:01:00Z"),
+            _make_outbound_row(processed_by="ps:v19:sess-gone-uuid", createdon="2026-02-25T10:01:00Z"),
             _make_inbound_row(message="Hi there", createdon="2026-02-25T10:00:00Z"),
         ]
         dv = _make_dv_mock(rows)
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         assert session_id is None  # New session
@@ -122,43 +122,43 @@ class TestSameVersionDifferentRole:
     """Same version + different role -> new session + cross-agent context."""
 
     @patch("session_utils._find_session_file")
-    def test_cross_agent_handoff_gm_to_pm(self, mock_find):
-        """PM picking up after GM should get cross-agent context."""
+    def test_cross_agent_handoff_gs_to_ps(self, mock_find):
+        """PS picking up after GS should get cross-agent context."""
         mock_find.return_value = None
         rows = [
-            _make_outbound_row(processed_by="gm:v19:gm-session-id", createdon="2026-02-25T10:05:00Z", message="GM response"),
-            _make_inbound_row(message="User question to GM", createdon="2026-02-25T10:04:00Z"),
-            _make_outbound_row(processed_by="gm:v19:gm-session-id", createdon="2026-02-25T10:03:00Z", message="GM first response"),
+            _make_outbound_row(processed_by="gs:v19:gs-session-id", createdon="2026-02-25T10:05:00Z", message="GS response"),
+            _make_inbound_row(message="User question to GS", createdon="2026-02-25T10:04:00Z"),
+            _make_outbound_row(processed_by="gs:v19:gs-session-id", createdon="2026-02-25T10:03:00Z", message="GS first response"),
             _make_inbound_row(message="First user msg", createdon="2026-02-25T10:02:00Z"),
         ]
         dv = _make_dv_mock(rows)
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         assert session_id is None  # New session
-        assert "handled by the gm" in context.lower()
-        assert "you are the pm" in context.lower()
+        assert "handled by the gs" in context.lower()
+        assert "you are the ps" in context.lower()
         assert "picking up this conversation" in context.lower()
 
     @patch("session_utils._find_session_file")
-    def test_cross_agent_handoff_pm_to_gm(self, mock_find):
-        """GM picking up after PM should get cross-agent context."""
+    def test_cross_agent_handoff_ps_to_gs(self, mock_find):
+        """GS picking up after PS should get cross-agent context."""
         mock_find.return_value = None
         rows = [
-            _make_outbound_row(processed_by="pm:v19:pm-session-id", createdon="2026-02-25T10:05:00Z", message="PM response"),
+            _make_outbound_row(processed_by="ps:v19:ps-session-id", createdon="2026-02-25T10:05:00Z", message="PS response"),
             _make_inbound_row(message="User msg", createdon="2026-02-25T10:04:00Z"),
         ]
         dv = _make_dv_mock(rows)
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="gm"
+            dv, "mcs-conv-123", my_version="v19", my_role="gs"
         )
 
         assert session_id is None
-        assert "handled by the pm" in context.lower()
-        assert "you are the gm" in context.lower()
+        assert "handled by the ps" in context.lower()
+        assert "you are the gs" in context.lower()
 
 
 class TestDifferentVersion:
@@ -169,13 +169,13 @@ class TestDifferentVersion:
         """Version change with same role should inject history context."""
         mock_find.return_value = None
         rows = [
-            _make_outbound_row(processed_by="pm:v18:old-session-id", createdon="2026-02-25T10:01:00Z", message="Old PM response"),
+            _make_outbound_row(processed_by="ps:v18:old-session-id", createdon="2026-02-25T10:01:00Z", message="Old PS response"),
             _make_inbound_row(message="User message", createdon="2026-02-25T10:00:00Z"),
         ]
         dv = _make_dv_mock(rows)
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         assert session_id is None  # New session
@@ -187,13 +187,13 @@ class TestDifferentVersion:
         """Version change with different role should also inject context."""
         mock_find.return_value = None
         rows = [
-            _make_outbound_row(processed_by="gm:v18:old-gm-session", createdon="2026-02-25T10:01:00Z", message="Old GM response"),
+            _make_outbound_row(processed_by="gs:v18:old-gs-session", createdon="2026-02-25T10:01:00Z", message="Old GS response"),
             _make_inbound_row(message="User msg", createdon="2026-02-25T10:00:00Z"),
         ]
         dv = _make_dv_mock(rows)
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         assert session_id is None
@@ -204,13 +204,13 @@ class TestDifferentVersion:
         """If prev session file exists on disk, include its path in context."""
         mock_find.return_value = "/home/user/.claude/projects/enc/old-session.jsonl"
         rows = [
-            _make_outbound_row(processed_by="pm:v18:old-session", createdon="2026-02-25T10:01:00Z"),
+            _make_outbound_row(processed_by="ps:v18:old-session", createdon="2026-02-25T10:01:00Z"),
             _make_inbound_row(createdon="2026-02-25T10:00:00Z"),
         ]
         dv = _make_dv_mock(rows)
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         assert session_id is None
@@ -226,7 +226,7 @@ class TestNoPreviousMessages:
         dv = _make_dv_mock([])
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-brand-new", my_version="v19", my_role="pm"
+            dv, "mcs-conv-brand-new", my_version="v19", my_role="ps"
         )
 
         assert session_id is None
@@ -241,7 +241,7 @@ class TestNoPreviousMessages:
         dv = _make_dv_mock(rows)
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         assert session_id is None
@@ -261,7 +261,7 @@ class TestMalformedData:
         dv = _make_dv_mock(rows)
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         assert session_id is None
@@ -277,7 +277,7 @@ class TestMalformedData:
         dv = _make_dv_mock(rows)
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         assert session_id is None
@@ -285,13 +285,13 @@ class TestMalformedData:
     def test_malformed_processed_by_partial(self):
         """Malformed cr_processed_by (only 2 parts) -> new session."""
         rows = [
-            _make_outbound_row(processed_by="pm:v19", createdon="2026-02-25T10:01:00Z"),
+            _make_outbound_row(processed_by="ps:v19", createdon="2026-02-25T10:01:00Z"),
             _make_inbound_row(createdon="2026-02-25T10:00:00Z"),
         ]
         dv = _make_dv_mock(rows)
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         assert session_id is None
@@ -307,7 +307,7 @@ class TestDvFailure:
         dv.get.side_effect = Exception("Network error")
 
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         assert session_id is None
@@ -322,11 +322,11 @@ class TestContextFormatting:
         """Basic formatting of inbound/outbound messages."""
         rows = [
             _make_inbound_row(message="Hello", createdon="2026-02-25T10:00:00Z"),
-            _make_outbound_row(message="Hi there!", createdon="2026-02-25T10:01:00Z", processed_by="pm:v19:sess-1"),
+            _make_outbound_row(message="Hi there!", createdon="2026-02-25T10:01:00Z", processed_by="ps:v19:sess-1"),
         ]
         result = _format_conversation_history(rows)
         assert "User: Hello" in result
-        assert "PM: Hi there!" in result
+        assert "PS: Hi there!" in result
 
     def test_format_conversation_history_empty(self):
         """Empty rows -> empty string."""
@@ -347,17 +347,17 @@ class TestRoleCaseInsensitivity:
 
     @patch("session_utils._find_session_file")
     def test_uppercase_role_matches(self, mock_find):
-        """PM role in processed_by should match 'pm' in my_role."""
+        """PS role in processed_by should match 'ps' in my_role."""
         mock_find.return_value = "/path/to/session.jsonl"
         rows = [
-            _make_outbound_row(processed_by="PM:v19:sess-upper", createdon="2026-02-25T10:01:00Z"),
+            _make_outbound_row(processed_by="PS:v19:sess-upper", createdon="2026-02-25T10:01:00Z"),
             _make_inbound_row(createdon="2026-02-25T10:00:00Z"),
         ]
         dv = _make_dv_mock(rows)
 
-        # my_role is lowercase "pm", processed_by has uppercase "PM"
+        # my_role is lowercase "ps", processed_by has uppercase "PS"
         session_id, context, prev_path = resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm"
+            dv, "mcs-conv-123", my_version="v19", my_role="ps"
         )
 
         # Should still resume (case-insensitive match)
@@ -367,21 +367,21 @@ class TestRoleCaseInsensitivity:
 class TestMessagePrefix:
     """Verify message prefix format [ROLE:xxxx]."""
 
-    def test_pm_prefix_format(self):
-        """PM prefix should be [PM:xxxx] where xxxx is first 4 chars of session ID."""
+    def test_ps_prefix_format(self):
+        """PS prefix should be [PS:xxxx] where xxxx is first 4 chars of session ID."""
         session_id = "a7f3c2d1-8b2e-4f1a-9c3d-5e6f7a8b9c0d"
-        role = "PM"
+        role = "PS"
         session_short = session_id[:4]
         prefix = f"[{role}:{session_short}]"
-        assert prefix == "[PM:a7f3]"
+        assert prefix == "[PS:a7f3]"
 
-    def test_gm_prefix_format(self):
-        """GM prefix should be [GM:xxxx]."""
+    def test_gs_prefix_format(self):
+        """GS prefix should be [GS:xxxx]."""
         session_id = "b2e1c9d4-1234-5678-abcd-ef0123456789"
-        role = "GM"
+        role = "GS"
         session_short = session_id[:4]
         prefix = f"[{role}:{session_short}]"
-        assert prefix == "[GM:b2e1]"
+        assert prefix == "[GS:b2e1]"
 
 
 class TestProcessedByFormat:
@@ -389,20 +389,20 @@ class TestProcessedByFormat:
 
     def test_processed_by_format(self):
         """cr_processed_by should be role:version:session_id."""
-        role = "pm"
+        role = "ps"
         version = "v19"
         session_id = "a7f3c2d1-8b2e-4f1a-9c3d-5e6f7a8b9c0d"
         processed_by = f"{role}:{version}:{session_id}"
-        assert processed_by == "pm:v19:a7f3c2d1-8b2e-4f1a-9c3d-5e6f7a8b9c0d"
+        assert processed_by == "ps:v19:a7f3c2d1-8b2e-4f1a-9c3d-5e6f7a8b9c0d"
 
     def test_claimed_by_format(self):
         """cr_claimed_by should be role:version:box:instance_id."""
-        role = "pm"
+        role = "ps"
         version = "v19"
         box = "CPC-sagik-HC8YC"
         instance_id = "1439be25"
         claimed_by = f"{role}:{version}:{box}:{instance_id}"
-        assert claimed_by == "pm:v19:CPC-sagik-HC8YC:1439be25"
+        assert claimed_by == "ps:v19:CPC-sagik-HC8YC:1439be25"
 
 
 class TestFindSessionFile:
@@ -445,7 +445,7 @@ class TestLogCallback:
         dv = _make_dv_mock([])
 
         resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm",
+            dv, "mcs-conv-123", my_version="v19", my_role="ps",
             log_fn=lambda msg: log_messages.append(msg)
         )
 
@@ -457,13 +457,13 @@ class TestLogCallback:
         mock_find.return_value = "/path/to/file.jsonl"
         log_messages = []
         rows = [
-            _make_outbound_row(processed_by="pm:v19:sess-resume", createdon="2026-02-25T10:01:00Z"),
+            _make_outbound_row(processed_by="ps:v19:sess-resume", createdon="2026-02-25T10:01:00Z"),
             _make_inbound_row(createdon="2026-02-25T10:00:00Z"),
         ]
         dv = _make_dv_mock(rows)
 
         resolve_session(
-            dv, "mcs-conv-123", my_version="v19", my_role="pm",
+            dv, "mcs-conv-123", my_version="v19", my_role="ps",
             log_fn=lambda msg: log_messages.append(msg)
         )
 

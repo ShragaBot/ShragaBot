@@ -21,9 +21,9 @@ New architecture per SHRAGA_SPEC_2026-02-15.md. Relay flow created FROM WITHIN C
 ## Next steps (priority order)
 1. **Test via Teams**: Send a message to the stam bot in Teams and verify the flow runs and creates a row in cr_shraga_conversations
 2. **Upgrade flow to poll for response**: Replace the static ack with a Do Until loop that polls cr_shraga_conversations for an outbound response (direction=2, cr_in_reply_to = inbound row ID). This enables the full relay pattern where the bot waits for the task manager's response.
-3. **Start Task Manager**: Run `task-manager/task_manager.py` to poll conversations and respond
-4. **Start Global Manager**: Run `global-manager/global_manager.py` as fallback
-5. **Wire Global Manager to DevBoxManager** for real user onboarding/provisioning
+3. **Start Personal Shraga**: Run `task-manager/task_manager.py` to poll conversations and respond
+4. **Start Global Shraga**: Run `global-manager/global_manager.py` as fallback
+5. **Wire Global Shraga to DevBoxManager** for real user onboarding/provisioning
 6. **Add deep link notifications** when tasks start running
 
 ## Key IDs

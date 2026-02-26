@@ -1,5 +1,5 @@
 """
-Global Manager -- Thin wrapper + persistent Claude Code session architecture.
+Global Shraga -- Thin wrapper + persistent Claude Code session architecture.
 
 Polls the conversations table for any unclaimed inbound messages older than 15s.
 Handles new user onboarding (dev box provisioning) and users whose personal
@@ -9,13 +9,13 @@ Session continuity is managed by session_utils.resolve_session(), which uses
 Dataverse (cr_processed_by column) as the single source of truth. No local
 session JSON files.
 
-The GM's responsibilities are limited to:
+The GS's responsibilities are limited to:
   1. Poll DV for unclaimed Inbound messages
   2. Claim messages with ETag-based optimistic concurrency
   3. Resolve session via DV-based session_utils
   4. Run `claude --resume {session_id} --print -p "{user_message}"`
   5. Write Claude's response back to DV with cr_processed_by
-  6. Add [GM:xxxx] message prefix for session tracking
+  6. Add [GS:xxxx] message prefix for session tracking
 
 The ONLY hardcoded user-facing message is the single fallback for when Claude
 Code is completely unavailable:
@@ -40,9 +40,9 @@ from session_utils import resolve_session, sanitize_odata
 
 os.environ.setdefault('PYTHONUNBUFFERED', '1')
 
-# Unique instance ID for this process (helps distinguish multiple GM instances)
+# Unique instance ID for this process (helps distinguish multiple GS instances)
 INSTANCE_ID = uuid.uuid4().hex[:8]
-AGENT_ROLE = "GM"
+AGENT_ROLE = "GS"
 
 # --- File logging ---
 _LOG_FILE = Path(__file__).parent / "gm.log"
@@ -126,7 +126,7 @@ def get_credential():
     return cred
 
 
-# ── Global Manager ───────────────────────────────────────────────────────
+# ── Global Shraga ────────────────────────────────────────────────────────
 
 class GlobalManager:
     """Thin wrapper manager for orphaned messages and new user onboarding.
@@ -136,7 +136,7 @@ class GlobalManager:
     """
 
     def __init__(self):
-        self.manager_id = "global"
+        self.manager_id = "gs"
         self.credential = get_credential()
         self.dv = DataverseClient(
             credential=self.credential,
@@ -145,7 +145,7 @@ class GlobalManager:
         )
         self._known_users: set[str] = set()
         # System prompt file path (passed via --system-prompt-file)
-        prompt_file = Path(__file__).parent / "GM_SYSTEM_PROMPT.md"
+        prompt_file = Path(__file__).parent / "GS_SYSTEM_PROMPT.md"
         self._system_prompt_file = str(prompt_file) if prompt_file.exists() else ""
         if self._system_prompt_file:
             _log(f"[CONFIG] System prompt: {prompt_file} ({prompt_file.stat().st_size} bytes)")
@@ -250,7 +250,7 @@ class GlobalManager:
     def cleanup_stale_claimed(self, max_age_minutes: int = 15):
         """Mark stale Claimed inbound messages as Expired (drop them).
 
-        Runs on GM startup.  Messages stuck in Claimed longer than
+        Runs on GS startup.  Messages stuck in Claimed longer than
         max_age_minutes are from a previous crash — too old to respond to.
         """
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -295,9 +295,9 @@ class GlobalManager:
     def send_response(self, in_reply_to: str, mcs_conversation_id: str,
                       user_email: str, text: str, followup_expected: bool = False,
                       session_id: str = "", processed_by: str = ""):
-        """Write outbound response to DV with [GM:xxxx] prefix and cr_processed_by."""
+        """Write outbound response to DV with [GS:xxxx] prefix and cr_processed_by."""
         try:
-            # Add message prefix: [GM:xxxx] text
+            # Add message prefix: [GS:xxxx] text
             prefixed_text = text
             if session_id:
                 session_short = session_id[:4]
@@ -399,7 +399,7 @@ class GlobalManager:
             self.mark_processed(row_id)
             return
 
-        _log(f"[GLOBAL] Processing orphaned message from {user_email}: {user_text[:80]}...")
+        _log(f"[GS] Processing orphaned message from {user_email}: {user_text[:80]}...")
 
         # Build the prompt with context for Claude Code
         prompt = (
@@ -466,7 +466,7 @@ class GlobalManager:
         if sys.platform == "win32":
             sys.stdout.reconfigure(encoding='utf-8')
             sys.stderr.reconfigure(encoding='utf-8')
-        _log(f"[START] Global Manager (thin wrapper) | version={self._my_version} | instance={INSTANCE_ID} | pid={os.getpid()}")
+        _log(f"[START] Global Shraga (thin wrapper) | version={self._my_version} | instance={INSTANCE_ID} | pid={os.getpid()}")
         _log(f"[CONFIG] Dataverse: {DATAVERSE_URL}")
         _log(f"[CONFIG] Users table: {USERS_TABLE}")
         _log(f"[CONFIG] Claim delay: new users={CLAIM_DELAY_NEW_USER}s, known users={CLAIM_DELAY_KNOWN_USER}s")
@@ -483,7 +483,7 @@ class GlobalManager:
                 _now_hb = time.time()
                 if _now_hb - _last_heartbeat > 60:
                     _uptime = int(_now_hb - _start_time)
-                    _log(f"[HEARTBEAT] GM alive | version={self._my_version} | uptime={_uptime}s | instance={INSTANCE_ID}")
+                    _log(f"[HEARTBEAT] GS alive | version={self._my_version} | uptime={_uptime}s | instance={INSTANCE_ID}")
                     _last_heartbeat = _now_hb
 
                 messages = self.poll_stale_unclaimed()
@@ -520,7 +520,7 @@ class GlobalManager:
                 break
             except Exception as e:
                 _log(f"[ERROR] Main loop: {e}")
-                _log_to_file(f"[ERROR] GM main loop traceback:\n{traceback.format_exc()}")
+                _log_to_file(f"[ERROR] GS main loop traceback:\n{traceback.format_exc()}")
                 time.sleep(POLL_INTERVAL * 2)
 
 
