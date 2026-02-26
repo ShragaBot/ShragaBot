@@ -693,7 +693,7 @@ if ($WorkerOnly) {
 }
 Write-Host ""
 if ($allGood) {
-    Write-Host "  Go back to Teams and start sending coding tasks!" -ForegroundColor Cyan
+    Write-Host "  Setup complete! Your Shraga Box is ready." -ForegroundColor Cyan
 } else {
     Write-Host "  Some items need attention (see yellow items above)." -ForegroundColor Yellow
     Write-Host "  Re-run: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex" -ForegroundColor Gray

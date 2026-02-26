@@ -301,6 +301,6 @@ Write-Host "  Claude Code: $(if ($claudeLoginSuccess) { 'Authenticated' } else {
 Write-Host "  Worker:      $(if (Test-Path $WORKER_SCRIPT) { 'Running' } else { 'Not deployed' })" -ForegroundColor $(if (Test-Path $WORKER_SCRIPT) { "Green" } else { "Yellow" })
 Write-Host "  PM:          $(if (Test-Path $PM_SCRIPT) { 'Running' } else { 'Not deployed' })" -ForegroundColor $(if (Test-Path $PM_SCRIPT) { "Green" } else { "Yellow" })
 Write-Host ""
-Write-Host "  You can now go back to Teams and start sending coding tasks!" -ForegroundColor Cyan
+Write-Host "  Setup complete! Your Shraga Box is ready." -ForegroundColor Cyan
 Write-Host ""
 Read-Host "Press Enter to close"
