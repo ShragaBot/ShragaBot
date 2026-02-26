@@ -548,17 +548,13 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
         }
 
         try {
-            # Stop any existing running task AND kill its process tree
+            # Check if already running -- if so, skip stop/start.
+            # The wrapper .cmd and task registration are updated below regardless.
+            # The running service will pick up changes on next restart (version check).
             $existing = Get-ScheduledTask -TaskName $svc.Name -ErrorAction SilentlyContinue
-            if ($existing -and $existing.State -eq "Running") {
-                Write-Info "Stopping existing $($svc.Label)..."
-                Stop-ScheduledTask -TaskName $svc.Name -ErrorAction SilentlyContinue
-                Start-Sleep 2
-                # Kill any orphaned cmd.exe/python.exe spawned by the wrapper
-                $wrapperName = "$($svc.Name).cmd"
-                Get-WmiObject Win32_Process -Filter "CommandLine LIKE '%$wrapperName%'" -ErrorAction SilentlyContinue |
-                    ForEach-Object { Write-Info "  Killing orphaned process $($_.ProcessId)"; $_.Terminate() | Out-Null }
-                Start-Sleep 1
+            $alreadyRunning = $existing -and $existing.State -eq "Running"
+            if ($alreadyRunning) {
+                Write-Info "$($svc.Label) is already running -- updating config, skipping restart"
             }
 
             # Write a wrapper .cmd that reads current_version.txt and runs from the right release folder
@@ -573,13 +569,17 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
 
             $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$wrapperPath`"" -WorkingDirectory $SHRAGA_ROOT
             Register-ScheduledTask -TaskName $svc.Name -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
-            Start-ScheduledTask -TaskName $svc.Name -ErrorAction Stop
-            Start-Sleep 5
 
-            # Verify it's actually running
-            $task = Get-ScheduledTask -TaskName $svc.Name -ErrorAction SilentlyContinue
-            if ($task.State -eq "Running") { Write-OK "$($svc.Label) registered and running" }
-            else { Write-Warning2 "$($svc.Label) registered but state is: $($task.State). Check: Get-ScheduledTask -TaskName $($svc.Name)" }
+            if ($alreadyRunning) {
+                Write-OK "$($svc.Label) config updated (already running -- will pick up changes on next restart)"
+            } else {
+                Start-ScheduledTask -TaskName $svc.Name -ErrorAction Stop
+                Start-Sleep 5
+                # Verify it's actually running
+                $task = Get-ScheduledTask -TaskName $svc.Name -ErrorAction SilentlyContinue
+                if ($task.State -eq "Running") { Write-OK "$($svc.Label) registered and running" }
+                else { Write-Warning2 "$($svc.Label) registered but state is: $($task.State). Check: Get-ScheduledTask -TaskName $($svc.Name)" }
+            }
         } catch {
             Write-Warning2 "Scheduled task failed for $($svc.Label): $_"
             Write-Info "Starting $($svc.Label) directly instead..."
