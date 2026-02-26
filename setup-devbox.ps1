@@ -567,12 +567,15 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
             $wrapperContent = "@echo off`r`n$envLines`r`nset /p VERSION=<`"$VERSION_FILE`"`r`nif `"%VERSION%`"==`"`" (echo [ERROR] current_version.txt missing or empty & exit /b 1)`r`nset `"RELEASE_DIR=$RELEASES_DIR\%VERSION%`"`r`nif not exist `"%RELEASE_DIR%`" (echo [ERROR] Release dir not found: %RELEASE_DIR% & exit /b 1)`r`nset `"WORKING_DIR=%RELEASE_DIR%`"`r`ncd /d `"%RELEASE_DIR%`"`r`n`"$pyExe`" `"%RELEASE_DIR%\$relScript`"`r`nexit /b %ERRORLEVEL%"
             [System.IO.File]::WriteAllText($wrapperPath, $wrapperContent, [System.Text.Encoding]::ASCII)
 
-            $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$wrapperPath`"" -WorkingDirectory $SHRAGA_ROOT
-            Register-ScheduledTask -TaskName $svc.Name -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
-
             if ($alreadyRunning) {
+                # Wrapper .cmd was updated above -- the running process will use
+                # the new wrapper on its next restart (version check cycle).
+                # Do NOT re-register the task while running -- the -Once -At (Get-Date)
+                # trigger would fire immediately and risk starting a duplicate.
                 Write-OK "$($svc.Label) config updated (already running -- will pick up changes on next restart)"
             } else {
+                $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$wrapperPath`"" -WorkingDirectory $SHRAGA_ROOT
+                Register-ScheduledTask -TaskName $svc.Name -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
                 Start-ScheduledTask -TaskName $svc.Name -ErrorAction Stop
                 Start-Sleep 5
                 # Verify it's actually running
@@ -595,11 +598,16 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
 # -- Register updater task (checks for new releases every 5 min) --
 if (Test-Path $updaterWrapperPath) {
     try {
-        $updaterAction = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$updaterWrapperPath`"" -WorkingDirectory $SHRAGA_ROOT
-        $updaterTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
-        Register-ScheduledTask -TaskName "ShragaUpdater" -Action $updaterAction -Trigger $updaterTrigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
-        Start-ScheduledTask -TaskName "ShragaUpdater" -ErrorAction SilentlyContinue
-        Write-OK "Updater registered (checks every 5 min)"
+        $existingUpdater = Get-ScheduledTask -TaskName "ShragaUpdater" -ErrorAction SilentlyContinue
+        if ($existingUpdater -and $existingUpdater.State -eq "Running") {
+            Write-OK "Updater already running (checks every 5 min)"
+        } else {
+            $updaterAction = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$updaterWrapperPath`"" -WorkingDirectory $SHRAGA_ROOT
+            $updaterTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+            Register-ScheduledTask -TaskName "ShragaUpdater" -Action $updaterAction -Trigger $updaterTrigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+            Start-ScheduledTask -TaskName "ShragaUpdater" -ErrorAction SilentlyContinue
+            Write-OK "Updater registered (checks every 5 min)"
+        }
     } catch {
         Write-Warning2 "Could not register updater: $_"
     }
