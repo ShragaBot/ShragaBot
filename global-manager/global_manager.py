@@ -30,6 +30,7 @@ import sys
 import socket
 import subprocess
 import uuid
+import traceback
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -66,6 +67,14 @@ def _log(msg: str):
         _file_logger.info(msg)
     except Exception:
         pass  # Never let logging crash the service
+
+
+def _log_to_file(msg: str):
+    """Write to log file only (no console output)."""
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass
 
 DATAVERSE_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynamics.com")
 DATAVERSE_API = f"{DATAVERSE_URL}/api/data/v9.2"
@@ -111,6 +120,7 @@ def get_credential():
     except Exception as e:
         _log(f"[CRITICAL] Initial credential.get_token() failed: {e} -- Exiting.")
         _log("[CRITICAL] HINT: Run 'az login'")
+        _log_to_file(f"[CRITICAL] credential traceback:\n{traceback.format_exc()}")
         sys.exit(1)
     _log("[AUTH] Using existing Azure credentials")
     return cred
@@ -234,6 +244,7 @@ class GlobalManager:
             return False
         except (DataverseError, DataverseRetryExhausted) as e:
             _log(f"[ERROR] claim_message: {e}")
+            _log_to_file(f"[ERROR] claim_message traceback:\n{traceback.format_exc()}")
             return False
 
     def cleanup_stale_claimed(self, max_age_minutes: int = 15):
@@ -312,6 +323,7 @@ class GlobalManager:
             return resp.json()
         except (DataverseError, DataverseRetryExhausted) as e:
             _log(f"[ERROR] send_response: {e}")
+            _log_to_file(f"[ERROR] send_response traceback:\n{traceback.format_exc()}")
             return None
 
     # ── Claude Code Session ──────────────────────────────────────────
@@ -367,6 +379,7 @@ class GlobalManager:
             return None, ""
         except Exception as e:
             _log(f"[ERROR] _call_claude_code: {e}")
+            _log_to_file(f"[ERROR] _call_claude_code traceback:\n{traceback.format_exc()}")
             return None, ""
 
     # ── Message Processing ───────────────────────────────────────────
@@ -461,8 +474,18 @@ class GlobalManager:
         _log(f"[CONFIG] Box: {self._box_name}")
         self.cleanup_stale_claimed()
 
+        _last_heartbeat = 0.0
+        _start_time = time.time()
+
         while True:
             try:
+                # Idle heartbeat logging every 60 seconds
+                _now_hb = time.time()
+                if _now_hb - _last_heartbeat > 60:
+                    _uptime = int(_now_hb - _start_time)
+                    _log(f"[HEARTBEAT] GM alive | version={self._my_version} | uptime={_uptime}s | instance={INSTANCE_ID}")
+                    _last_heartbeat = _now_hb
+
                 messages = self.poll_stale_unclaimed()
                 if messages:
                     _log(f"[POLL] Found {len(messages)} unclaimed message(s)")
@@ -478,6 +501,7 @@ class GlobalManager:
                         except Exception as e:
                             row_id = msg.get("cr_shraga_conversationid", "?")
                             _log(f"[ERROR] Processing message {row_id}: {e}")
+                            _log_to_file(f"[ERROR] Processing message traceback:\n{traceback.format_exc()}")
                             try:
                                 self.send_response(
                                     in_reply_to=row_id,
@@ -496,6 +520,7 @@ class GlobalManager:
                 break
             except Exception as e:
                 _log(f"[ERROR] Main loop: {e}")
+                _log_to_file(f"[ERROR] GM main loop traceback:\n{traceback.format_exc()}")
                 time.sleep(POLL_INTERVAL * 2)
 
 

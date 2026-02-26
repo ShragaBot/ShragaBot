@@ -814,9 +814,27 @@ Write SUMMARY.md with your summary, then output a brief confirmation message.
                 # Worker phase
                 status, output, _worker_stats = self.worker_loop(iteration, verifier_feedback)
 
+                # Log worker phase stats
+                if _worker_stats:
+                    _w_cost = _worker_stats.get("cost_usd", 0.0)
+                    _w_dur = _worker_stats.get("duration_ms", 0)
+                    _w_turns = _worker_stats.get("num_turns", 0)
+                    _w_tok = _worker_stats.get("tokens", {})
+                    _log(f"[STATS] Worker #{iteration}: cost=${_w_cost:.4f} | duration={_w_dur/1000:.1f}s | turns={_w_turns} | tokens_in={_w_tok.get('input',0):,} | tokens_out={_w_tok.get('output',0):,}")
+                    _log_to_file(f"[STATS] Worker #{iteration} full stats: {json.dumps(_worker_stats, default=str)}")
+
                 if status == "done":
                     # Verification phase
                     approved, feedback, _verifier_stats = self.verify_work(output)
+
+                    # Log verifier phase stats
+                    if _verifier_stats:
+                        _v_cost = _verifier_stats.get("cost_usd", 0.0)
+                        _v_dur = _verifier_stats.get("duration_ms", 0)
+                        _v_turns = _verifier_stats.get("num_turns", 0)
+                        _v_tok = _verifier_stats.get("tokens", {})
+                        _log(f"[STATS] Verifier #{iteration}: cost=${_v_cost:.4f} | duration={_v_dur/1000:.1f}s | turns={_v_turns} | tokens_in={_v_tok.get('input',0):,} | tokens_out={_v_tok.get('output',0):,}")
+                        _log_to_file(f"[STATS] Verifier #{iteration} full stats: {json.dumps(_verifier_stats, default=str)}")
 
                     if approved:
                         print(f"\n{'='*60}")

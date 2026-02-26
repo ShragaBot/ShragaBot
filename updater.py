@@ -17,6 +17,7 @@ import subprocess
 import sys
 import re
 import os
+import traceback
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -50,6 +51,14 @@ def _log(msg: str):
         _file_logger.info(msg)
     except Exception:
         pass  # Never let logging crash the service
+
+
+def _log_to_file(msg: str):
+    """Write to log file only (no console output)."""
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass
 
 
 def get_current_version() -> str:
@@ -88,6 +97,7 @@ def get_latest_release() -> str | None:
         return None
     except Exception as e:
         _log(f"[WARN] get_latest_release failed: {e}")
+        _log_to_file(f"[WARN] get_latest_release traceback:\n{traceback.format_exc()}")
         return None
 
 
@@ -155,6 +165,7 @@ def deploy_release(version: str) -> bool:
                 shutil.rmtree(extract_dir, ignore_errors=True)
     except Exception as e:
         _log(f"[ERROR] Deploy failed: {e}")
+        _log_to_file(f"[ERROR] Deploy failed traceback:\n{traceback.format_exc()}")
         if release_dir.exists():
             shutil.rmtree(release_dir, ignore_errors=True)
         return False
@@ -178,6 +189,7 @@ def deploy_release(version: str) -> bool:
     )
     if pip_result.returncode != 0:
         _log(f"[WARN] pip install issues: {pip_result.stderr[:200]}")
+        _log_to_file(f"[WARN] pip install full stderr:\n{pip_result.stderr}")
 
     # Mark deployment as complete (sentinel file for partial-deploy detection)
     sentinel.write_text(version)
@@ -216,6 +228,7 @@ def cleanup_old_releases(keep_count=10):
             _log(f"[CLEANUP] Removed old release: {folder.name}")
         except Exception as e:
             _log(f"[WARN] Could not remove {folder.name}: {e}")
+            _log_to_file(f"[WARN] cleanup traceback:\n{traceback.format_exc()}")
 
 
 def reenable_disabled_tasks():
@@ -235,6 +248,7 @@ def reenable_disabled_tasks():
                 _log(f"[UPDATER] {result.stdout.strip()}")
         except Exception as e:
             _log(f"[WARN] Failed to check task {task_name}: {e}")
+            _log_to_file(f"[WARN] reenable task traceback:\n{traceback.format_exc()}")
 
 
 def main():

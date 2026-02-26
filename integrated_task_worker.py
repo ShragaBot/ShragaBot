@@ -9,6 +9,7 @@ import time
 import json
 import sys
 import shutil
+import traceback
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 # Import the autonomous agent system (from same directory as this file)
@@ -52,6 +53,14 @@ def _log(msg: str):
         _file_logger.info(msg)
     except Exception:
         pass  # Never let logging crash the worker
+
+
+def _log_to_file(msg: str):
+    """Write to log file only (no console output)."""
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass
 
 TABLE = os.environ.get("TABLE_NAME", "cr_shraga_tasks")  # MCS table with solution prefix
 STATE_FILE = ".integrated_worker_state.json"
@@ -307,6 +316,7 @@ class IntegratedTaskWorker:
             return data.get("value", [])
         except Exception as e:
             _log(f"[ERROR] Polling tasks: {e}")
+            _log_to_file(f"[ERROR] Polling tasks traceback:\n{traceback.format_exc()}")
             return []
 
     def claim_task(self, task: dict) -> bool:
@@ -338,6 +348,7 @@ class IntegratedTaskWorker:
             return False
         except Exception as e:
             _log(f"[ERROR] claim_task: {e}")
+            _log_to_file(f"[ERROR] claim_task traceback:\n{traceback.format_exc()}")
             return False
 
     def is_task_canceled(self, task_id: str) -> bool:
@@ -422,11 +433,14 @@ class IntegratedTaskWorker:
                     return True
                 except Exception as retry_e:
                     _log(f"[ERROR] Retry without optional columns also failed: {retry_e}")
+                    _log_to_file(f"[ERROR] Retry update_task traceback:\n{traceback.format_exc()}")
                     return False
             _log(f"[ERROR] Updating task: {e}")
+            _log_to_file(f"[ERROR] Updating task traceback:\n{traceback.format_exc()}")
             return False
         except Exception as e:
             _log(f"[ERROR] Updating task: {e}")
+            _log_to_file(f"[ERROR] Updating task traceback:\n{traceback.format_exc()}")
             return False
 
     def parse_prompt_with_llm(self, raw_prompt: str) -> dict:
@@ -1481,6 +1495,7 @@ JSON output:"""
         except Exception as e:
             error_msg = f"Error during autonomous execution: {e}"
             _log(f"[ERROR] {error_msg}")
+            _log_to_file(f"[ERROR] Autonomous execution traceback:\n{traceback.format_exc()}")
 
             transcript = self.append_to_transcript(
                 transcript,
@@ -1757,15 +1772,25 @@ Report what you reverted at the end.
         # Heartbeat tracking
         last_heartbeat = 0
         heartbeat_interval = 300  # 5 minutes
+        _last_log_heartbeat = 0.0
+        _start_time = time.time()
 
         try:
             while True:
                 try:
+                    # Idle heartbeat logging every 60 seconds
+                    _now_hb = time.time()
+                    if _now_hb - _last_log_heartbeat > 60:
+                        _uptime = int(_now_hb - _start_time)
+                        _log(f"[HEARTBEAT] Worker alive | version={self._my_version} | uptime={_uptime}s | box={MACHINE_NAME}")
+                        _last_log_heartbeat = _now_hb
+
                     # Poll for pending tasks
                     try:
                         tasks = self.poll_pending_tasks()
                     except Exception as e:
                         _log(f"[ERROR] Error polling for tasks: {e}")
+                        _log_to_file(f"[ERROR] Error polling traceback:\n{traceback.format_exc()}")
                         try:
                             self.send_to_webhook(f"Error polling for tasks: {e}")
                         except Exception:
@@ -1785,6 +1810,7 @@ Report what you reverted at the end.
                                 self.process_task(task)
                             except Exception as e:
                                 _log(f"[ERROR] Unhandled exception processing task: {e}")
+                                _log_to_file(f"[ERROR] Unhandled task exception traceback:\n{traceback.format_exc()}")
                                 self._cleanup_in_progress_task(f"Unhandled error: {e}")
                                 try:
                                     self.send_to_webhook(f"Task failed with unhandled error: {e}")
@@ -1812,6 +1838,7 @@ Report what you reverted at the end.
                     raise  # Let these propagate -- don't catch sys.exit() or Ctrl+C
                 except BaseException as e:
                     _log(f"\n[ERROR] Unexpected error in worker loop: {type(e).__name__}: {e}")
+                    _log_to_file(f"[ERROR] Worker loop traceback:\n{traceback.format_exc()}")
                     self._cleanup_in_progress_task(f"Worker loop error: {e}")
                     try:
                         self.send_to_webhook(f"Worker error (recovering): {type(e).__name__}: {e}")

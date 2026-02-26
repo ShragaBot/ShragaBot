@@ -15,18 +15,52 @@ import time
 import json
 import sys
 import traceback
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 import os
 from dv_client import DataverseClient, DataverseError, DataverseRetryExhausted, ETagConflictError, create_credential
 
+# --- File logging ---
+_LOG_FILE = Path(__file__).parent / "orchestrator.log"
+
+_file_logger = logging.getLogger("shraga_orchestrator")
+_file_logger.setLevel(logging.DEBUG)
+_file_handler = RotatingFileHandler(
+    str(_LOG_FILE),
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=5,
+    encoding="utf-8",
+)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_file_logger.addHandler(_file_handler)
+
+
+def _log(msg: str):
+    """Print with timestamp to console AND write to log file."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}")
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass  # Never let logging crash the service
+
+
+def _log_to_file(msg: str):
+    """Write to log file only (no console output)."""
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass
+
 # Import Dev Box manager
 try:
     from orchestrator_devbox import DevBoxManager
     DEVBOX_AVAILABLE = True
 except ImportError:
-    print("[WARN] orchestrator_devbox not available - Dev Box provisioning disabled")
+    _log("[WARN] orchestrator_devbox not available - Dev Box provisioning disabled")
     DEVBOX_AVAILABLE = False
 
 # Configuration
@@ -81,12 +115,13 @@ class Orchestrator:
                     project_name=DEVBOX_PROJECT,
                     pool_name=DEVBOX_POOL,
                 )
-                print(f"[INIT] Dev Box manager initialized")
+                _log(f"[INIT] Dev Box manager initialized")
             except Exception as e:
-                print(f"[WARN] Dev Box manager init failed: {e}")
+                _log(f"[WARN] Dev Box manager init failed: {e}")
+                _log_to_file(f"[WARN] Dev Box manager init traceback:\n{traceback.format_exc()}")
                 self.devbox_manager = None
         else:
-            print("[WARN] Dev Box provisioning not configured")
+            _log("[WARN] Dev Box provisioning not configured")
 
         # Version and update tracking
         self.repo_path = Path(__file__).parent
@@ -117,15 +152,16 @@ class Orchestrator:
                         if isinstance(workers, list):
                             self.shared_workers = workers
                         else:
-                            print(f"[WARN] Invalid shared_workers in state, using empty list")
+                            _log(f"[WARN] Invalid shared_workers in state, using empty list")
                             self.shared_workers = []
                     else:
-                        print(f"[WARN] Invalid state file format")
+                        _log(f"[WARN] Invalid state file format")
 
             except json.JSONDecodeError as e:
-                print(f"[ERROR] State file corrupted: {e}")
+                _log(f"[ERROR] State file corrupted: {e}")
             except Exception as e:
-                print(f"[ERROR] Loading state: {e}")
+                _log(f"[ERROR] Loading state: {e}")
+                _log_to_file(f"[ERROR] Loading state traceback:\n{traceback.format_exc()}")
 
     def save_state(self):
         """Save orchestrator state"""
@@ -136,18 +172,20 @@ class Orchestrator:
                     "shared_workers": self.shared_workers
                 }, f, indent=2)
         except Exception as e:
-            print(f"[ERROR] Saving state: {e}")
+            _log(f"[ERROR] Saving state: {e}")
+            _log_to_file(f"[ERROR] Saving state traceback:\n{traceback.format_exc()}")
 
     def get_token(self) -> Optional[str]:
         """Get Dataverse OAuth token (thin wrapper around DataverseClient)."""
         try:
             return self.dv.get_token()
         except TimeoutError:
-            print("[ERROR] get_token() timed out after 30s -- Azure credential hung")
+            _log("[ERROR] get_token() timed out after 30s -- Azure credential hung")
             return None
         except Exception as e:
-            print(f"[ERROR] Getting token: {e}")
-            print("[HINT] Make sure you've run: az login")
+            _log(f"[ERROR] Getting token: {e}")
+            _log("[HINT] Make sure you've run: az login")
+            _log_to_file(f"[ERROR] Getting token traceback:\n{traceback.format_exc()}")
             return None
 
     def get_current_user(self) -> Optional[str]:
@@ -161,10 +199,12 @@ class Orchestrator:
             self.save_state()
             return user_id
         except (DataverseError, DataverseRetryExhausted) as e:
-            print(f"[ERROR] Getting current user: {e}")
+            _log(f"[ERROR] Getting current user: {e}")
+            _log_to_file(f"[ERROR] Getting current user traceback:\n{traceback.format_exc()}")
             return None
         except Exception as e:
-            print(f"[ERROR] Getting current user: {e}")
+            _log(f"[ERROR] Getting current user: {e}")
+            _log_to_file(f"[ERROR] Getting current user traceback:\n{traceback.format_exc()}")
             return None
 
     def load_version(self) -> str:
@@ -175,7 +215,7 @@ class Orchestrator:
                 return version_file.read_text().strip()
             return "unknown"
         except Exception as e:
-            print(f"[WARN] Could not read VERSION file: {e}")
+            _log(f"[WARN] Could not read VERSION file: {e}")
             return "unknown"
 
     def check_for_updates(self) -> bool:
@@ -191,7 +231,7 @@ class Orchestrator:
             )
 
             if result.returncode != 0:
-                print(f"[WARN] Git fetch failed: {result.stderr}")
+                _log(f"[WARN] Git fetch failed: {result.stderr}")
                 return False
 
             # Read remote VERSION
@@ -204,27 +244,27 @@ class Orchestrator:
             )
 
             if result.returncode != 0:
-                print(f"[WARN] Could not read remote VERSION: {result.stderr}")
+                _log(f"[WARN] Could not read remote VERSION: {result.stderr}")
                 return False
 
             remote_version = result.stdout.strip()
 
             if remote_version != self.current_version:
-                print(f"[UPDATE] New version available: {remote_version} (current: {self.current_version})")
+                _log(f"[UPDATE] New version available: {remote_version} (current: {self.current_version})")
                 return True
 
             return False
         except subprocess.TimeoutExpired:
-            print(f"[WARN] Update check timed out")
+            _log(f"[WARN] Update check timed out")
             return False
         except Exception as e:
-            print(f"[WARN] Update check failed: {e}")
+            _log(f"[WARN] Update check failed: {e}")
             return False
 
     def apply_update(self):
         """Pull latest code and restart orchestrator"""
         try:
-            print("[UPDATE] Applying update...")
+            _log("[UPDATE] Applying update...")
 
             # Pull latest
             result = subprocess.run(
@@ -236,20 +276,21 @@ class Orchestrator:
             )
 
             if result.returncode != 0:
-                print(f"[ERROR] Git pull failed: {result.stderr}")
+                _log(f"[ERROR] Git pull failed: {result.stderr}")
                 return False
 
-            print("[UPDATE] Code updated successfully")
-            print("[UPDATE] Restarting orchestrator...")
+            _log("[UPDATE] Code updated successfully")
+            _log("[UPDATE] Restarting orchestrator...")
 
             # Exit - will be restarted by service/scheduler
             sys.exit(0)
 
         except subprocess.TimeoutExpired:
-            print(f"[ERROR] Update timed out")
+            _log(f"[ERROR] Update timed out")
             return False
         except Exception as e:
-            print(f"[ERROR] Update failed: {e}")
+            _log(f"[ERROR] Update failed: {e}")
+            _log_to_file(f"[ERROR] Update failed traceback:\n{traceback.format_exc()}")
             return False
 
     def discover_user_tasks(self) -> List[Dict[str, Any]]:
@@ -276,10 +317,12 @@ class Orchestrator:
             return data.get("value", [])
 
         except (DataverseError, DataverseRetryExhausted) as e:
-            print(f"[ERROR] Discovering user tasks: {e}")
+            _log(f"[ERROR] Discovering user tasks: {e}")
+            _log_to_file(f"[ERROR] Discovering user tasks traceback:\n{traceback.format_exc()}")
             return []
         except Exception as e:
-            print(f"[ERROR] Discovering user tasks: {e}")
+            _log(f"[ERROR] Discovering user tasks: {e}")
+            _log_to_file(f"[ERROR] Discovering user tasks traceback:\n{traceback.format_exc()}")
             return []
 
     def create_admin_mirror(self, user_task: Dict[str, Any]) -> Optional[str]:
@@ -292,7 +335,7 @@ class Orchestrator:
         user_task_id = user_task.get("cr_shraga_taskid")
 
         if not user_task_id:
-            print(f"[ERROR] User task missing ID")
+            _log(f"[ERROR] User task missing ID")
             return None
 
         # Create mirror task with all relevant fields
@@ -334,31 +377,33 @@ class Orchestrator:
                     mirror_task_id = location.split("(")[1].split(")")[0]
 
             if not mirror_task_id:
-                print(f"[ERROR] Could not extract mirror task ID")
+                _log(f"[ERROR] Could not extract mirror task ID")
                 return None
 
             # Link user task to mirror (dv client handles retry internally)
             link_success = self.update_task(user_task_id, mirror_task_id=mirror_task_id)
 
             if not link_success:
-                print(f"[WARN] Created mirror {mirror_task_id[:8]} but failed to link user task")
+                _log(f"[WARN] Created mirror {mirror_task_id[:8]} but failed to link user task")
                 # Continue anyway - mirror exists and can be used
 
-            print(f"[MIRROR] Created: {mirror_task_id[:8]} for user task: {user_task_id[:8]}")
+            _log(f"[MIRROR] Created: {mirror_task_id[:8]} for user task: {user_task_id[:8]}")
 
             return mirror_task_id
 
         except (DataverseError, DataverseRetryExhausted) as e:
-            print(f"[ERROR] Creating admin mirror: {e}")
+            _log(f"[ERROR] Creating admin mirror: {e}")
+            _log_to_file(f"[ERROR] Creating admin mirror traceback:\n{traceback.format_exc()}")
             return None
         except Exception as e:
-            print(f"[ERROR] Creating admin mirror: {e}")
+            _log(f"[ERROR] Creating admin mirror: {e}")
+            _log_to_file(f"[ERROR] Creating admin mirror traceback:\n{traceback.format_exc()}")
             return None
 
     def update_task(self, task_id: str, **fields) -> bool:
         """Update task fields in Dataverse"""
         if not task_id:
-            print(f"[ERROR] update_task called with empty task_id")
+            _log(f"[ERROR] update_task called with empty task_id")
             return False
 
         # Map friendly field names to Dataverse names
@@ -379,7 +424,7 @@ class Orchestrator:
                     data[dv_field] = value
 
         if not data:
-            print(f"[WARN] update_task called with no fields to update")
+            _log(f"[WARN] update_task called with no fields to update")
             return False
 
         try:
@@ -387,7 +432,8 @@ class Orchestrator:
             self.dv.patch(url, data)
             return True
         except (DataverseError, DataverseRetryExhausted) as e:
-            print(f"[ERROR] Updating task: {e}")
+            _log(f"[ERROR] Updating task: {e}")
+            _log_to_file(f"[ERROR] Updating task traceback:\n{traceback.format_exc()}")
             return False
 
     def get_next_worker(self) -> Optional[str]:
@@ -419,14 +465,14 @@ class Orchestrator:
         4. If user has 5+ tasks: trigger provisioning (TODO)
         """
         if not mirror_task_id:
-            print(f"[ERROR] assign_to_worker called with empty mirror_task_id")
+            _log(f"[ERROR] assign_to_worker called with empty mirror_task_id")
             return False
 
         # Get next available worker
         worker_id = self.get_next_worker()
 
         if not worker_id:
-            print(f"[ERROR] No workers available for assignment")
+            _log(f"[ERROR] No workers available for assignment")
             return False
 
         # Update task with worker assignment
@@ -438,9 +484,9 @@ class Orchestrator:
         )
 
         if success:
-            print(f"[ASSIGN] Task {mirror_task_id[:8]} → Worker {worker_id[:8]}")
+            _log(f"[ASSIGN] Task {mirror_task_id[:8]} -> Worker {worker_id[:8]}")
         else:
-            print(f"[ERROR] Failed to assign task {mirror_task_id[:8]}")
+            _log(f"[ERROR] Failed to assign task {mirror_task_id[:8]}")
 
         return success
 
@@ -452,23 +498,23 @@ class Orchestrator:
         if not user_tasks:
             return
 
-        print(f"[DISCOVER] Found {len(user_tasks)} new user task(s)")
+        _log(f"[DISCOVER] Found {len(user_tasks)} new user task(s)")
 
         for user_task in user_tasks:
             task_name = user_task.get("cr_name", "Unnamed")
             user_id = user_task.get("_ownerid_value")
 
-            print(f"[TASK] Processing: {task_name}")
+            _log(f"[TASK] Processing: {task_name}")
 
             # Create admin mirror
             mirror_task_id = self.create_admin_mirror(user_task)
             if not mirror_task_id:
-                print(f"[ERROR] Failed to create mirror for: {task_name}")
+                _log(f"[ERROR] Failed to create mirror for: {task_name}")
                 continue
 
             # Assign to worker
             if not self.assign_to_worker(mirror_task_id, user_id):
-                print(f"[ERROR] Failed to assign: {task_name}")
+                _log(f"[ERROR] Failed to assign: {task_name}")
                 continue
 
             # Small delay between tasks to avoid overwhelming Dataverse
@@ -476,36 +522,46 @@ class Orchestrator:
 
     def run(self):
         """Main orchestrator loop"""
-        print("=" * 80)
-        print("SHRAGA ORCHESTRATOR")
-        print("=" * 80)
-        print(f"Dataverse: {DATAVERSE_URL}")
-        print(f"Table: {TABLE}")
-        print(f"Version: {self.current_version}")
-        print(f"Dev Box: {'Enabled' if self.devbox_manager else 'Disabled'}")
-        print("=" * 80)
+        _log("=" * 80)
+        _log("SHRAGA ORCHESTRATOR")
+        _log("=" * 80)
+        _log(f"Dataverse: {DATAVERSE_URL}")
+        _log(f"Table: {TABLE}")
+        _log(f"Version: {self.current_version}")
+        _log(f"Dev Box: {'Enabled' if self.devbox_manager else 'Disabled'}")
+        _log("=" * 80)
 
         # Get admin user
         if not self.admin_user_id:
-            print("Identifying admin user...")
+            _log("Identifying admin user...")
             if not self.get_current_user():
-                print("[FATAL] Could not identify admin user")
+                _log("[FATAL] Could not identify admin user")
                 return
 
-        print(f"Admin user: {self.admin_user_id}")
+        _log(f"Admin user: {self.admin_user_id}")
 
         # Check workers configured
         if not self.shared_workers:
-            print("[WARN] No shared workers configured!")
-            print("[HINT] Add worker IDs to .orchestrator_state.json:")
-            print('       {"shared_workers": ["worker-guid-1", "worker-guid-2"]}')
-            print("[INFO] Orchestrator will run but cannot assign tasks")
+            _log("[WARN] No shared workers configured!")
+            _log("[HINT] Add worker IDs to .orchestrator_state.json:")
+            _log('       {"shared_workers": ["worker-guid-1", "worker-guid-2"]}')
+            _log("[INFO] Orchestrator will run but cannot assign tasks")
 
-        print(f"Workers: {len(self.shared_workers)} configured")
-        print("\n[POLLING] Monitoring for new user tasks...\n")
+        _log(f"Workers: {len(self.shared_workers)} configured")
+        _log("\n[POLLING] Monitoring for new user tasks...\n")
+
+        _start_time = time.time()
+        _last_heartbeat = 0.0
 
         try:
             while True:
+                # Heartbeat logging every 60 seconds
+                _now = time.time()
+                if _now - _last_heartbeat > 60:
+                    _uptime = int(_now - _start_time)
+                    _log(f"[HEARTBEAT] Orchestrator alive | version={self.current_version} | uptime={_uptime}s | workers={len(self.shared_workers)}")
+                    _last_heartbeat = _now
+
                 # Process new tasks (only if we have workers)
                 if self.shared_workers:
                     self.process_new_tasks()
@@ -513,16 +569,16 @@ class Orchestrator:
                     # Still poll but warn
                     user_tasks = self.discover_user_tasks()
                     if user_tasks:
-                        print(f"[WARN] Found {len(user_tasks)} tasks but no workers to assign!")
+                        _log(f"[WARN] Found {len(user_tasks)} tasks but no workers to assign!")
 
                 # Check for updates (when idle)
                 now = datetime.now(tz=timezone.utc)
                 if self.last_update_check is None or (now - self.last_update_check) >= self.update_check_interval:
-                    print("[IDLE] Checking for updates...")
+                    _log("[IDLE] Checking for updates...")
                     self.last_update_check = now
 
                     if self.check_for_updates():
-                        print("[UPDATE] Applying update...")
+                        _log("[UPDATE] Applying update...")
                         self.apply_update()
                         # apply_update() exits
 
@@ -530,12 +586,13 @@ class Orchestrator:
                 time.sleep(10)
 
         except KeyboardInterrupt:
-            print("\n\n[INTERRUPT] Stopping orchestrator...")
+            _log("\n\n[INTERRUPT] Stopping orchestrator...")
         except Exception as e:
-            print(f"\n[FATAL ERROR] {e}")
+            _log(f"\n[FATAL ERROR] {e}")
+            _log_to_file(f"[FATAL ERROR] traceback:\n{traceback.format_exc()}")
             traceback.print_exc()
 
-        print("[SHUTDOWN] Orchestrator stopped")
+        _log("[SHUTDOWN] Orchestrator stopped")
 
 
 if __name__ == "__main__":

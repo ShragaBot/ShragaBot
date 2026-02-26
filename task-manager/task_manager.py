@@ -4,7 +4,7 @@ Claude Code handles all task management autonomously via CLAUDE.md.
 Session continuity is managed by session_utils.resolve_session(), which uses
 Dataverse (cr_processed_by column) as the single source of truth. No local
 session JSON files."""
-import socket, json, time, os, sys, subprocess, uuid
+import socket, json, time, os, sys, subprocess, uuid, traceback
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -43,6 +43,14 @@ def _log(msg: str):
         _file_logger.info(msg)
     except Exception:
         pass  # Never let logging crash the service
+
+
+def _log_to_file(msg: str):
+    """Write to log file only (no console output)."""
+    try:
+        _file_logger.info(msg)
+    except Exception:
+        pass
 
 DV_URL = os.environ.get("DATAVERSE_URL", "https://org3e79cdb1.crm3.dynamics.com")
 DV_API = f"{DV_URL}/api/data/v9.2"
@@ -103,7 +111,7 @@ class TaskManager:
             m = r.json().get("value", [])
             if m: _log(f"[POLL] Found {len(m)} unclaimed message(s) for {self.user_email}")
             return m
-        except Exception as e: _log(f"[ERROR] poll_unclaimed: {e}"); return []
+        except Exception as e: _log(f"[ERROR] poll_unclaimed: {e}"); _log_to_file(f"[ERROR] poll_unclaimed traceback:\n{traceback.format_exc()}"); return []
 
     def claim_message(self, msg: dict) -> bool:
         rid, etag = msg.get("cr_shraga_conversationid"), msg.get("@odata.etag")
@@ -115,7 +123,7 @@ class TaskManager:
                 etag=etag, timeout=REQ_TMO)
             _log(f"[CLAIM] Claimed {rid[:8]} successfully (by {claimed_by})"); return True
         except ETagConflictError: _log(f"[INFO] Message {rid} already claimed"); return False
-        except Exception as e: _log(f"[ERROR] claim_message: {e}"); return False
+        except Exception as e: _log(f"[ERROR] claim_message: {e}"); _log_to_file(f"[ERROR] claim_message traceback:\n{traceback.format_exc()}"); return False
 
     def mark_processed(self, row_id: str):
         try:
@@ -144,7 +152,7 @@ class TaskManager:
             r = self.dv.post(f"{DV_API}/{CONV_TBL}", data=body, timeout=REQ_TMO)
             _log(f'[DV] Wrote outbound response (reply_to={in_reply_to[:8]}): "{prefixed_text[:60]}..."')
             return {"cr_shraga_conversationid": "created"} if r.status_code == 204 else r.json()
-        except Exception as e: _log(f"[ERROR] send_response: {e}"); return None
+        except Exception as e: _log(f"[ERROR] send_response: {e}"); _log_to_file(f"[ERROR] send_response traceback:\n{traceback.format_exc()}"); return None
 
     def _dv_batch_patch(self, table, filter_q, patch_body, label, top=50):
         """Query rows matching filter_q, PATCH each with patch_body. Returns count patched."""
@@ -271,7 +279,7 @@ class TaskManager:
             self._last_session_id = active_sid
             processed_by = f"{AGENT_ROLE.lower()}:{self._my_version}:{active_sid}" if active_sid else ""
 
-        except Exception as e: _log(f"[ERROR] process_message: {e}"); resp = FALLBACK_MESSAGE; processed_by = ""; active_sid = ""
+        except Exception as e: _log(f"[ERROR] process_message: {e}"); _log_to_file(f"[ERROR] process_message traceback:\n{traceback.format_exc()}"); resp = FALLBACK_MESSAGE; processed_by = ""; active_sid = ""
 
         self.send_response(
             in_reply_to=rid,
@@ -304,8 +312,17 @@ class TaskManager:
         self.cleanup_stale_claimed()
         self.cleanup_stale_outbound()
         last_cleanup = time.time()
+        _last_heartbeat = 0.0
+        _start_time = time.time()
         while True:
             try:
+                # Idle heartbeat logging every 60 seconds
+                _now_hb = time.time()
+                if _now_hb - _last_heartbeat > 60:
+                    _uptime = int(_now_hb - _start_time)
+                    _log(f"[HEARTBEAT] PM alive | version={self._my_version} | uptime={_uptime}s | user={self.user_email}")
+                    _last_heartbeat = _now_hb
+
                 for m in self.poll_unclaimed():
                     if self.claim_message(m):
                         try: self.process_message(m)
@@ -321,7 +338,7 @@ class TaskManager:
                     sys.exit(0)
                 time.sleep(POLL_SEC)
             except KeyboardInterrupt: _log("\n[STOP] Shutting down."); break
-            except Exception as e: _log(f"[ERROR] Main loop: {e}"); time.sleep(POLL_SEC * 2)
+            except Exception as e: _log(f"[ERROR] Main loop: {e}"); _log_to_file(f"[ERROR] PM main loop traceback:\n{traceback.format_exc()}"); time.sleep(POLL_SEC * 2)
 
 def main():
     if not USER_EMAIL: _log("[CRITICAL] USER_EMAIL required."); sys.exit(1)
