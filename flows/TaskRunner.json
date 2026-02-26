@@ -169,7 +169,7 @@
                                 },
                                 {
                                   "type": "TextBlock",
-                                  "text": "{shortDescription} [See full description]({taskPromptUrl})",
+                                  "text": "{shortDescription}{descriptionLink}",
                                   "size": "Default",
                                   "isSubtle": true,
                                   "spacing": "None",
@@ -270,7 +270,7 @@
                       "items": [
                         {
                           "type": "TextBlock",
-                          "text": "Want to cancel? [Tell the bot: cancel {taskIdShort}](https://teams.microsoft.com/l/chat/0/0?users=28:420df934-d9e8-4c2f-bb03-f4c103dfb399&message=cancel%20{taskIdShort})",
+                          "text": "Want to cancel? [Tell Shraga: cancel {taskIdShort}](https://teams.microsoft.com/l/chat/0/0?users=28:420df934-d9e8-4c2f-bb03-f4c103dfb399&message=cancel%20{taskIdShort})",
                           "size": "Small",
                           "isSubtle": true
                         }
@@ -286,7 +286,7 @@
                   ]
                 },
                 "type": "Compose",
-                "inputs": "@replace(replace(replace(replace(string(outputs('Compose_CardTemplate')),'{shortDescription}',replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'],outputs('Get_a_row_by_ID')?['body/cr_prompt'],'Task'),200), '\\\\', '\\\\\\\\'), '\"', '\\\\\"'), decodeUriComponent('%0A'), ' '), decodeUriComponent('%0D'), '')),'{taskPromptUrl}',if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']),'',replace(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'],''),'&view=0','/TASK_PROMPT.md'))),'{startedAt}',concat(formatDateTime(utcNow(),'MMM dd, yyyy'), '\\n', formatDateTime(utcNow(),'h:mm tt'))),'{taskIdShort}',take(string(outputs('Get_a_row_by_ID')?['body/cr_shraga_taskid']), 8))"
+                "inputs": "@replace(replace(replace(replace(string(outputs('Compose_CardTemplate')),'{shortDescription}',replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'],outputs('Get_a_row_by_ID')?['body/cr_prompt'],'Task'),200), '\\\\', ''), '\"', ''), decodeUriComponent('%0A'), ' '), decodeUriComponent('%0D'), '')),'{descriptionLink}',if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']),'',concat(' [See full description](',replace(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'],''),'&view=0','/TASK_PROMPT.md'),')'))),'{startedAt}',concat(formatDateTime(utcNow(),'MMM dd, yyyy'), '\\n', formatDateTime(utcNow(),'h:mm tt'))),'{taskIdShort}',take(string(outputs('Get_a_row_by_ID')?['body/cr_shraga_taskid']), 8))"
               },
               "Compose_CardWithOneDrive": {
                 "runAfter": {
