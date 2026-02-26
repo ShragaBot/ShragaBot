@@ -257,7 +257,7 @@
             ]
           },
           "type": "Compose",
-          "inputs": "@replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/cr_statusmessage'], 'No details available.'), 1500), '\\', '\\\\'), '\"', '\\\"'), decodeUriComponent('%0A'), '\\n'), decodeUriComponent('%0D'), '')"
+          "inputs": "@replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/cr_result'], outputs('Get_a_row_by_ID')?['body/cr_statusmessage'], 'No details available.'), 1500), '\\', '\\\\'), '\"', '\\\"'), decodeUriComponent('%0A'), '\\n'), decodeUriComponent('%0D'), '')"
         },
         "Compose_FullCard": {
           "runAfter": {
