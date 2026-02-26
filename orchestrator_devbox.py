@@ -51,10 +51,9 @@ class DevBoxManager:
         # AZURE_TOKEN_CREDENTIALS env var (e.g. "AzureCliCredential" on dev
         # boxes to skip WMI-triggering probes).
         #
-        # NOTE: Device code auth was removed because Azure Conditional Access
-        # policies block the device code grant flow in this tenant.  Run
-        # ``az login`` before using DevBoxManager if no managed identity is
-        # available.  See also orchestrator_auth_devicecode.py (deprecated).
+        # NOTE: Device code auth is blocked by Azure Conditional Access in this
+        # tenant.  Run ``az login`` before using DevBoxManager if no managed
+        # identity is available.
         if credential is not None:
             self.credential = credential
         else:
