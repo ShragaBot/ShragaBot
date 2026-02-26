@@ -250,64 +250,83 @@ if (-not $pyExe) {
 # =========================================================================
 Write-Step "2/7" "Deploying Code"
 
-# Detect latest release branch from GitHub
-Write-Info "Checking for latest release..."
-$latestVersion = $null
-$lsRemoteOutput = git ls-remote --heads $REPO_URL "release/v*" 2>&1
-if ($LASTEXITCODE -eq 0 -and $lsRemoteOutput) {
-    $versions = @()
-    foreach ($line in ($lsRemoteOutput -split "`n")) {
-        if ($line -match 'refs/heads/release/v(\d+)') { $versions += [int]$Matches[1] }
-    }
-    if ($versions.Count -gt 0) {
-        $latestVersion = "v$($versions | Sort-Object -Descending | Select-Object -First 1)"
+# Check if a version is already installed locally
+$existingVersion = $null
+if (Test-Path $VERSION_FILE) {
+    $existingVersion = (Get-Content $VERSION_FILE -ErrorAction SilentlyContinue).Trim()
+    $existingDir = Join-Path $RELEASES_DIR $existingVersion
+    $existingSentinel = Join-Path $existingDir ".deploy_complete"
+    if ($existingVersion -and (Test-Path $existingSentinel)) {
+        Write-OK "Already installed: $existingVersion (updater will handle version upgrades)"
+        $latestVersion = $existingVersion
+    } else {
+        Write-Info "current_version.txt says $existingVersion but release folder is incomplete -- will download"
+        $existingVersion = $null
     }
 }
-if (-not $latestVersion) {
-    Write-Warning2 "Could not detect latest release. Falling back to v1."
-    $latestVersion = "v1"
-}
-Write-Info "Latest release: $latestVersion"
 
+if (-not $existingVersion) {
+    # Fresh install -- find latest release from GitHub
+    Write-Info "Checking for latest release..."
+    $latestVersion = $null
+    $lsRemoteOutput = git ls-remote --heads $REPO_URL "release/v*" 2>&1
+    if ($LASTEXITCODE -eq 0 -and $lsRemoteOutput) {
+        $versions = @()
+        foreach ($line in ($lsRemoteOutput -split "`n")) {
+            if ($line -match 'refs/heads/release/v(\d+)') { $versions += [int]$Matches[1] }
+        }
+        if ($versions.Count -gt 0) {
+            $latestVersion = "v$($versions | Sort-Object -Descending | Select-Object -First 1)"
+        }
+    }
+    if (-not $latestVersion) {
+        Write-Warning2 "Could not detect latest release. Falling back to v1."
+        $latestVersion = "v1"
+    }
+    Write-Info "Latest release: $latestVersion"
+
+    New-Item -ItemType Directory -Force -Path $RELEASES_DIR -ErrorAction SilentlyContinue | Out-Null
+
+    $WORKING_DIR = Join-Path $RELEASES_DIR $latestVersion
+    $sentinel = Join-Path $WORKING_DIR ".deploy_complete"
+    if (Test-Path $sentinel) {
+        Write-OK "Release $latestVersion already deployed"
+    } else {
+        # Download zip from GitHub (no git clone -- release folders are plain files)
+        Write-Info "Downloading release/$latestVersion..."
+        $zipUrl = "https://github.com/ShragaBot/ShragaBot/archive/refs/heads/release/$latestVersion.zip"
+        $zipPath = Join-Path $env:TEMP "shraga-$latestVersion.zip"
+        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -ErrorAction SilentlyContinue
+        if (Test-Path $zipPath) {
+            $extractDir = Join-Path $env:TEMP "shraga-extract-$latestVersion"
+            if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
+            Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+            # GitHub zips have a top-level folder like ShragaBot-release-v1/
+            $inner = Get-ChildItem $extractDir | Select-Object -First 1
+            if ($inner -and (Test-Path $WORKING_DIR)) { Remove-Item -Recurse -Force $WORKING_DIR }
+            Move-Item $inner.FullName $WORKING_DIR
+            # Clean up
+            Remove-Item -Force $zipPath -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
+            # Mark as complete
+            $latestVersion | Set-Content $sentinel -NoNewline
+            Write-OK "Release $latestVersion deployed to $WORKING_DIR"
+        } else {
+            Write-Fail "Download failed. Check network."
+        }
+    }
+
+    # Write current version file (only if deploy succeeded)
+    if (Test-Path (Join-Path (Join-Path $RELEASES_DIR $latestVersion) ".deploy_complete")) {
+        $latestVersion | Set-Content $VERSION_FILE -NoNewline
+    }
+    Write-Info "Version set to: $latestVersion"
+}
+
+# Set paths based on resolved version
 $WORKING_DIR = Join-Path $RELEASES_DIR $latestVersion
 $WORKER_SCRIPT = Join-Path $WORKING_DIR "integrated_task_worker.py"
 $PM_SCRIPT = Join-Path $WORKING_DIR "task-manager\task_manager.py"
-
-New-Item -ItemType Directory -Force -Path $RELEASES_DIR -ErrorAction SilentlyContinue | Out-Null
-
-$sentinel = Join-Path $WORKING_DIR ".deploy_complete"
-if (Test-Path $sentinel) {
-    Write-OK "Release $latestVersion already deployed"
-} else {
-    # Download zip from GitHub (no git clone -- release folders are plain files)
-    Write-Info "Downloading release/$latestVersion..."
-    $zipUrl = "https://github.com/ShragaBot/ShragaBot/archive/refs/heads/release/$latestVersion.zip"
-    $zipPath = Join-Path $env:TEMP "shraga-$latestVersion.zip"
-    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -ErrorAction SilentlyContinue
-    if (Test-Path $zipPath) {
-        $extractDir = Join-Path $env:TEMP "shraga-extract-$latestVersion"
-        if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
-        Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
-        # GitHub zips have a top-level folder like ShragaBot-release-v1/
-        $inner = Get-ChildItem $extractDir | Select-Object -First 1
-        if ($inner -and (Test-Path $WORKING_DIR)) { Remove-Item -Recurse -Force $WORKING_DIR }
-        Move-Item $inner.FullName $WORKING_DIR
-        # Clean up
-        Remove-Item -Force $zipPath -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
-        # Mark as complete
-        $latestVersion | Set-Content $sentinel -NoNewline
-        Write-OK "Release $latestVersion deployed to $WORKING_DIR"
-    } else {
-        Write-Fail "Download failed. Check network."
-    }
-}
-
-# Write current version file (only if deploy succeeded)
-if (Test-Path $sentinel) {
-    $latestVersion | Set-Content $VERSION_FILE -NoNewline
-}
-Write-Info "Version set to: $latestVersion"
 
 # Create updater .cmd wrapper (same pattern as SW/PS -- reads current_version.txt dynamically)
 $updaterWrapperDir = Join-Path $env:LOCALAPPDATA "Shraga"
