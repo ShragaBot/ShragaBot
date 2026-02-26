@@ -548,12 +548,17 @@ if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
         }
 
         try {
-            # Stop any existing running task BEFORE re-registering
+            # Stop any existing running task AND kill its process tree
             $existing = Get-ScheduledTask -TaskName $svc.Name -ErrorAction SilentlyContinue
             if ($existing -and $existing.State -eq "Running") {
                 Write-Info "Stopping existing $($svc.Label)..."
                 Stop-ScheduledTask -TaskName $svc.Name -ErrorAction SilentlyContinue
-                Start-Sleep 3
+                Start-Sleep 2
+                # Kill any orphaned cmd.exe/python.exe spawned by the wrapper
+                $wrapperName = "$($svc.Name).cmd"
+                Get-WmiObject Win32_Process -Filter "CommandLine LIKE '%$wrapperName%'" -ErrorAction SilentlyContinue |
+                    ForEach-Object { Write-Info "  Killing orphaned process $($_.ProcessId)"; $_.Terminate() | Out-Null }
+                Start-Sleep 1
             }
 
             # Write a wrapper .cmd that reads current_version.txt and runs from the right release folder
