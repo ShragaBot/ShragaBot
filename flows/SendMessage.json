@@ -242,7 +242,29 @@
           "runAfter": {},
           "else": {
             "actions": {
+              "Resolve_System_User": {
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "parameters": {
+                    "entityName": "systemusers",
+                    "$filter": "internalemailaddress eq '@{triggerBody()?['text']}'",
+                    "$select": "systemuserid",
+                    "$top": 1
+                  },
+                  "host": {
+                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+                    "connectionName": "shared_commondataserviceforapps",
+                    "operationId": "ListRecords"
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
+              },
               "Add_a_new_row": {
+                "runAfter": {
+                  "Resolve_System_User": [
+                    "Succeeded"
+                  ]
+                },
                 "type": "OpenApiConnection",
                 "inputs": {
                   "parameters": {
@@ -251,7 +273,8 @@
                     "item/cr_mcs_conversation_id": "@triggerBody()?['text_1']",
                     "item/cr_message": "@triggerBody()?['text_2']",
                     "item/cr_status": "Unclaimed",
-                    "item/cr_useremail": "@triggerBody()?['text']"
+                    "item/cr_useremail": "@triggerBody()?['text']",
+                    "item/ownerid@odata.bind": "@if(greater(length(outputs('Resolve_System_User')?['body/value']), 0), concat('/systemusers(', first(outputs('Resolve_System_User')?['body/value'])?['systemuserid'], ')'), '')"
                   },
                   "host": {
                     "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",

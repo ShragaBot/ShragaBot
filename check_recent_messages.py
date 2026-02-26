@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check recent messages in Dataverse messages table"""
 import requests
-import subprocess
 import sys
+from azure.identity import DefaultAzureCredential
 
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -10,12 +10,7 @@ if sys.platform == 'win32':
 DATAVERSE_URL = 'https://org3e79cdb1.crm3.dynamics.com'
 
 def get_token():
-    az_command = r"C:\Program Files (x86)\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
-    result = subprocess.run(
-        [az_command, 'account', 'get-access-token', '--resource', DATAVERSE_URL, '--query', 'accessToken', '-o', 'tsv'],
-        capture_output=True, text=True, check=True, shell=True
-    )
-    return result.stdout.strip()
+    return DefaultAzureCredential().get_token(f"{DATAVERSE_URL}/.default").token
 
 token = get_token()
 headers = {

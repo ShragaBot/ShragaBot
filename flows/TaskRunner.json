@@ -297,9 +297,31 @@
                 "type": "Compose",
                 "inputs": "@json(concat(substring(outputs('Compose_CardResolved'), 0, sub(length(outputs('Compose_CardResolved')), 2)), if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat(',{\"type\":\"TextBlock\",\"text\":\"Session folder: ', outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'], '\",\"size\":\"Small\",\"isSubtle\":true,\"spacing\":\"Small\"}')), ']}'))"
               },
-              "Create_Followup_Message": {
+              "Resolve_Task_Owner": {
                 "runAfter": {
                   "Update_a_row": [
+                    "Succeeded"
+                  ]
+                },
+                "type": "OpenApiConnection",
+                "inputs": {
+                  "parameters": {
+                    "entityName": "systemusers",
+                    "$filter": "internalemailaddress eq '@{outputs('Get_a_row_by_ID')?['body/crb3b_useremail']}'",
+                    "$select": "systemuserid",
+                    "$top": 1
+                  },
+                  "host": {
+                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+                    "connectionName": "shared_commondataserviceforapps",
+                    "operationId": "ListRecords"
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
+              },
+              "Create_Followup_Message": {
+                "runAfter": {
+                  "Resolve_Task_Owner": [
                     "Succeeded"
                   ]
                 },
@@ -314,7 +336,8 @@
                     "item/cr_direction": "Outbound",
                     "item/cr_status": "Unclaimed",
                     "item/cr_in_reply_to": "@outputs('Get_a_row_by_ID')?['body/crb3b_inboundrowid']",
-                    "item/cr_followup_expected": "true"
+                    "item/cr_followup_expected": "true",
+                    "item/ownerid@odata.bind": "@if(greater(length(outputs('Resolve_Task_Owner')?['body/value']), 0), concat('/systemusers(', first(outputs('Resolve_Task_Owner')?['body/value'])?['systemuserid'], ')'), '')"
                   },
                   "host": {
                     "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
