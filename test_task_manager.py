@@ -953,7 +953,7 @@ class TestProvisionDelegationPostRefactor:
     called the DevCenter API and ran customization scripts. Post-refactor,
     the PM is a thin wrapper: it sends the user's message to Claude Code
     via subprocess, and Claude Code autonomously decides to run provisioning
-    scripts (scripts/check_devbox_status.py, etc.) based on CLAUDE.md instructions.
+    scripts (scripts/get_user_state.py, etc.) based on CLAUDE.md instructions.
 
     This test verifies:
       1. No _tool_provision_devbox method exists (delegation, not direct execution).
@@ -996,7 +996,7 @@ class TestProvisionDelegationPostRefactor:
         }
 
         # Claude Code responds with provisioning results (as it would after
-        # running scripts/check_devbox_status.py, setup.ps1, etc.)
+        # running scripts/get_user_state.py, setup.ps1, etc.)
         claude_response = {
             "result": (
                 "I've provisioned a new dev box for you. Here are the details:\n\n"

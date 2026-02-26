@@ -3,7 +3,6 @@ Tests for standalone CLI scripts.
 
 Covers:
   - scripts/get_user_state.py (T028)
-  - scripts/check_devbox_status.py (T030)
   - scripts/send_message.py (T032)
   - scripts/update_user_state.py (T029)
 

@@ -16,7 +16,7 @@ Poll -> Parse -> Claim -> Execute (Worker/Verifier Loop) -> Summarize -> Complet
 
 ### 1. Poll for Tasks
 
-`IntegratedTaskWorker.poll_pending_tasks()` queries Dataverse for tasks with `cr_status == 'Pending'` assigned to this dev box or user. Polling interval is 10 seconds.
+`IntegratedTaskWorker.poll_pending_tasks()` queries Dataverse for tasks with `cr_status == Pending(1)` belonging to this user with no dev box assigned (`crb3b_devbox eq null`). Open competition: all workers for the same user compete for unclaimed tasks. Polling interval is 10 seconds.
 
 ### 2. Parse Prompt
 
@@ -124,7 +124,7 @@ When cancellation is detected:
 - A cancellation message is sent via webhook
 - Session summary is written with `terminal_status: "canceled"`
 - `result.md` and `transcript.md` are written to the session folder
-- The method returns `(False, "Task canceled by user", transcript, accumulated_stats)`
+- The method returns `("canceled", "Task canceled by user", transcript, accumulated_stats)`
 - The current Claude Code subprocess is **not** killed mid-execution; it completes its current phase first
 
 ### Important
@@ -166,7 +166,7 @@ Each task gets an isolated session folder in OneDrive:
 |----------|---------|-------------|
 | `DATAVERSE_URL` | `https://org3e79cdb1.crm3.dynamics.com` | Dataverse instance URL |
 | `TABLE_NAME` | `cr_shraga_tasks` | Dataverse tasks table name |
-| `WEBHOOK_USER` | `sagik@microsoft.com` | User email for task ownership |
+| `WEBHOOK_USER` | `""` (set by setup script) | User email for task ownership |
 | `WORK_BASE_DIR` | Script parent directory | Base directory for local work folders |
 | `SHRAGA_ROOT` | `C:\Dev\Shraga` | Root directory for immutable releases |
 | `ONEDRIVE_SESSIONS_DIR` | (auto-detected) | Override for OneDrive root path |
