@@ -1,10 +1,11 @@
 """
-End-to-end integration tests for the Shraga system.
+End-to-end integration tests for the Shraga Worker.
 
-These tests exercise the full flow: Orchestrator discovers tasks, creates mirrors,
-assigns to workers, and workers execute tasks through the autonomous agent loop.
+These tests exercise the Worker lifecycle: authentication, polling, claiming,
+task processing, transcript management, version checking, cancellation.
 
 All external dependencies are mocked (Azure, Dataverse, Claude CLI, Git).
+Note: orchestrator.py was removed; only worker-side tests remain.
 """
 import json
 import os
@@ -20,24 +21,19 @@ from datetime import datetime, timezone, timedelta
 # ---------------------------------------------------------------------------
 
 def _import_modules(monkeypatch, tmp_path):
-    """Import both orchestrator and worker with mocked externals."""
+    """Import worker module with mocked externals."""
     monkeypatch.setenv("DATAVERSE_URL", "https://test-org.crm.dynamics.com")
     monkeypatch.setenv("TABLE_NAME", "cr_shraga_tasks")
-    monkeypatch.setenv("WORKERS_TABLE", "cr_shraga_workers")
     monkeypatch.setenv("WEBHOOK_URL", "https://test-webhook.example.com")
     monkeypatch.setenv("WEBHOOK_USER", "testuser@example.com")
-    monkeypatch.setenv("GIT_BRANCH", "main")
-    monkeypatch.setenv("PROVISION_THRESHOLD", "5")
 
     # Clear cached modules
     for mod_name in list(sys.modules):
-        if mod_name in ("orchestrator", "integrated_task_worker"):
+        if mod_name in ("integrated_task_worker",):
             del sys.modules[mod_name]
 
     # Mock external modules
-    mock_devbox = MagicMock()
     mock_agent = MagicMock()
-    monkeypatch.setitem(sys.modules, "orchestrator_devbox", mock_devbox)
     monkeypatch.setitem(sys.modules, "autonomous_agent", mock_agent)
 
     with patch("azure.identity.DefaultAzureCredential") as mock_cred:
@@ -48,73 +44,9 @@ def _import_modules(monkeypatch, tmp_path):
         )
         mock_cred.return_value = mock_cred_inst
 
-        import orchestrator as orch_mod
         import integrated_task_worker as worker_mod
 
-        return orch_mod, worker_mod, mock_cred_inst
-
-
-# ===========================================================================
-# E2E: Orchestrator discovers task, creates mirror, assigns to worker
-# ===========================================================================
-
-class TestE2EOrchestratorPipeline:
-
-    @patch("orchestrator.time.sleep")
-    def test_discover_mirror_assign(self, mock_sleep, monkeypatch, tmp_path):
-        """Full orchestrator pipeline: discover -> mirror -> assign"""
-        orch_mod, _, _ = _import_modules(monkeypatch, tmp_path)
-
-        user_task = {
-            "cr_shraga_taskid": "user-task-001",
-            "cr_name": "Build REST API",
-            "cr_prompt": "Create a REST API for user authentication",
-            "cr_status": "Pending",
-            "cr_ismirror": False,
-            "cr_mirrortaskid": None,
-            "_ownerid_value": "user-aaa-bbb",
-        }
-
-        orch = orch_mod.Orchestrator()
-        orch.dv = MagicMock()
-        orch.dv.get.return_value = MagicMock(
-            json=lambda: {"value": [user_task]}
-        )
-        orch.dv.post.return_value = MagicMock(
-            json=lambda: {"cr_shraga_taskid": "mirror-001"},
-            headers={}
-        )
-        orch.dv.patch.return_value = MagicMock()
-        orch.admin_user_id = "admin-xyz"
-        orch.shared_workers = ["worker-1", "worker-2"]
-
-        orch.process_new_tasks()
-
-        # Mirror was created
-        assert orch.dv.post.called
-        # dv.post(url, mirror_data, extra_headers=...) -- data is positional arg [1]
-        post_data = orch.dv.post.call_args[0][1]
-        assert post_data["cr_ismirror"] is True
-        assert post_data["cr_mirroroftaskid"] == "user-task-001"
-
-        # Task was assigned (PATCH for link + PATCH for assignment)
-        assert orch.dv.patch.call_count >= 2
-
-    @patch("orchestrator.time.sleep")
-    def test_no_tasks_discovered(self, mock_sleep, monkeypatch, tmp_path):
-        """When no tasks exist, nothing happens"""
-        orch_mod, _, _ = _import_modules(monkeypatch, tmp_path)
-
-        orch = orch_mod.Orchestrator()
-        orch.dv = MagicMock()
-        orch.dv.get.return_value = MagicMock(
-            json=lambda: {"value": []}
-        )
-        orch.admin_user_id = "admin-xyz"
-        orch.shared_workers = ["worker-1"]
-
-        orch.process_new_tasks()
-        # No POST for mirror creation since no tasks discovered
+        return worker_mod, mock_cred_inst
 
 
 # ===========================================================================
@@ -125,7 +57,7 @@ class TestE2EWorkerLifecycle:
 
     def test_worker_authenticates_and_polls(self, monkeypatch, tmp_path):
         """Worker authenticates, gets user ID, and polls for tasks"""
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         worker = worker_mod.IntegratedTaskWorker()
         worker.dv = MagicMock()
@@ -142,7 +74,7 @@ class TestE2EWorkerLifecycle:
 
     def test_worker_updates_task_status(self, monkeypatch, tmp_path):
         """Worker can update task status in Dataverse"""
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         worker = worker_mod.IntegratedTaskWorker()
         worker.dv = MagicMock()
@@ -155,7 +87,7 @@ class TestE2EWorkerLifecycle:
 
     def test_worker_sends_webhook_message(self, monkeypatch, tmp_path):
         """Worker can send messages through webhook"""
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         worker = worker_mod.IntegratedTaskWorker()
         worker.dv = MagicMock()
@@ -171,7 +103,7 @@ class TestE2ETranscript:
 
     def test_transcript_accumulates(self, monkeypatch, tmp_path):
         """Transcript accumulates entries across multiple appends"""
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         worker = worker_mod.IntegratedTaskWorker()
 
@@ -192,7 +124,7 @@ class TestE2ETranscript:
 
     def test_transcript_entries_have_timestamps(self, monkeypatch, tmp_path):
         """Each transcript entry has an ISO timestamp"""
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         worker = worker_mod.IntegratedTaskWorker()
         t = worker.append_to_transcript("", "system", "Hello")
@@ -203,39 +135,25 @@ class TestE2ETranscript:
 
 
 # ===========================================================================
-# E2E: Version checking across components
+# E2E: Version checking
 # ===========================================================================
 
 class TestE2EVersionChecking:
 
-    @patch("orchestrator.subprocess.run")
-    def test_orchestrator_detects_update(self, mock_run, monkeypatch, tmp_path):
-        orch_mod, _, _ = _import_modules(monkeypatch, tmp_path)
-
-        orch = orch_mod.Orchestrator()
-        orch.current_version = "1.0.0"
-
-        mock_run.side_effect = [
-            MagicMock(returncode=0),  # git fetch
-            MagicMock(returncode=0, stdout="2.0.0\n"),  # git show VERSION
-        ]
-
-        assert orch.check_for_updates() is True
-
     def test_worker_version_check_exists(self, monkeypatch, tmp_path):
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
         worker = worker_mod.IntegratedTaskWorker()
         assert hasattr(worker, '_my_version')
         assert worker._my_version is not None
 
     def test_worker_version_is_string(self, monkeypatch, tmp_path):
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
         worker = worker_mod.IntegratedTaskWorker()
         assert isinstance(worker._my_version, str)
         assert len(worker._my_version) > 0
 
     def test_should_exit_false_in_dev(self, monkeypatch, tmp_path):
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
         from version_check import should_exit
         # No version file in dev mode, should_exit returns False
         assert should_exit("dev") is False
@@ -251,7 +169,7 @@ class TestE2ETaskProcessing:
     @patch("integrated_task_worker.subprocess.Popen")
     def test_process_task_success(self, mock_popen, mock_run, monkeypatch, tmp_path):
         """Worker processes a task successfully end-to-end"""
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         # Mock parse_prompt_with_llm via Popen
         parsed = {
@@ -293,7 +211,7 @@ class TestE2ETaskProcessing:
     @patch("integrated_task_worker.subprocess.Popen")
     def test_process_task_failure(self, mock_popen, monkeypatch, tmp_path):
         """Worker handles task failure"""
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         parsed = {
             "task_description": "Impossible task",
@@ -323,49 +241,14 @@ class TestE2ETaskProcessing:
 
 
 # ===========================================================================
-# E2E: Orchestrator round-robin distribution
-# ===========================================================================
-
-class TestE2ERoundRobin:
-
-    def test_tasks_distributed_evenly(self, monkeypatch, tmp_path):
-        """Multiple tasks are distributed across workers evenly"""
-        orch_mod, _, _ = _import_modules(monkeypatch, tmp_path)
-
-        orch = orch_mod.Orchestrator()
-        orch.shared_workers = ["w1", "w2", "w3"]
-        orch.worker_round_robin_index = 0
-
-        assignments = []
-        for _ in range(9):
-            w = orch.get_next_worker()
-            assignments.append(w)
-
-        assert assignments == ["w1", "w2", "w3", "w1", "w2", "w3", "w1", "w2", "w3"]
-
-
-# ===========================================================================
 # E2E: State persistence across restarts
 # ===========================================================================
 
 class TestE2EStatePersistence:
 
-    def test_orchestrator_state_persists(self, monkeypatch, tmp_path):
-        """Orchestrator state survives restart"""
-        orch_mod, _, _ = _import_modules(monkeypatch, tmp_path)
-
-        orch1 = orch_mod.Orchestrator()
-        orch1.admin_user_id = "admin-persist-test"
-        orch1.shared_workers = ["w1", "w2"]
-        orch1.save_state()
-
-        orch2 = orch_mod.Orchestrator()
-        assert orch2.admin_user_id == "admin-persist-test"
-        assert orch2.shared_workers == ["w1", "w2"]
-
     def test_worker_state_persists(self, monkeypatch, tmp_path):
         """Worker state survives restart"""
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         w1 = worker_mod.IntegratedTaskWorker()
         w1.current_user_id = "worker-persist-test"
@@ -384,7 +267,7 @@ class TestE2EGitCommitResults:
     @patch("integrated_task_worker.subprocess.run")
     def test_commit_creates_sha(self, mock_run, monkeypatch, tmp_path):
         """Worker commits results and gets a SHA"""
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         mock_run.side_effect = [
             MagicMock(returncode=0),  # git add
@@ -399,7 +282,7 @@ class TestE2EGitCommitResults:
     @patch("integrated_task_worker.subprocess.run")
     def test_commit_handles_no_changes(self, mock_run, monkeypatch, tmp_path):
         """Worker handles 'nothing to commit' gracefully"""
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         mock_run.side_effect = [
             MagicMock(returncode=0),  # git add
@@ -412,27 +295,14 @@ class TestE2EGitCommitResults:
 
 
 # ===========================================================================
-# E2E: Error handling across components
+# E2E: Error handling
 # ===========================================================================
 
 class TestE2EErrorHandling:
 
-    def test_orchestrator_handles_no_token(self, monkeypatch, tmp_path):
-        """Orchestrator degrades gracefully when DV client fails"""
-        from dv_client import DataverseRetryExhausted
-        orch_mod, _, _ = _import_modules(monkeypatch, tmp_path)
-
-        orch = orch_mod.Orchestrator()
-        orch.dv = MagicMock()
-        orch.dv.get.side_effect = DataverseRetryExhausted("Auth failed")
-
-        # Should return empty list, not crash
-        assert orch.discover_user_tasks() == []
-        assert orch.get_current_user() is None
-
     def test_worker_handles_no_token(self, monkeypatch, tmp_path):
         """Worker exits when token cannot be obtained (scheduler restarts it)"""
-        _, worker_mod, mock_cred = _import_modules(monkeypatch, tmp_path)
+        worker_mod, mock_cred = _import_modules(monkeypatch, tmp_path)
 
         worker = worker_mod.IntegratedTaskWorker()
         # Mock dv.get_token directly (credential mock scope expired after import)
@@ -443,118 +313,16 @@ class TestE2EErrorHandling:
             worker.get_token()
         assert exc_info.value.code == 1
 
-    def test_orchestrator_handles_dataverse_error(self, monkeypatch, tmp_path):
-        """Orchestrator handles Dataverse API errors"""
-        from dv_client import DataverseError
-        orch_mod, _, _ = _import_modules(monkeypatch, tmp_path)
-
-        orch = orch_mod.Orchestrator()
-        orch.dv = MagicMock()
-        orch.dv.get.side_effect = DataverseError("Connection refused", 500, "")
-        assert orch.discover_user_tasks() == []
-
     def test_worker_handles_poll_error(self, monkeypatch, tmp_path):
         """Worker handles poll errors gracefully"""
         from dv_client import DataverseRetryExhausted
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         worker = worker_mod.IntegratedTaskWorker()
         worker.dv = MagicMock()
         worker.dv.get.side_effect = DataverseRetryExhausted("Connection refused")
         worker.current_user_id = "user-1"
         assert worker.poll_pending_tasks() == []
-
-
-# ===========================================================================
-# E2E: Full orchestrator + worker flow (simulated)
-# ===========================================================================
-
-class TestE2EFullFlow:
-
-    def test_full_flow_orchestrator_to_worker(self, monkeypatch, tmp_path):
-        """
-        Simulated full flow:
-        1. Orchestrator discovers user task
-        2. Orchestrator creates admin mirror
-        3. Orchestrator assigns to worker
-        4. Worker picks up task
-        5. Worker processes task
-        6. Worker commits results
-        """
-        orch_mod, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
-
-        # --- Orchestrator phase ---
-        user_task = {
-            "cr_shraga_taskid": "user-flow-001",
-            "cr_name": "Full Flow Test",
-            "cr_prompt": "Create a calculator app",
-            "cr_status": "Pending",
-            "cr_ismirror": False,
-            "cr_mirrortaskid": None,
-            "_ownerid_value": "user-flow-aaa",
-        }
-
-        with patch("orchestrator.time.sleep"):
-            orch = orch_mod.Orchestrator()
-            orch.dv = MagicMock()
-            orch.dv.get.return_value = MagicMock(
-                json=lambda: {"value": [user_task]}
-            )
-            orch.dv.post.return_value = MagicMock(
-                json=lambda: {"cr_shraga_taskid": "mirror-flow-001"},
-                headers={}
-            )
-            orch.dv.patch.return_value = MagicMock()
-            orch.admin_user_id = "admin-flow"
-            orch.shared_workers = ["worker-flow-1"]
-
-            orch.process_new_tasks()
-
-            # Verify mirror was created
-            assert orch.dv.post.called
-            # dv.post(url, mirror_data, extra_headers=...) -- data is positional arg [1]
-            mirror_data = orch.dv.post.call_args[0][1]
-            assert mirror_data["cr_ismirror"] is True
-
-        # --- Worker phase ---
-        with patch("integrated_task_worker.subprocess.Popen") as worker_popen, \
-             patch("integrated_task_worker.subprocess.run") as worker_run:
-
-            parsed = {
-                "task_description": "Create a calculator app",
-
-                "success_criteria": "Calculator works"
-            }
-            worker_popen.return_value = MagicMock(
-                communicate=MagicMock(return_value=(json.dumps({"result": json.dumps(parsed)}), "")),
-                returncode=0
-            )
-            worker_run.side_effect = [
-                MagicMock(returncode=0),
-                MagicMock(returncode=0, stdout="", stderr=""),
-                MagicMock(returncode=0, stdout="commit-sha-xyz\n", stderr=""),
-            ]
-
-            worker = worker_mod.IntegratedTaskWorker()
-            worker.dv = MagicMock()
-            worker.dv.get.return_value = MagicMock(json=lambda: {"value": []})
-
-            with patch.object(worker, "execute_with_autonomous_agent") as mock_exec:
-                mock_exec.return_value = ("completed", "Calculator created!", "transcript", {})
-
-                mirror_task = {
-                    "cr_shraga_taskid": "mirror-flow-001",
-                    "cr_name": "Full Flow Test",
-                    "cr_prompt": "Create a calculator app",
-                    "cr_transcript": "",
-                    "@odata.etag": 'W/"flow-etag-001"',
-                }
-
-                result = worker.process_task(mirror_task)
-                assert result is True
-
-            # Verify worker updated task status
-            assert worker.dv.patch.called
 
 
 # ===========================================================================
@@ -586,7 +354,7 @@ class TestE2ECancelRunningTask:
         3. Verify task ends with Canceled message
         4. Verify worker object is still functional afterward
         """
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         # --- Mock Popen for parse_prompt_with_llm ---
         parsed = {
@@ -719,7 +487,7 @@ class TestE2ECancelRunningTask:
         STATUS: done, and then is_task_canceled is checked before the verifier
         runs. If canceled, the task should terminate without running verification.
         """
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         # --- Mock Popen for parse_prompt_with_llm ---
         parsed = {
@@ -812,7 +580,7 @@ class TestE2ECancelRunningTask:
         This is a negative test to ensure the cancellation checkpoints do not
         interfere with normal execution.
         """
-        _, worker_mod, _ = _import_modules(monkeypatch, tmp_path)
+        worker_mod, _ = _import_modules(monkeypatch, tmp_path)
 
         parsed = {
             "task_description": "Normal task",
