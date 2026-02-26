@@ -150,7 +150,7 @@
                             ]
                           },
                           "type": "Compose",
-                          "inputs": "@concat('[', formatDateTime(items('Apply_to_each_message')?['createdon'], 'HH:mm:ss'), '] ', replace(replace(replace(replace(substring(coalesce(items('Apply_to_each_message')?['cr_content'], '(no content)'), 0, min(length(coalesce(items('Apply_to_each_message')?['cr_content'], '(no content)')), 200)), '\\', '\\\\'), '\"', '\\\"'), decodeUriComponent('%0A'), '\\n'), decodeUriComponent('%0D'), ''))"
+                          "inputs": "@concat('[', formatDateTime(items('Apply_to_each_message')?['createdon'], 'MMM dd'), '\\n', formatDateTime(items('Apply_to_each_message')?['createdon'], 'h:mm tt'), '] ', replace(replace(replace(replace(substring(coalesce(items('Apply_to_each_message')?['cr_content'], '(no content)'), 0, min(length(coalesce(items('Apply_to_each_message')?['cr_content'], '(no content)')), 200)), '\\', '\\\\'), '\"', '\\\"'), decodeUriComponent('%0A'), '\\n'), decodeUriComponent('%0D'), ''))"
                         },
                         "Append_To_Recent": {
                           "runAfter": {
@@ -189,7 +189,7 @@
                         ]
                       },
                       "type": "Compose",
-                      "inputs": "@formatDateTime(coalesce(outputs('Get_Task_Row')?['body/createdon'], utcNow()), 'MMM dd, yyyy h:mm tt')"
+                      "inputs": "@concat(formatDateTime(coalesce(outputs('Get_Task_Row')?['body/createdon'], utcNow()), 'MMM dd, yyyy'), '\\n', formatDateTime(coalesce(outputs('Get_Task_Row')?['body/createdon'], utcNow()), 'h:mm tt'))"
                     },
                     "Compose_FullCard": {
                       "runAfter": {

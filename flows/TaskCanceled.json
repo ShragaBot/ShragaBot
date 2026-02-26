@@ -10,13 +10,13 @@
       "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
       "contentVersion": "1.0.0.0",
       "parameters": {
-        "$authentication": {
-          "defaultValue": {},
-          "type": "SecureObject"
-        },
         "$connections": {
           "defaultValue": {},
           "type": "Object"
+        },
+        "$authentication": {
+          "defaultValue": {},
+          "type": "SecureObject"
         }
       },
       "triggers": {
@@ -40,8 +40,59 @@
         }
       },
       "actions": {
-        "Get_a_row_by_ID": {
+        "Init_RecentMsgs": {
           "runAfter": {},
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "RecentMsgs",
+                "type": "string",
+                "value": ""
+              }
+            ]
+          }
+        },
+        "Init_OlderMsgs": {
+          "runAfter": {
+            "Init_RecentMsgs": [
+              "Succeeded"
+            ]
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "OlderMsgs",
+                "type": "string",
+                "value": ""
+              }
+            ]
+          }
+        },
+        "Init_Counter": {
+          "runAfter": {
+            "Init_OlderMsgs": [
+              "Succeeded"
+            ]
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "Counter",
+                "type": "integer",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "Get_a_row_by_ID": {
+          "runAfter": {
+            "Init_Counter": [
+              "Succeeded"
+            ]
+          },
           "type": "OpenApiConnection",
           "inputs": {
             "parameters": {
@@ -57,85 +108,14 @@
             "authentication": "@parameters('$authentication')"
           }
         },
-        "Check_Status": {
+        "Check_Email": {
           "actions": {
-            "Check_Has_Card": {
-              "actions": {
-                "Update_Card_To_Killed": {
-                  "runAfter": {
-                    "Compose_FullCard": [
-                      "Succeeded"
-                    ]
-                  },
-                  "type": "OpenApiConnection",
-                  "inputs": {
-                    "parameters": {
-                      "poster": "Flow bot",
-                      "location": "Group chat",
-                      "body/messageId": "@outputs('Get_a_row_by_ID')?['body/crb3b_runningmessageid']",
-                      "body/recipient": "@outputs('Get_a_row_by_ID')?['body/crb3b_runningchatid']",
-                      "body/messageBody": "@outputs('Compose_FullCard')"
-                    },
-                    "host": {
-                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams",
-                      "connectionName": "shared_teams-1",
-                      "operationId": "UpdateCardInConversation"
-                    },
-                    "authentication": "@parameters('$authentication')"
-                  }
-                },
-                "Compose_TaskTitle": {
-                  "runAfter": {},
-                  "type": "Compose",
-                  "inputs": "@replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'],outputs('Get_a_row_by_ID')?['body/cr_prompt'],'Task'),200), '\\\\', '\\\\\\\\'), '\"', '\\\\\"'), decodeUriComponent('%0A'), ' '), decodeUriComponent('%0D'), '')"
-                },
-                "Compose_SubmittedTime": {
-                  "runAfter": {},
-                  "type": "Compose",
-                  "inputs": "@formatDateTime(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()), 'MMM dd, yyyy h:mm tt')"
-                },
-                "Compose_Duration": {
-                  "runAfter": {},
-                  "type": "Compose",
-                  "inputs": "@concat(string(div(div(sub(ticks(utcNow()), ticks(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()))), 10000000), 60)), 'm ', string(mod(div(sub(ticks(utcNow()), ticks(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()))), 10000000), 60)), 's')"
-                },
-                "Compose_FullCard": {
-                  "runAfter": {
-                    "Compose_TaskTitle": [
-                      "Succeeded"
-                    ],
-                    "Compose_SubmittedTime": [
-                      "Succeeded"
-                    ],
-                    "Compose_Duration": [
-                      "Succeeded"
-                    ]
-                  },
-                  "type": "Compose",
-                  "inputs": "@concat('{\"$schema\":\"http://adaptivecards.io/schemas/adaptive-card.json\",\"type\":\"AdaptiveCard\",\"version\":\"1.5\",\"body\":[{\"type\":\"Container\",\"style\":\"emphasis\",\"bleed\":true,\"items\":[{\"type\":\"ColumnSet\",\"columns\":[{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"Image\",\"url\":\"https://cdn-icons-png.flaticon.com/512/4712/4712109.png\",\"size\":\"Medium\",\"style\":\"Person\",\"altText\":\"Shraga Agent\"}],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"stretch\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Shraga Worker\",\"weight\":\"Bolder\",\"size\":\"Medium\"},{\"type\":\"TextBlock\",\"text\":\"', take(outputs('Compose_TaskTitle'), 200), ' ', if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat('[See full description](', replace(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'],''),'&view=0','/TASK_PROMPT.md'), ')')), '\",\"size\":\"Default\",\"isSubtle\":true,\"spacing\":\"None\",\"wrap\":true}],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"KILLED\",\"color\":\"Warning\",\"size\":\"Default\",\"weight\":\"Bolder\"}],\"verticalContentAlignment\":\"Center\"}]}]},{\"type\":\"Container\",\"spacing\":\"Medium\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Task: ', take(string(outputs('Get_a_row_by_ID')?['body/cr_shraga_taskid']), 8), '\",\"size\":\"Small\",\"isSubtle\":true,\"spacing\":\"None\"},{\"type\":\"TextBlock\",\"text\":\"Submitted: ', outputs('Compose_SubmittedTime'), '\",\"size\":\"Default\",\"isSubtle\":true},{\"type\":\"TextBlock\",\"text\":\"ACTIVITY LOG\",\"size\":\"Default\",\"isSubtle\":true,\"weight\":\"Bolder\",\"spacing\":\"Small\"}]},{\"type\":\"Container\",\"spacing\":\"Small\",\"style\":\"emphasis\",\"items\":[{\"type\":\"ColumnSet\",\"spacing\":\"Small\",\"columns\":[{\"type\":\"Column\",\"width\":\"90px\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"', outputs('Compose_SubmittedTime'), '\",\"color\":\"Accent\",\"size\":\"Small\",\"spacing\":\"None\",\"fontType\":\"Monospace\"}]},{\"type\":\"Column\",\"width\":\"stretch\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Task canceled by user\",\"size\":\"Small\",\"wrap\":true,\"spacing\":\"None\"}]}]}]},{\"type\":\"Container\",\"spacing\":\"Medium\",\"separator\":true,\"items\":[{\"type\":\"TextBlock\",\"text\":\"', concat('Task canceled by user.', if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat('\\n\\n[Open session folder](', outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'], ')'))), '\",\"wrap\":true,\"size\":\"Default\",\"isSubtle\":true}]},{\"type\":\"Container\",\"spacing\":\"Small\",\"items\":[{\"type\":\"FactSet\",\"facts\":[{\"title\":\"Killed\",\"value\":\"', formatDateTime(utcNow(), 'MMM dd, yyyy h:mm tt'), '\"},{\"title\":\"Duration\",\"value\":\"', outputs('Compose_Duration'), '\"}]}]}]}')"
-                }
-              },
+            "Terminate_No_Email": {
               "runAfter": {},
-              "else": {
-                "actions": {
-                  "Terminate_No_Card": {
-                    "runAfter": {},
-                    "type": "Terminate",
-                    "inputs": {
-                      "runStatus": "Cancelled"
-                    }
-                  }
-                }
-              },
-              "expression": {
-                "not": {
-                  "equals": [
-                    "@coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_runningmessageid'], '')",
-                    ""
-                  ]
-                }
-              },
-              "type": "If"
+              "type": "Terminate",
+              "inputs": {
+                "runStatus": "Cancelled"
+              }
             }
           },
           "runAfter": {
@@ -144,8 +124,195 @@
             ]
           },
           "else": {
+            "actions": {}
+          },
+          "expression": {
+            "and": [
+              {
+                "equals": [
+                  "@empty(outputs('Get_a_row_by_ID')?['body/crb3b_useremail'])",
+                  true
+                ]
+              }
+            ]
+          },
+          "type": "If"
+        },
+        "Check_Status": {
+          "actions": {
+            "Terminate_Wrong_Status": {
+              "runAfter": {},
+              "type": "Terminate",
+              "inputs": {
+                "runStatus": "Cancelled"
+              }
+            }
+          },
+          "runAfter": {
+            "Check_Email": [
+              "Succeeded"
+            ]
+          },
+          "else": {
+            "actions": {}
+          },
+          "expression": {
+            "and": [
+              {
+                "not": {
+                  "equals": [
+                    "@outputs('Get_a_row_by_ID')?['body/cr_status']",
+                    9
+                  ]
+                }
+              }
+            ]
+          },
+          "type": "If"
+        },
+        "List_Messages": {
+          "runAfter": {
+            "Check_Status": [
+              "Succeeded"
+            ]
+          },
+          "type": "OpenApiConnection",
+          "inputs": {
+            "parameters": {
+              "entityName": "cr_shragamessages",
+              "$filter": "crb3b_taskid eq '@{triggerOutputs()?['body/cr_shraga_taskid']}'",
+              "$orderby": "createdon asc",
+              "$select": "cr_content,createdon"
+            },
+            "host": {
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+              "connectionName": "shared_commondataserviceforapps",
+              "operationId": "ListRecords"
+            },
+            "authentication": "@parameters('$authentication')"
+          }
+        },
+        "Apply_to_each_message": {
+          "foreach": "@outputs('List_Messages')?['body/value']",
+          "actions": {
+            "Increment_Counter": {
+              "runAfter": {},
+              "type": "IncrementVariable",
+              "inputs": {
+                "name": "Counter",
+                "value": 1
+              }
+            },
+            "Compose_Formatted_Msg": {
+              "runAfter": {
+                "Increment_Counter": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Compose",
+              "inputs": "@concat('[', concat(formatDateTime(items('Apply_to_each_message')?['createdon'], 'MMM dd'), '\\n', formatDateTime(items('Apply_to_each_message')?['createdon'], 'h:mm tt')), '] ', replace(replace(replace(replace(substring(coalesce(items('Apply_to_each_message')?['cr_content'], '(no content)'), 0, min(length(coalesce(items('Apply_to_each_message')?['cr_content'], '(no content)')), 200)), '\\', '\\\\'), '\"', '\\\"'), decodeUriComponent('%0A'), '\\n'), decodeUriComponent('%0D'), ''))"
+            },
+            "Append_To_Recent": {
+              "runAfter": {
+                "Compose_Formatted_Msg": [
+                  "Succeeded"
+                ]
+              },
+              "type": "AppendToStringVariable",
+              "inputs": {
+                "name": "RecentMsgs",
+                "value": "@{if(greater(variables('Counter'), 1), ',', '')}{\"type\":\"ColumnSet\",\"spacing\":\"Small\",\"columns\":[{\"type\":\"Column\",\"width\":\"90px\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"@{take(outputs('Compose_Formatted_Msg'), add(indexOf(outputs('Compose_Formatted_Msg'), ']'), 1))}\",\"color\":\"Accent\",\"size\":\"Small\",\"spacing\":\"None\",\"fontType\":\"Monospace\"}]},{\"type\":\"Column\",\"width\":\"stretch\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"@{trim(substring(outputs('Compose_Formatted_Msg'), add(indexOf(outputs('Compose_Formatted_Msg'), ']'), 2)))}\",\"size\":\"Small\",\"wrap\":true,\"spacing\":\"None\"}]}]}"
+              }
+            }
+          },
+          "runAfter": {
+            "List_Messages": [
+              "Succeeded"
+            ]
+          },
+          "type": "Foreach",
+          "operationOptions": "Sequential"
+        },
+        "Compose_TaskTitle": {
+          "runAfter": {
+            "Apply_to_each_message": [
+              "Succeeded"
+            ]
+          },
+          "type": "Compose",
+          "inputs": "@replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'],outputs('Get_a_row_by_ID')?['body/cr_prompt'],'Task'),200), '\\\\', '\\\\\\\\'), '\"', '\\\\\"'), decodeUriComponent('%0A'), ' '), decodeUriComponent('%0D'), '')"
+        },
+        "Compose_SubmittedTime": {
+          "runAfter": {
+            "Compose_TaskTitle": [
+              "Succeeded"
+            ]
+          },
+          "type": "Compose",
+          "inputs": "@concat(formatDateTime(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()), 'MMM dd, yyyy'), '\\n', formatDateTime(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()), 'h:mm tt'))"
+        },
+        "Compose_Duration": {
+          "runAfter": {
+            "Compose_SubmittedTime": [
+              "Succeeded"
+            ]
+          },
+          "type": "Compose",
+          "inputs": "@concat(string(div(div(sub(ticks(utcNow()), ticks(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()))), 10000000), 60)), 'm ', string(mod(div(sub(ticks(utcNow()), ticks(coalesce(outputs('Get_a_row_by_ID')?['body/createdon'], utcNow()))), 10000000), 60)), 's')"
+        },
+        "Compose_FullCard": {
+          "runAfter": {
+            "Compose_Duration": [
+              "Succeeded"
+            ]
+          },
+          "type": "Compose",
+          "inputs": "@concat('{\"$schema\":\"http://adaptivecards.io/schemas/adaptive-card.json\",\"type\":\"AdaptiveCard\",\"version\":\"1.5\",\"body\":[{\"type\":\"Container\",\"style\":\"emphasis\",\"bleed\":true,\"items\":[{\"type\":\"ColumnSet\",\"columns\":[{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"Image\",\"url\":\"https://cdn-icons-png.flaticon.com/512/4712/4712109.png\",\"size\":\"Medium\",\"style\":\"Person\",\"altText\":\"Shraga Agent\"}],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"stretch\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Shraga Worker\",\"weight\":\"Bolder\",\"size\":\"Medium\"},{\"type\":\"TextBlock\",\"text\":\"', take(outputs('Compose_TaskTitle'), 200), ' ', if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat('[See full description](', replace(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'],''),'&view=0','/TASK_PROMPT.md'), ')')), '\",\"size\":\"Default\",\"isSubtle\":true,\"spacing\":\"None\",\"wrap\":true}],\"verticalContentAlignment\":\"Center\"},{\"type\":\"Column\",\"width\":\"auto\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"CANCELED\",\"color\":\"Warning\",\"size\":\"Default\",\"weight\":\"Bolder\"}],\"verticalContentAlignment\":\"Center\"}]}]},{\"type\":\"Container\",\"spacing\":\"Medium\",\"items\":[{\"type\":\"TextBlock\",\"text\":\"Task: ', take(string(outputs('Get_a_row_by_ID')?['body/cr_shraga_taskid']), 8), '\",\"size\":\"Small\",\"isSubtle\":true,\"spacing\":\"None\"},{\"type\":\"TextBlock\",\"text\":\"Submitted: ', outputs('Compose_SubmittedTime'), '\",\"size\":\"Default\",\"isSubtle\":true},{\"type\":\"TextBlock\",\"text\":\"ACTIVITY LOG\",\"size\":\"Default\",\"isSubtle\":true,\"weight\":\"Bolder\",\"spacing\":\"Small\"}]},', if(greater(variables('Counter'), 10), concat('{\"type\":\"Container\",\"spacing\":\"Small\",\"items\":[{\"type\":\"Container\",\"style\":\"emphasis\",\"id\":\"logCollapsed\",\"maxHeight\":\"250px\",\"items\":[', variables('RecentMsgs'), ']},{\"type\":\"Container\",\"style\":\"emphasis\",\"id\":\"logExpanded\",\"isVisible\":false,\"items\":[', variables('RecentMsgs'), ']},{\"type\":\"Container\",\"id\":\"btnExpand\",\"spacing\":\"None\",\"selectAction\":{\"type\":\"Action.ToggleVisibility\",\"targetElements\":[\"logCollapsed\",\"logExpanded\",\"btnExpand\",\"btnCollapse\"]},\"items\":[{\"type\":\"TextBlock\",\"text\":\"\\u25bc expand log\",\"size\":\"Small\",\"color\":\"Accent\",\"horizontalAlignment\":\"Center\"}]},{\"type\":\"Container\",\"id\":\"btnCollapse\",\"isVisible\":false,\"spacing\":\"None\",\"selectAction\":{\"type\":\"Action.ToggleVisibility\",\"targetElements\":[\"logCollapsed\",\"logExpanded\",\"btnExpand\",\"btnCollapse\"]},\"items\":[{\"type\":\"TextBlock\",\"text\":\"\\u25b2 collapse log\",\"size\":\"Small\",\"color\":\"Accent\",\"horizontalAlignment\":\"Center\"}]}]}'), concat('{\"type\":\"Container\",\"spacing\":\"Small\",\"style\":\"emphasis\",\"items\":[', variables('RecentMsgs'), ']}')), ',{\"type\":\"Container\",\"spacing\":\"Medium\",\"separator\":true,\"items\":[{\"type\":\"TextBlock\",\"text\":\"', concat('Task canceled by user.', if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']), '', concat('\\n\\n[Open session folder](', outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'], ')'))), '\",\"wrap\":true,\"size\":\"Default\",\"isSubtle\":true}]},{\"type\":\"Container\",\"spacing\":\"Small\",\"items\":[{\"type\":\"FactSet\",\"facts\":[{\"title\":\"Canceled\",\"value\":\"', formatDateTime(utcNow(), 'MMM dd, yyyy h:mm tt'), '\"},{\"title\":\"Duration\",\"value\":\"', outputs('Compose_Duration'), '\"}]}]}]}')"
+        },
+        "Parse_Card_JSON": {
+          "runAfter": {
+            "Compose_FullCard": [
+              "Succeeded"
+            ]
+          },
+          "type": "Compose",
+          "inputs": "@json(outputs('Compose_FullCard'))"
+        },
+        "Check_Running_Card": {
+          "actions": {
+            "Update_Card_To_Canceled": {
+              "runAfter": {},
+              "type": "OpenApiConnection",
+              "inputs": {
+                "parameters": {
+                  "poster": "Flow bot",
+                  "location": "Group chat",
+                  "body/messageId": "@outputs('Get_a_row_by_ID')?['body/crb3b_runningmessageid']",
+                  "body/recipient": "@outputs('Get_a_row_by_ID')?['body/crb3b_runningchatid']",
+                  "body/messageBody": "@outputs('Parse_Card_JSON')"
+                },
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams",
+                  "connectionName": "shared_teams-1",
+                  "operationId": "UpdateCardInConversation"
+                },
+                "retryPolicy": {
+                  "type": "fixed",
+                  "count": 3,
+                  "interval": "PT30S"
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            }
+          },
+          "runAfter": {
+            "Parse_Card_JSON": [
+              "Succeeded"
+            ]
+          },
+          "else": {
             "actions": {
-              "Terminate_Not_Canceled": {
+              "Terminate_No_Card": {
                 "runAfter": {},
                 "type": "Terminate",
                 "inputs": {
@@ -155,14 +322,21 @@
             }
           },
           "expression": {
-            "equals": [
-              "@outputs('Get_a_row_by_ID')?['body/cr_status']",
-              9
+            "and": [
+              {
+                "not": {
+                  "equals": [
+                    "@coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_runningmessageid'], '')",
+                    ""
+                  ]
+                }
+              }
             ]
           },
           "type": "If"
         }
-      }
+      },
+      "outputs": {}
     },
     "state": "Started",
     "connectionReferences": {
@@ -207,6 +381,15 @@
       ],
       "actions": [
         {
+          "type": "InitializeVariable"
+        },
+        {
+          "type": "InitializeVariable"
+        },
+        {
+          "type": "InitializeVariable"
+        },
+        {
           "type": "OpenApiConnection",
           "swaggerOperationId": "GetItem"
         },
@@ -217,26 +400,51 @@
           "type": "If"
         },
         {
+          "type": "OpenApiConnection",
+          "swaggerOperationId": "ListRecords"
+        },
+        {
+          "type": "Foreach"
+        },
+        {
+          "type": "Compose"
+        },
+        {
+          "type": "Compose"
+        },
+        {
+          "type": "Compose"
+        },
+        {
+          "type": "Compose"
+        },
+        {
+          "type": "Compose"
+        },
+        {
+          "type": "If"
+        },
+        {
           "type": "Terminate"
+        },
+        {
+          "type": "Terminate"
+        },
+        {
+          "type": "Terminate"
+        },
+        {
+          "type": "IncrementVariable"
+        },
+        {
+          "type": "Compose"
+        },
+        {
+          "type": "AppendToStringVariable"
         },
         {
           "type": "OpenApiConnection",
           "swaggerOperationId": "UpdateCardInConversation"
-        },
-        {
-          "type": "Compose"
-        },
-        {
-          "type": "Compose"
-        },
-        {
-          "type": "Compose"
-        },
-        {
-          "type": "Compose"
-        },
-        {
-          "type": "Terminate"
         }
       ]
     },

@@ -286,7 +286,7 @@
                   ]
                 },
                 "type": "Compose",
-                "inputs": "@replace(replace(replace(replace(string(outputs('Compose_CardTemplate')),'{shortDescription}',replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'],outputs('Get_a_row_by_ID')?['body/cr_prompt'],'Task'),200), '\\\\', '\\\\\\\\'), '\"', '\\\\\"'), decodeUriComponent('%0A'), ' '), decodeUriComponent('%0D'), '')),'{taskPromptUrl}',if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']),'',replace(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'],''),'&view=0','/TASK_PROMPT.md'))),'{startedAt}',concat(formatDateTime(utcNow(),'MMM dd, yyyy h:mm tt'),' UTC')),'{taskIdShort}',take(string(outputs('Get_a_row_by_ID')?['body/cr_shraga_taskid']), 8))"
+                "inputs": "@replace(replace(replace(replace(string(outputs('Compose_CardTemplate')),'{shortDescription}',replace(replace(replace(replace(take(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_shortdescription'],outputs('Get_a_row_by_ID')?['body/cr_prompt'],'Task'),200), '\\\\', '\\\\\\\\'), '\"', '\\\\\"'), decodeUriComponent('%0A'), ' '), decodeUriComponent('%0D'), '')),'{taskPromptUrl}',if(empty(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl']),'',replace(coalesce(outputs('Get_a_row_by_ID')?['body/crb3b_onedriveurl'],''),'&view=0','/TASK_PROMPT.md'))),'{startedAt}',concat(formatDateTime(utcNow(),'MMM dd, yyyy'), '\\n', formatDateTime(utcNow(),'h:mm tt'))),'{taskIdShort}',take(string(outputs('Get_a_row_by_ID')?['body/cr_shraga_taskid']), 8))"
               },
               "Compose_CardWithOneDrive": {
                 "runAfter": {
@@ -332,7 +332,7 @@
                     "item/cr_name": "Task queued - card link",
                     "item/cr_useremail": "@outputs('Get_a_row_by_ID')?['body/crb3b_useremail']",
                     "item/cr_mcs_conversation_id": "@outputs('Get_a_row_by_ID')?['body/crb3b_mcsconversationid']",
-                    "item/cr_message": "@{concat('Your task is queued! Track progress here: ', outputs('Post_card_in_a_chat_or_channel')?['body/messageLink'])}",
+                    "item/cr_message": "@{concat('Your task is queued! Track progress [here](', outputs('Post_card_in_a_chat_or_channel')?['body/messageLink'], ')')}",
                     "item/cr_direction": "Outbound",
                     "item/cr_status": "Unclaimed",
                     "item/cr_in_reply_to": "@outputs('Get_a_row_by_ID')?['body/crb3b_inboundrowid']",
