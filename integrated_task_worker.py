@@ -747,7 +747,7 @@ JSON output:"""
 
         Args:
             task_id: Dataverse task ID
-            terminal_status: One of 'completed', 'failed', 'killed'
+            terminal_status: One of 'completed', 'failed', 'canceled'
             session_folder: Path to the OneDrive session folder
             accumulated_stats: Merged stats from all phases
             phases: List of phase dicts with per-phase stats
@@ -979,7 +979,7 @@ JSON output:"""
 
         Args:
             results_dir: Path to the results/ subdirectory.
-            terminal_status: One of 'completed', 'canceled', 'failed', 'killed'.
+            terminal_status: One of 'completed', 'canceled', 'failed'.
             reason: Human-readable reason/error message.
             task_id: Dataverse task ID.
             accumulated_stats: Merged stats from all phases.
@@ -995,8 +995,8 @@ JSON output:"""
             "phases_completed": len(phases),
         }
 
-        # On failure/killed: include full error details
-        if terminal_status in ("failed", "killed"):
+        # On failure: include full error details
+        if terminal_status in ("failed", "canceled"):
             outcome["error_details"] = reason
 
         try:
@@ -1893,7 +1893,7 @@ Report what you reverted at the end.
                     # session_summary.json (partial - whatever we have)
                     crash_summary = {
                         "task_id": self.current_task_id,
-                        "terminal_status": "killed",
+                        "terminal_status": "failed",
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "error": full_error[:2000],
                         "dev_box": MACHINE_NAME,
@@ -1910,7 +1910,7 @@ Report what you reverted at the end.
 
                     # outcome.json
                     outcome = {
-                        "terminal_status": "killed",
+                        "terminal_status": "failed",
                         "reason": full_error[:2000],
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "task_id": self.current_task_id,
@@ -1930,7 +1930,7 @@ Report what you reverted at the end.
     def _cleanup_orphaned_tasks(self):
         """On startup, find tasks stuck in Running on this dev box and fail them.
 
-        This handles the case where the Worker process crashed or was killed
+        This handles the case where the Shraga Worker process crashed
         mid-task. Without this, orphaned tasks stay in Running forever.
         Also writes crash metadata to the session folder if workingdir is available.
         """
@@ -1972,7 +1972,7 @@ Report what you reverted at the end.
                         results_dir = wd_path / "results"
                         results_dir.mkdir(exist_ok=True)
                         outcome = {
-                            "terminal_status": "killed",
+                            "terminal_status": "failed",
                             "reason": error_msg,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                             "task_id": tid,

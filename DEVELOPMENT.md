@@ -95,7 +95,7 @@ Flows managed:
 | TaskCompleted | Yes | Updates card to Completed |
 | TaskFailed | Yes | Updates card to Failed |
 | TaskProgressUpdater | Yes | Updates Running card with activity log |
-| TaskCanceled | Yes | Updates card to Killed |
+| TaskCanceled | Yes | Updates card to Canceled |
 | CancelTask | No | Cancels a task (Pending→Canceled, Running→Canceling) |
 | SendMessage | No | MCS skill flow for bot messaging |
 
