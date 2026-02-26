@@ -1,12 +1,15 @@
 """
-Configure the MCS bot's Fallback topic to act as a dumb pipe.
+Configure the MCS bot's SendMessage topic to relay messages via ShragaRelay.
 
-Every unmatched message (which should be all messages in classic mode)
-goes through the ShragaRelay flow:
+Every user message goes through the ShragaRelay flow:
   1. Pass System.User.Email, System.Conversation.Id, System.Activity.Text to flow
   2. Flow writes to conversations table, waits for task manager response
-  3. Flow returns responseText
-  4. Topic sends responseText back to user
+  3. Flow returns responseText + isFollowupExpected
+  4. Topic sends responseText back to user, loops if follow-up expected
+
+The topic definition is loaded from bot/fallback_topic.yaml (the source of truth).
+The target is the SendMessage custom topic (OnActivity trigger, catches all messages),
+NOT the Fallback system topic (OnUnknownIntent, only catches unmatched intents).
 
 Requires: az login (DefaultAzureCredential)
 """
@@ -34,8 +37,11 @@ DATAVERSE_API = f"{DATAVERSE_URL}/api/data/v9.2"
 # NOTE: Copilot Studio uses the Dataverse WORKFLOW ENTITY ID, not the PA flow ID.
 RELAY_FLOW_ID = "dec9329f-8112-f111-8341-002248d570fd"
 
-# Fallback topic component ID
-FALLBACK_COMPONENT_ID = "928c6921-eb36-450f-b2bc-9ad966b3f02e"
+# SendMessage custom topic component ID (OnActivity trigger -- catches all messages)
+SENDMESSAGE_TOPIC_ID = "f1c8960a-b669-41d5-a92b-0db9c1248f2c"
+
+# Fallback system topic component ID (kept for reference, not used by this script)
+# FALLBACK_COMPONENT_ID = "928c6921-eb36-450f-b2bc-9ad966b3f02e"
 
 # Bot ID
 BOT_ID = "888e4800-5a06-f111-8406-7c1e5287291b"
@@ -53,49 +59,49 @@ def get_headers():
     }
 
 
-# Load the Fallback topic YAML from the repo (bot/fallback_topic.yaml).
-# This is the full version with follow-up conversation loop support.
+# Load the topic YAML from the repo (bot/fallback_topic.yaml is the source of truth).
+# Despite the filename, this YAML is deployed to the SendMessage custom topic.
 _TOPIC_YAML_PATH = Path(__file__).resolve().parent.parent / "bot" / "fallback_topic.yaml"
 RELAY_TOPIC_YAML = _TOPIC_YAML_PATH.read_text(encoding="utf-8")
 
 
-def update_fallback_topic():
-    """Update the Fallback topic to relay messages through ShragaRelay flow."""
+def update_sendmessage_topic():
+    """Update the SendMessage topic to relay messages through ShragaRelay flow."""
     headers = get_headers()
 
     # First, read current state
     resp = requests.get(
-        f"{DATAVERSE_API}/botcomponents({FALLBACK_COMPONENT_ID})?$select=name,data,schemaname,statecode",
+        f"{DATAVERSE_API}/botcomponents({SENDMESSAGE_TOPIC_ID})?$select=name,data,schemaname,statecode",
         headers=headers, timeout=30,
     )
     if resp.status_code != 200:
-        print(f"ERROR: Could not read Fallback topic: {resp.status_code} {resp.text[:200]}")
+        print(f"ERROR: Could not read SendMessage topic: {resp.status_code} {resp.text[:200]}")
         return False
 
     current = resp.json()
-    print(f"Current Fallback topic:")
+    print(f"Current SendMessage topic:")
     print(f"  Name: {current.get('name')}")
     print(f"  Schema: {current.get('schemaname')}")
-    print(f"  State: {current.get('statecode')}")
+    print(f"  State: {current.get('statecode')} (0=active, 1=inactive)")
     print(f"  Current data:\n{current.get('data', '')}\n")
 
     # Update the topic data
-    print("Updating Fallback topic to relay through ShragaRelay...")
+    print("Updating SendMessage topic with ShragaRelay flow definition...")
     payload = {"data": RELAY_TOPIC_YAML}
 
     resp = requests.patch(
-        f"{DATAVERSE_API}/botcomponents({FALLBACK_COMPONENT_ID})",
+        f"{DATAVERSE_API}/botcomponents({SENDMESSAGE_TOPIC_ID})",
         headers=headers,
         json=payload,
         timeout=30,
     )
 
     if resp.status_code in (200, 204):
-        print("✓ Fallback topic updated successfully!")
+        print("OK: SendMessage topic updated successfully!")
 
         # Verify the update
         resp2 = requests.get(
-            f"{DATAVERSE_API}/botcomponents({FALLBACK_COMPONENT_ID})?$select=data",
+            f"{DATAVERSE_API}/botcomponents({SENDMESSAGE_TOPIC_ID})?$select=data",
             headers=headers, timeout=30,
         )
         if resp2.status_code == 200:
@@ -147,8 +153,8 @@ def disable_conversational_boosting():
 
 
 if __name__ == "__main__":
-    print("=== Configuring MCS Bot as Dumb Pipe ===\n")
-    update_fallback_topic()
+    print("=== Configuring MCS Bot SendMessage Topic ===\n")
+    update_sendmessage_topic()
     disable_conversational_boosting()
     print("\n=== Done ===")
     print("\nNOTE: You need to publish the bot in Copilot Studio for changes to take effect.")
