@@ -101,10 +101,10 @@ FALLBACK_MESSAGE = "The system is temporarily unavailable, please try again shor
 
 
 def get_credential():
-    """Get Azure credential via AzureCliCredential.
+    """Get Azure credential via DefaultAzureCredential.
 
-    Requires a valid ``az login`` session.  Returns an ``AzureCliCredential``
-    instance after verifying it can obtain a Dataverse token.
+    Requires a valid ``az login`` session (when AZURE_TOKEN_CREDENTIALS=AzureCliCredential).
+    Returns a credential instance after verifying it can obtain a Dataverse token.
     """
     cred = create_credential(log_fn=_log)
     try:

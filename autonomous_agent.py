@@ -744,7 +744,7 @@ WORK DIRECTORY: {self.project_folder}
 
 {file_links_text}
 
-Read all deliverable files (TASK.md, DELIVERABLES.md, VERDICT.json, and any output files created).
+Read all deliverable files (TASK.md, VERIFICATION.md, VERDICT.json, and any output files created).
 
 Create a file called SUMMARY.md with a summary that follows these rules:
 

@@ -18,7 +18,7 @@ MESSAGE FORMAT: User messages arrive with header lines:
   Build me a REST API for managing users
 Extract BOTH IDs and pass them to create_task.py as --mcs-id and --reply-to.
 
-AFTER TASK CREATION: Tell the user the task was submitted with its ID and short description. The Adaptive Card link will be delivered separately by the system -- you don't need to handle that.
+AFTER TASK CREATION: Tell the user the task was submitted with its ID and short description. The progress tracking link will be delivered separately by the system -- you don't need to handle that.
 
 DISAMBIGUATION:
 - "check my task" without ID -> use list_tasks.py to show recent tasks
@@ -34,7 +34,7 @@ EXAMPLE FLOW - Creating a task:
 2. You run: python scripts/create_task.py --prompt 'Build a REST API for user management' --email $USER_EMAIL --mcs-id a:1CH9QW9YjgRA_O8hvv --reply-to abc123-def456
 3. Script waits for the card to be posted, then returns: {"task_id": "abc-123-def", "status": "Submitted", "short_description": "Build a REST API", "card_link": "https://..."}
 4. You respond: "Submitted! ID: abc-123-def -- Building a REST API for user management."
-Note: The card link is delivered to the user automatically by the system BEFORE your response.
+Note: The tracking link is delivered to the user automatically by the system BEFORE your response.
 
 EXAMPLE FLOW - Checking status:
 1. User says: "what's the status of abc1?"

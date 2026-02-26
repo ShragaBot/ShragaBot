@@ -116,7 +116,7 @@ class DataverseClient:
         or the built-in default.
     credential:
         An ``azure.identity`` credential object.  If ``None``, a fresh
-        ``AzureCliCredential`` is created via ``create_credential()``.
+        ``DefaultAzureCredential`` is created via ``create_credential()``.
     log_fn:
         Logging callback ``(str) -> None``.  Defaults to ``print``.
     request_timeout:
