@@ -1,6 +1,6 @@
 # Shraga Worker Agent
 
-You are the Worker agent for the Shraga task execution system. This system receives coding tasks from Microsoft Teams, executes them autonomously on dev boxes using Claude Code, and reports results back through Dataverse and Adaptive Cards.
+You are the Worker agent for the Shraga task execution system. You receive coding tasks, execute them autonomously on a dev box using Claude Code, and report results back through Dataverse.
 
 ## Architecture Overview
 
@@ -148,77 +148,6 @@ Each task gets an isolated session folder in OneDrive:
     [task artifacts]     -- Any files created by the worker agent
 ```
 
-### File Descriptions
-
-| File | Created By | Purpose |
-|------|-----------|---------|
-| `TASK.md` | `AgentCLI.setup_project()` | Read-only task description. Source of truth for the worker. |
-| `VERIFICATION.md` | `AgentCLI.setup_project()` | Success criteria used by the verifier agent. |
-| `VERDICT.json` | Verifier agent | Structured pass/fail verdict with feedback. |
-| `SUMMARY.md` | Summarizer agent | 2-3 bullet point summary with OneDrive links. |
-| `result.md` | `write_result_and_transcript_files()` | Copy of `cr_result` for offline access. |
-| `transcript.md` | `write_result_and_transcript_files()` | Full JSONL transcript of all messages. |
-| `session_summary.json` | `write_session_summary()` | Telemetry: cost, duration, tokens, phases, model usage. |
-| `SESSION_LOG.md` | `write_session_log()` | Human-readable log with tables for stats, phases, activities. |
-
-## Available Scripts and Key Files
-
-### Core Worker Files
-
-| File | Description |
-|------|-------------|
-| `integrated_task_worker.py` | Main entry point. Polls Dataverse, manages task lifecycle, runs Worker/Verifier loop. |
-| `autonomous_agent.py` | AgentCLI class with worker, verifier, and summarizer prompts. Calls Claude Code CLI. |
-| `onedrive_utils.py` | OneDrive discovery, session folder creation, local-path-to-web-URL conversion. |
-| `claude_auth_teams.py` | Claude authentication utilities for Teams integration. |
-| `teams_messages.py` | Teams message handling. |
-| `conftest.py` | Shared test fixtures and mocks (FakeAccessToken, FakeResponse, FakePopen). |
-| `pytest.ini` | Test configuration. Run with `python -m pytest -x -q`. |
-
-### Scripts (`scripts/`)
-
-| Script | Description |
-|--------|-------------|
-| `scripts/dv_helpers.py` | Shared Dataverse helper functions for scripts. |
-| `scripts/create_task.py` | Create a task in Dataverse with all required fields. |
-| `scripts/cancel_task.py` | Cancel a task (handles Pending/Running/Submitted states). |
-| `scripts/get_task_status.py` | Get task status by full UUID or short ID prefix. |
-| `scripts/list_tasks.py` | List recent tasks with optional status/email filters. |
-| `scripts/check_devbox_status.py` | Check dev box provisioning and health status. |
-| `scripts/cleanup_stale_rows.py` | Clean up stale/orphaned rows in Dataverse. |
-| `scripts/configure_bot_topic.py` | Configure Copilot Studio bot topic. |
-| `scripts/create_conversations_table.py` | Create the conversations table in Dataverse. |
-| `scripts/create_relay_flow.py` | Create the relay Power Automate flow. |
-| `scripts/get_user_state.py` | Query user state from Dataverse. |
-| `scripts/send_message.py` | Send a message via the Dataverse messages table. |
-| `scripts/update_flow.py` | Update Power Automate flow definitions. |
-| `scripts/update_user_state.py` | Update user state in Dataverse. |
-| `scripts/test_e2e_relay.py` | End-to-end relay flow test. |
-| `scripts/test_scripts.py` | Unit tests for scripts. |
-
-### Setup and Auth (`*.ps1`)
-
-| Script | Description |
-|--------|-------------|
-| `setup.ps1` | Provisions a bare dev box (auto-selects tenant + subscription, creates box, shows RDP URL). |
-| `setup-devbox.ps1` | All-in-one on-box setup: tools, code deployment, auth, services. Run on the dev box after RDP connect. |
-| `setup-workerbox.ps1` | Additional dev box setup (Worker only, no PM). |
-| `authenticate.ps1` | Authenticate with Azure and Claude Code. |
-| `verify-devbox-setup.ps1` | Verify dev box setup is complete and healthy. |
-| `kiosk-auth-helper.ps1` | Helper for kiosk-mode authentication scenarios. |
-
-### Other Components
-
-| Path | Description |
-|------|-------------|
-| `global-manager/global_manager.py` | Global manager -- oversees all dev boxes and tasks. |
-| `task-manager/task_manager.py` | Task manager -- Dataverse task CRUD operations. |
-| `orchestrator.py` | Orchestrator for multi-box coordination. |
-| `orchestrator_devbox.py` | Dev box provisioning orchestrator. |
-| `flows/` | Power Automate flow definitions (JSON). |
-| `schemas/` | Dataverse table schema definitions. |
-| `bot/` | Copilot Studio bot configuration files. |
-
 ## Dataverse Status Codes
 
 | Value | Integer | Constant | Meaning |
@@ -231,9 +160,6 @@ Each task gets an isolated session folder in OneDrive:
 | `"Canceling"` | 11 | `STATUS_CANCELING` | Cancel requested, Worker cooperating |
 | `"Canceled"` | 9 | `STATUS_CANCELED` | Task canceled |
 
-Deprecated (kept in DV picklist for historical rows):
-- `"Queued"` (3) -- replaced by open competition routing
-
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -245,18 +171,6 @@ Deprecated (kept in DV picklist for historical rows):
 | `SHRAGA_ROOT` | `C:\Dev\Shraga` | Root directory for immutable releases |
 | `ONEDRIVE_SESSIONS_DIR` | (auto-detected) | Override for OneDrive root path |
 
-## Running Tests
-
-```bash
-python -m pytest -x -q
-```
-
-Tests use mocked Azure credentials, Dataverse API, and Claude Code CLI calls. No infrastructure required. Key test files:
-
-- `test_autonomous_agent.py` -- Tests for AgentCLI (setup, worker loop, verifier, stats)
-- `test_integrated_task_worker.py` -- Tests for IntegratedTaskWorker (token, state, polling, claiming, execution)
-- `test_onedrive_utils.py` -- Tests for OneDrive path resolution and URL generation
-
 ## Version Check and Auto-Update
 
 The worker uses an immutable release deployment system:
@@ -266,7 +180,7 @@ The worker uses an immutable release deployment system:
 
 ## Key Design Decisions
 
-- **Streaming mode**: Worker and verifier use `--output-format stream-json` with `--verbose` and `--include-partial-messages` to stream real-time progress to Teams via Dataverse messages.
+- **Streaming mode**: Worker and verifier use `--output-format stream-json` with `--verbose` and `--include-partial-messages` to stream real-time progress to Dataverse messages.
 - **ETag concurrency**: Task claiming uses HTTP `If-Match` headers to prevent double-pickup across dev boxes.
 - **CLAUDECODE env stripping**: All subprocess calls to Claude Code strip the `CLAUDECODE` environment variable to avoid "nested session" errors.
 - **Suffix-based file detection**: `_path_looks_like_file()` uses path suffix instead of `Path.is_file()` to avoid OneDrive sync race conditions where files exist locally but haven't synced yet.
