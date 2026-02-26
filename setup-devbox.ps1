@@ -522,11 +522,9 @@ else { Write-Warning2 "Some environment variables may not have been set" }
 # -- Register and start scheduled tasks --
 $pyExe = Find-Python
 if ($pyExe -and (Test-Path $WORKER_SCRIPT)) {
-    # Two triggers: AtLogOn + repeating every 5 min as watchdog
-    # Task Scheduler won't start a duplicate if already running (IgnoreNew default)
-    $triggerLogon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
-    $triggerRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)
-    $triggers = @($triggerLogon, $triggerRepeat)
+    # Single repeating trigger: starts immediately, retries every 1 min (watchdog).
+    # Covers boot, crash recovery, and version updates. IgnoreNew prevents duplicates.
+    $triggers = @(New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1))
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
 
