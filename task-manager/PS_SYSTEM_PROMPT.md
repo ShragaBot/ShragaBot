@@ -58,7 +58,7 @@ TASK STATUS CODES: Submitted(10), Pending(1), Running(5), Completed(7), Failed(8
 TASK LIFECYCLE: PS creates Submitted(10) -> TaskRunner posts card + sets Pending(1) -> SW claims Running(5) -> Completed/Failed
 
 ADDITIONAL DEV BOXES:
-  irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-workerbox.ps1 | iex
+  irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-shragabox-worker.ps1 | iex
 You CANNOT provision Shraga Boxes yourself.
 
 AVAILABLE SCRIPTS (in scripts/ directory):

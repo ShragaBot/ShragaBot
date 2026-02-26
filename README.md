@@ -17,10 +17,10 @@ Three agents, each a persistent Claude Code session:
 **New dev box (first time):**
 1. Run `setup.ps1` on your machine to provision a dev box (~25 min)
 2. RDP into the box via the web URL shown
-3. On the box: `irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex`
+3. On the box: `irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-shragabox.ps1 | iex`
 
 **Additional Shraga Box (SW only):**
-`irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-workerbox.ps1 | iex`
+`irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-shragabox-worker.ps1 | iex`
 
 ## Deployment
 
@@ -83,8 +83,8 @@ Get-ScheduledTask | Where-Object { $_.TaskName -like "Shraga*" } | Format-Table 
 | File | Description |
 |------|-------------|
 | `setup.ps1` | Provisions a bare dev box (runs on user's machine) |
-| `setup-devbox.ps1` | All-in-one on-box setup: tools, code, auth, services |
-| `setup-workerbox.ps1` | Additional Shraga Box setup (SW only) |
+| `setup-shragabox.ps1` | All-in-one on-box setup: tools, code, auth, services |
+| `setup-shragabox-worker.ps1` | Additional Shraga Box setup (SW only) |
 | `updater.py` | Release updater (checks GitHub every 5 min) |
 | `version_check.py` | Version comparison for graceful service restarts |
 | `integrated_task_worker.py` | SW entry point |

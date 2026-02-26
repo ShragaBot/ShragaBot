@@ -1,13 +1,13 @@
-# Shraga Dev Box Setup Script (runs ON the dev box)
+# Shraga Box Setup Script (runs ON the Shraga Box)
 # Installs tools, clones code, authenticates, configures, starts services.
 # Idempotent -- safe to re-run at any time.
 #
-# First box:      irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex
-# Additional box: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-workerbox.ps1 | iex
+# First box:      irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-shragabox.ps1 | iex
+# Additional box: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-shragabox-worker.ps1 | iex
 # Re-run:         Same command again (idempotent)
 
 param(
-    [switch]$WorkerOnly  # Skip PS -- used by setup-workerbox.ps1
+    [switch]$WorkerOnly  # Skip PS -- used by setup-shragabox-worker.ps1
 )
 
 $ErrorActionPreference = "Continue"
@@ -696,7 +696,7 @@ if ($allGood) {
     Write-Host "  Setup complete! Your Shraga Box is ready." -ForegroundColor Cyan
 } else {
     Write-Host "  Some items need attention (see yellow items above)." -ForegroundColor Yellow
-    Write-Host "  Re-run: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex" -ForegroundColor Gray
+    Write-Host "  Re-run: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-shragabox.ps1 | iex" -ForegroundColor Gray
 }
 Write-Host ""
 Write-Host "  Log saved to: $LOG_FILE" -ForegroundColor Gray

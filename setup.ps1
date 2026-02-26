@@ -1,6 +1,6 @@
-# Shraga Dev Box Setup Script
+# Shraga Box Provisioning Script
 # Provisions a bare dev box and shows the RDP link.
-# All tool installation and setup happens via setup-devbox.ps1 on the box itself.
+# All tool installation and setup happens via setup-shragabox.ps1 on the box itself.
 #
 # Usage: Right-click -> Run with PowerShell
 # Download: https://github.com/ShragaBot/ShragaBot/releases/download/setup-v1/setup.ps1
@@ -133,7 +133,7 @@ Write-Host "  1. Open this link to connect:" -ForegroundColor White
 Write-Host "     $webUrl" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  2. Once connected, open PowerShell and run:" -ForegroundColor White
-Write-Host "     irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex" -ForegroundColor Cyan
+Write-Host "     irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-shragabox.ps1 | iex" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "     This will install all tools, authenticate, and start Shraga." -ForegroundColor Gray
 Write-Host ""
