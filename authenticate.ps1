@@ -2,7 +2,6 @@
 # Runs ON the dev box. Installs all tools, clones code, authenticates, starts services.
 #
 # Usage: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/authenticate.ps1 | iex
-# Or: Right-click desktop shortcut -> Run with PowerShell
 
 $ErrorActionPreference = "Continue"
 

@@ -696,7 +696,7 @@ if ($allGood) {
     Write-Host "  Go back to Teams and start sending coding tasks!" -ForegroundColor Cyan
 } else {
     Write-Host "  Some items need attention (see yellow items above)." -ForegroundColor Yellow
-    Write-Host "  You can re-run this script anytime via the desktop shortcut." -ForegroundColor Gray
+    Write-Host "  Re-run: irm https://raw.githubusercontent.com/ShragaBot/ShragaBot/main/setup-devbox.ps1 | iex" -ForegroundColor Gray
 }
 Write-Host ""
 Write-Host "  Log saved to: $LOG_FILE" -ForegroundColor Gray
