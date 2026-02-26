@@ -7,8 +7,56 @@
 # Re-run:         Same command again (idempotent)
 
 param(
-    [switch]$WorkerOnly  # Skip PS -- used by setup-shragabox-worker.ps1
+    [switch]$WorkerOnly,  # Skip PS -- used by setup-shragabox-worker.ps1
+    [switch]$FromRelease  # Set when running from a release version (skip bootstrap)
 )
+
+# ---------------------------------------------------------------------------
+# Bootstrap: delegate to the installed or latest release version of this script
+# ---------------------------------------------------------------------------
+if (-not $FromRelease) {
+    $SHRAGA_ROOT_BOOT = "C:\Dev\Shraga"
+    $VERSION_FILE_BOOT = Join-Path $SHRAGA_ROOT_BOOT "current_version.txt"
+    $RELEASES_DIR_BOOT = Join-Path $SHRAGA_ROOT_BOOT "releases"
+    $REPO_URL_BOOT = "https://github.com/ShragaBot/ShragaBot.git"
+
+    # Option 1: Already installed -- delegate to local version
+    if (Test-Path $VERSION_FILE_BOOT) {
+        $localVersion = (Get-Content $VERSION_FILE_BOOT -ErrorAction SilentlyContinue).Trim()
+        $localScript = Join-Path $RELEASES_DIR_BOOT "$localVersion\setup-shragabox.ps1"
+        if ($localVersion -and (Test-Path $localScript)) {
+            Write-Host "[BOOTSTRAP] Delegating to installed version $localVersion" -ForegroundColor Cyan
+            if ($WorkerOnly) { & $localScript -FromRelease -WorkerOnly } else { & $localScript -FromRelease }
+            exit $LASTEXITCODE
+        }
+    }
+
+    # Option 2: Fresh install -- find latest release branch and run THAT version
+    $gitExe = Get-Command git -ErrorAction SilentlyContinue
+    if ($gitExe) {
+        $lsOut = git ls-remote --heads $REPO_URL_BOOT "release/v*" 2>&1
+        if ($LASTEXITCODE -eq 0 -and $lsOut) {
+            $versions = @()
+            foreach ($line in ($lsOut -split "`n")) {
+                if ($line -match 'refs/heads/release/v(\d+)') { $versions += [int]$Matches[1] }
+            }
+            if ($versions.Count -gt 0) {
+                $latest = "v$($versions | Sort-Object -Descending | Select-Object -First 1)"
+                $releaseScriptUrl = "https://raw.githubusercontent.com/ShragaBot/ShragaBot/release/$latest/setup-shragabox.ps1"
+                Write-Host "[BOOTSTRAP] Fresh install -- downloading setup from release/$latest" -ForegroundColor Cyan
+                $tempScript = Join-Path $env:TEMP "setup-shragabox-$latest.ps1"
+                Invoke-WebRequest -Uri $releaseScriptUrl -OutFile $tempScript -ErrorAction SilentlyContinue
+                if (Test-Path $tempScript) {
+                    if ($WorkerOnly) { & $tempScript -FromRelease -WorkerOnly } else { & $tempScript -FromRelease }
+                    exit $LASTEXITCODE
+                }
+                Write-Host "[BOOTSTRAP] Could not download release script, falling back to this version" -ForegroundColor Yellow
+            }
+        }
+    }
+
+    Write-Host "[BOOTSTRAP] No release found and no local install -- running this script directly" -ForegroundColor Yellow
+}
 
 $ErrorActionPreference = "Continue"
 
