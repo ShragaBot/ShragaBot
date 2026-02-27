@@ -270,7 +270,7 @@
                       "items": [
                         {
                           "type": "TextBlock",
-                          "text": "Want to cancel? [Tell Shraga: cancel {taskIdShort}](https://teams.microsoft.com/l/chat/0/0?users=28:420df934-d9e8-4c2f-bb03-f4c103dfb399&message=cancel%20{taskIdShort})",
+                          "text": "Want to cancel? [Tell Shraga: cancel {taskIdShort}](https://teams.microsoft.com/l/chat/0/0?users=28:c004fc86-5ffa-47ef-b8ed-74bb1beb072c&message=cancel%20{taskIdShort})",
                           "size": "Small",
                           "isSubtle": true
                         }
