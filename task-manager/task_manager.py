@@ -184,19 +184,31 @@ class TaskManager:
             f" and cr_status eq '{ST_UNCLAIMED}' and createdon lt {cutoff}",
             {"cr_status": ST_EXPIRED}, "CLEANUP")
 
-    def cleanup_stale_claimed(self, max_age_minutes: int = 15):
+    def cleanup_stale_claimed(self, max_age_minutes: int = 10):
         """Mark stale Claimed inbound messages as Expired (drop them).
 
-        Runs on PS startup.  Messages stuck in Claimed longer than
-        max_age_minutes are from a previous crash — too old to respond to.
-        Uses Expired status (same as cleanup_stale_outbound) so they're
-        clearly distinguished from successfully processed messages.
+        Runs on PS startup and periodically.  Messages stuck in Claimed
+        longer than max_age_minutes are from a previous crash — too old
+        to respond to.
         """
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
         return self._dv_batch_patch(CONV_TBL,
             f"cr_useremail eq '{self._safe_email}' and cr_direction eq '{DIR_IN}'"
             f" and cr_status eq 'Claimed' and createdon lt {cutoff}",
             {"cr_status": ST_EXPIRED}, "STALE_CLAIMED")
+
+    def cleanup_stale_submitted_tasks(self, max_age_minutes: int = 10):
+        """Mark tasks stuck in Submitted as Failed.
+
+        Tasks stay in Submitted when the TaskRunner PA flow fails or
+        never fires. Without this cleanup they sit forever.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        TASKS_TBL = os.environ.get("TABLE_NAME", "cr_shraga_tasks")
+        return self._dv_batch_patch(TASKS_TBL,
+            f"crb3b_useremail eq '{self._safe_email}' and cr_status eq 10"
+            f" and createdon lt {cutoff}",
+            {"cr_status": 8, "cr_result": "Task stuck in Submitted — TaskRunner flow did not process it."}, "STALE_SUBMITTED")
 
     def _call_claude(self, user_text: str, session_id: str | None = None) -> tuple[str | None, str]:
         cmd = ["claude", "--print", "--output-format", "json", "--dangerously-skip-permissions",
@@ -331,7 +343,7 @@ class TaskManager:
                             _log(f"[ERROR] Processing {rid}: {e}")
                             try: self.send_response(rid, m.get("cr_mcs_conversation_id",""), FALLBACK_MESSAGE); self.mark_processed(rid)
                             except Exception: pass
-                if time.time() - last_cleanup > 1800: self.cleanup_stale_outbound(); last_cleanup = time.time()
+                if time.time() - last_cleanup > 1800: self.cleanup_stale_outbound(); self.cleanup_stale_claimed(); self.cleanup_stale_submitted_tasks(); last_cleanup = time.time()
                 # Check if a new release is available
                 if should_exit(self._my_version):
                     _log(f"[UPDATE] New release detected. Exiting to restart with new version.")
