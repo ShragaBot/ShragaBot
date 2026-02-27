@@ -956,11 +956,14 @@ JSON output:"""
             result_text: The cr_result content (final result or error message).
             transcript: The cr_transcript content (JSONL transcript string).
         """
-        # --- result.md ---
+        # --- result.md (skip if already written by worker with full output) ---
         try:
             result_file = session_folder / "result.md"
-            result_file.write_text(result_text or "", encoding="utf-8")
-            _log(f"[FILES] Wrote result.md ({len(result_text or '')} chars) to {result_file}")
+            if result_file.exists():
+                _log(f"[FILES] result.md already exists ({result_file.stat().st_size} bytes) -- keeping worker output")
+            else:
+                result_file.write_text(result_text or "", encoding="utf-8")
+                _log(f"[FILES] Wrote result.md ({len(result_text or '')} chars) to {result_file}")
         except Exception as e:
             _log(f"[ERROR] Could not write result.md: {e}")
 
@@ -1449,7 +1452,16 @@ JSON output:"""
                         # Task completed successfully!
                         _log(f"\n[SUCCESS] Task approved by verifier")
 
-                        # Create summary
+                        # Write the worker's full output to result.md BEFORE summarizing
+                        # (result.md = full detailed results, SUMMARY.md = condensed for card)
+                        try:
+                            result_file = session_folder / "result.md"
+                            result_file.write_text(output or "", encoding="utf-8")
+                            _log(f"[FILES] Wrote worker output to result.md ({len(output or '')} chars)")
+                        except Exception as e:
+                            _log(f"[ERROR] Could not write result.md: {e}")
+
+                        # Create summary (condensed version for the card)
                         _log(f"[PHASE] Summarizer starting")
                         self.send_to_webhook("Creating summary of results...")
 
@@ -1466,11 +1478,11 @@ JSON output:"""
                         self.update_task(task_id, transcript=transcript)
                         self._current_transcript = transcript
 
-                        # Build concise bullet-style result with OneDrive links
+                        # Use summary for cr_result (card display) with OneDrive link
                         result_folder_url = folder_url if folder_url else str(session_folder)
                         final_result = f"{summary}\n\n- Session folder: [View in OneDrive]({result_folder_url})"
 
-                        # Write session summary for completed state
+                        # Write session metadata (summary goes to DV, worker output already in result.md)
                         _finalize_summary("completed", final_result)
 
                         return "completed", final_result, transcript, accumulated_stats
