@@ -724,11 +724,13 @@ After writing VERDICT.json, summarize your findings in plain text for the user t
         file_links = {}
         if local_path_to_web_url and self.project_folder:
             _is_file = _path_looks_like_file or (lambda p: Path(p).suffix != "")
-            for f in self.project_folder.iterdir():
+            for f in self.project_folder.rglob("*"):
                 if _is_file(f):
                     url = local_path_to_web_url(str(f))
                     if url:
-                        file_links[f.name] = url
+                        # Use relative path from project folder as key for uniqueness
+                        rel = f.relative_to(self.project_folder)
+                        file_links[str(rel)] = url
 
         # Format file links for the prompt
         if file_links:
